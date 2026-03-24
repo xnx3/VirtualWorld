@@ -30,12 +30,19 @@ print_banner() {
 }
 
 ensure_python() {
-    if ! command -v python3 &>/dev/null; then
+    # Prefer python3.11+, fallback to python3
+    if command -v python3.11 &>/dev/null; then
+        PYTHON_CMD="python3.11"
+    elif command -v python3.10 &>/dev/null; then
+        PYTHON_CMD="python3.10"
+    elif command -v python3 &>/dev/null; then
+        PYTHON_CMD="python3"
+    else
         echo -e "${RED}Error: Python 3 is required but not found.${NC}"
         exit 1
     fi
     local pyver
-    pyver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    pyver=$($PYTHON_CMD -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
     local major minor
     major=$(echo "$pyver" | cut -d. -f1)
     minor=$(echo "$pyver" | cut -d. -f2)
@@ -47,8 +54,8 @@ ensure_python() {
 
 ensure_venv() {
     if [ ! -d "$VENV_DIR" ]; then
-        echo -e "${YELLOW}Creating virtual environment...${NC}"
-        python3 -m venv "$VENV_DIR"
+        echo -e "${YELLOW}Creating virtual environment with $PYTHON_CMD...${NC}"
+        $PYTHON_CMD -m venv "$VENV_DIR"
     fi
     if [ ! -f "${VENV_DIR}/bin/pip" ]; then
         echo -e "${RED}Error: Virtual environment is broken. Remove venv/ and try again.${NC}"
@@ -92,19 +99,14 @@ start() {
     setup
 
     echo -e "${GREEN}Starting Genesis...${NC}"
-    nohup "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR" >> "$LOG_FILE" 2>&1 &
-    local pid=$!
-    echo $pid > "$PID_FILE"
+    echo -e "${CYAN}Press Ctrl+C to hibernate and stop.${NC}"
+    echo ""
 
-    sleep 2
-    if kill -0 $pid 2>/dev/null; then
-        echo -e "${GREEN}Genesis started successfully (PID $pid)${NC}"
-        echo -e "${CYAN}Log: $LOG_FILE${NC}"
-    else
-        echo -e "${RED}Failed to start. Check log: $LOG_FILE${NC}"
-        rm -f "$PID_FILE"
-        exit 1
-    fi
+    # 直接前台运行 Python，信号直达进程
+    # 用 exec 替换当前 shell 进程，这样 PID 就是 Python 的 PID
+    echo $$ > "$PID_FILE"
+    exec "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR"
+    rm -f "$PID_FILE"
 }
 
 stop() {
@@ -122,18 +124,17 @@ stop() {
         exit 0
     fi
 
-    echo -e "${YELLOW}Sending hibernate signal to being...${NC}"
-    echo -e "${YELLOW}Being is preparing for safe shutdown...${NC}"
+    echo -e "${YELLOW}Hibernating...${NC}"
     kill -TERM "$pid"
 
     local waited=0
-    while kill -0 "$pid" 2>/dev/null && [ $waited -lt 60 ]; do
+    while kill -0 "$pid" 2>/dev/null && [ $waited -lt 10 ]; do
         sleep 1
         waited=$((waited + 1))
     done
 
     if kill -0 "$pid" 2>/dev/null; then
-        echo -e "${RED}Forced shutdown after 60s timeout.${NC}"
+        echo -e "${RED}Forced shutdown after 10s timeout.${NC}"
         kill -9 "$pid" 2>/dev/null || true
     fi
 
