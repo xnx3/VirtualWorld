@@ -554,21 +554,24 @@ class GenesisNode:
 
             con.header(f"{self.being.name} 已安全进入休眠。再见。")
 
-        # Stop network
+        # Stop network (with 2s timeout each to avoid hanging)
         if self.discovery:
             try:
-                await self.discovery.stop()
+                await asyncio.wait_for(self.discovery.stop(), timeout=2)
             except Exception:
                 pass
         if self.server:
             try:
-                await self.server.stop()
+                await asyncio.wait_for(self.server.stop(), timeout=2)
             except Exception:
                 pass
 
         # Close storage
         if self.storage:
-            await self.storage.close()
+            try:
+                await asyncio.wait_for(self.storage.close(), timeout=2)
+            except Exception:
+                pass
 
         # Close chronicle
         if self.chronicle:
@@ -703,10 +706,11 @@ def run_start(args):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    # Handle SIGTERM for graceful shutdown
+    # Handle SIGTERM/SIGINT — set shutdown event immediately
     def signal_handler():
-        logger.info("Received shutdown signal")
-        loop.create_task(node.stop())
+        node._shutdown_event.set()
+        # Also directly schedule stop as a task
+        loop.call_soon_threadsafe(lambda: asyncio.ensure_future(node.stop()))
 
     try:
         loop.add_signal_handler(signal.SIGTERM, signal_handler)
@@ -717,8 +721,14 @@ def run_start(args):
     try:
         loop.run_until_complete(node.start())
     except KeyboardInterrupt:
+        node._shutdown_event.set()
         loop.run_until_complete(node.stop())
     finally:
+        # Cancel all remaining tasks
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         loop.close()
 
 

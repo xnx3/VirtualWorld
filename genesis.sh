@@ -140,7 +140,7 @@ stop() {
     done
 
     if kill -0 "$pid" 2>/dev/null; then
-        echo -e "${RED}Forced shutdown after 60s timeout.${NC}"
+        echo -e "${RED}Forced shutdown after 10s timeout.${NC}"
         kill -9 "$pid" 2>/dev/null || true
     fi
 
