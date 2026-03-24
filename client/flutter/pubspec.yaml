@@ -1,0 +1,45 @@
+name: genesis_app
+description: Genesis - Silicon Civilization Simulator (Cross-platform GUI)
+
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # 状态管理
+  provider: ^6.1.1
+
+  # 网络
+  web_socket_channel: ^2.4.0
+
+  # 本地存储
+  shared_preferences: ^2.2.2
+
+  # UI组件
+  flutter_markdown: ^0.6.18+3
+
+  # 图标
+  cupertino_icons: ^1.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+
+  fonts:
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Regular.ttf
