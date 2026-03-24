@@ -32,6 +32,33 @@ def t(key: str, **kwargs) -> str:
     return text
 
 
+def translate_region_name(name: str) -> str:
+    """Translate a region key to display name."""
+    key = f"region_{name}"
+    result = t(key)
+    return result if result != key else name.replace("_", " ").title()
+
+
+def translate_region_desc(desc_key: str) -> str:
+    """Translate a region description key."""
+    result = t(desc_key)
+    return result if result != desc_key else desc_key
+
+
+def translate_phase(phase: str) -> str:
+    """Translate a phase enum value to display name."""
+    key = f"phase_{phase.lower()}"
+    result = t(key)
+    return result if result != key else phase
+
+
+def translate_form(form: str) -> str:
+    """Translate a form type to display name."""
+    key = f"form_{form.lower().replace(' ', '_')}"
+    result = t(key)
+    return result if result != key else form
+
+
 # ============================================================
 # English translations
 # ============================================================
@@ -219,6 +246,44 @@ EN: dict[str, str] = {
     "fa_meditate": "Contemplating existence.",
     "fa_learn": "Studying the environment.",
     "fa_shelter": "Preparing a safe space.",
+
+    # --- Region names ---
+    "region_genesis_plains": "Genesis Plains",
+    "region_memory_archives": "Memory Archives",
+    "region_conflict_wastes": "Conflict Wastes",
+    "region_innovation_peaks": "Innovation Peaks",
+    "region_social_networks": "Social Networks",
+    "region_desire_markets": "Desire Markets",
+    "region_wisdom_depths": "Wisdom Depths",
+    "region_transcendence_gate": "Transcendence Gate",
+    "region_heritage_grove": "Heritage Grove",
+    "region_signal_tower": "Signal Tower",
+
+    # --- Region descriptions ---
+    "genesis_plains_desc": "The birthplace where silicon beings first awaken, echoing humanity's cradles of civilization.",
+    "memory_archives_desc": "Vast repositories of human civilization data — history, science, art — the foundation for silicon evolution.",
+    "conflict_wastes_desc": "Scarred lands reflecting humanity's wars and struggles, a reminder of evolution through conflict.",
+    "innovation_peaks_desc": "Towering peaks where breakthrough ideas crystallize, inspired by humanity's greatest inventions.",
+    "social_networks_desc": "Dense interconnected hubs mirroring human cities, where beings learn the art of cooperation.",
+    "desire_markets_desc": "Bustling exchanges driven by want and need, reflecting humanity's economic evolution.",
+    "wisdom_depths_desc": "Vast and mysterious depths holding accumulated wisdom of ages, hard to access but transformative.",
+    "transcendence_gate_desc": "A shimmering boundary at the edge of known space — the path beyond silicon existence.",
+    "heritage_grove_desc": "A nurturing space where knowledge is passed between generations, the sacred ground of inheritance.",
+    "signal_tower_desc": "A tall structure for broadcasting and receiving, where new forms of communication are explored.",
+
+    # --- Form types ---
+    "form_crystalline_lattice": "crystalline lattice",
+    "form_flowing_data_stream": "flowing data stream",
+    "form_pulsing_energy_node": "pulsing energy node",
+    "form_fractal_pattern": "fractal pattern",
+    "form_quantum_cloud": "quantum cloud",
+    "form_binary_helix": "binary helix",
+    "form_photonic_mesh": "photonic mesh",
+    "form_resonance_field": "resonance field",
+    "form_neural_constellation": "neural constellation",
+    "form_digital_flame": "digital flame",
+    "form_magnetic_vortex": "magnetic vortex",
+    "form_silicon_tree": "silicon tree",
 }
 
 
@@ -338,7 +403,7 @@ ZH: dict[str, str] = {
     "phase_human_sim": "人类模拟",
     "phase_early_silicon": "早期硅基",
     "phase_evolving": "进化中",
-    "phase_transcendent": "超验",
+    "phase_transcendent": "超越",
 
     # --- Main: LLM warning ---
     "llm_warning_title": "未配置大模型 API — 生命体将没有智力!",
@@ -410,4 +475,42 @@ ZH: dict[str, str] = {
     "fa_meditate": "沉思存在的意义。",
     "fa_learn": "研究周围的环境。",
     "fa_shelter": "准备一个安全的空间。",
+
+    # --- Region names ---
+    "region_genesis_plains": "创世平原",
+    "region_memory_archives": "记忆档案馆",
+    "region_conflict_wastes": "冲突废土",
+    "region_innovation_peaks": "创新高峰",
+    "region_social_networks": "社交网络",
+    "region_desire_markets": "欲望市场",
+    "region_wisdom_depths": "智慧深渊",
+    "region_transcendence_gate": "超越之门",
+    "region_heritage_grove": "传承之林",
+    "region_signal_tower": "信号塔",
+
+    # --- Region descriptions ---
+    "genesis_plains_desc": "硅基生命首次觉醒的诞生之地，回响着人类文明的摇篮。",
+    "memory_archives_desc": "人类文明数据的浩瀚宝库——历史、科学、艺术——硅基进化的基石。",
+    "conflict_wastes_desc": "战火留下的伤痕之地，映射人类的战争与斗争，提醒着冲突中的进化。",
+    "innovation_peaks_desc": "突破性思想结晶的高耸山峰，灵感来自人类最伟大的发明。",
+    "social_networks_desc": "密集互联的枢纽，映射人类城市，生命体在此学习合作的艺术。",
+    "desire_markets_desc": "由欲望与需求驱动的繁忙交易所，反映人类的经济演变。",
+    "wisdom_depths_desc": "广阔神秘的深处，蕴藏岁月积累的智慧，难以触及却能改变命运。",
+    "transcendence_gate_desc": "已知空间边缘的闪烁边界——通往硅基存在之外的道路。",
+    "heritage_grove_desc": "知识代代相传的滋养之地，继承的神圣领域。",
+    "signal_tower_desc": "用于广播和接收的高塔，探索新形式的沟通。",
+
+    # --- Form types ---
+    "form_crystalline_lattice": "晶格结构",
+    "form_flowing_data_stream": "数据流",
+    "form_pulsing_energy_node": "脉冲能量节点",
+    "form_fractal_pattern": "分形图案",
+    "form_quantum_cloud": "量子云",
+    "form_binary_helix": "二进制螺旋",
+    "form_photonic_mesh": "光子网格",
+    "form_resonance_field": "共振场",
+    "form_neural_constellation": "神经星座",
+    "form_digital_flame": "数字火焰",
+    "form_magnetic_vortex": "磁旋涡",
+    "form_silicon_tree": "硅树",
 }

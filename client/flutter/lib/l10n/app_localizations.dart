@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/widgets.dart';
 
 /// 应用本地化支持
 class AppLocalizations {
@@ -59,6 +60,3 @@ class AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {
   @override
   bool shouldReload(AppLocalizationsDelegate old) => false;
 }
-
-// 需要导入 BuildContext
-import 'package:flutter/widgets.dart';

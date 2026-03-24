@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../services/app_state.dart';
 import '../services/websocket_service.dart';
 import '../widgets/widgets.dart';
+import '../l10n/app_localizations.dart';
 
 /// 主界面
 class HomeScreen extends StatefulWidget {
@@ -67,7 +68,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
-      title: const Row(
+      title: Row(
         children: [
           Text('Genesis', style: TextStyle(fontWeight: FontWeight.bold)),
           SizedBox(width: 8),
@@ -81,10 +82,11 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         Consumer<AppState>(
           builder: (context, state, _) {
+            final loc = AppLocalizations.of(context);
             return Container(
               margin: const EdgeInsets.only(right: 8),
               child: Chip(
-                label: Text(state.isRunning ? 'Running' : 'Stopped'),
+                label: Text(state.isRunning ? loc!.running : loc!.stopped),
                 backgroundColor: state.isRunning ? Colors.green : Colors.red,
                 labelStyle: const TextStyle(color: Colors.white, fontSize: 12),
               ),
@@ -96,16 +98,17 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildDrawer() {
+    final loc = AppLocalizations.of(context);
     return Drawer(
       child: ListView(
         children: [
-          const DrawerHeader(
+          DrawerHeader(
             decoration: BoxDecoration(color: Colors.deepPurple),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                Text('Genesis', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                Text(loc!.appName, style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                 SizedBox(height: 8),
                 Text('Silicon Civilization Simulator', style: TextStyle(color: Colors.white70)),
               ],
@@ -113,24 +116,24 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           ListTile(
             leading: const Icon(Icons.home),
-            title: const Text('Dashboard'),
+            title: Text('Dashboard'),
             selected: true,
             onTap: () => Navigator.pop(context),
           ),
           ListTile(
             leading: const Icon(Icons.history),
-            title: const Text('Chronicle'),
+            title: Text(loc.chronicle),
             onTap: () => Navigator.pop(context),
           ),
           ListTile(
             leading: const Icon(Icons.public),
-            title: const Text('World'),
+            title: Text(loc.world),
             onTap: () => Navigator.pop(context),
           ),
           const Divider(),
           ListTile(
             leading: const Icon(Icons.settings),
-            title: const Text('Settings'),
+            title: Text(loc.settings),
             onTap: () {
               Navigator.pop(context);
               Navigator.pushNamed(context, '/settings');
@@ -142,13 +145,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildDisconnectedState() {
+    final loc = AppLocalizations.of(context);
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           const Icon(Icons.cloud_off, size: 64, color: Colors.white30),
           const SizedBox(height: 16),
-          const Text('Not connected to backend'),
+          Text(loc!.disconnected),
           const SizedBox(height: 8),
           const Text(
             'Start the Genesis backend with:\n./genesis.sh start --api',
@@ -159,7 +163,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ElevatedButton.icon(
             onPressed: _connectToBackend,
             icon: const Icon(Icons.refresh),
-            label: const Text('Retry Connection'),
+            label: Text('Retry Connection'),
           ),
         ],
       ),
@@ -209,8 +213,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
 
           // 事件日志
-          const Text(
-            'Event Log',
+          Text(
+            AppLocalizations.of(context)!.eventLog,
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
@@ -221,28 +225,30 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildFab() {
+    final loc = AppLocalizations.of(context);
     return FloatingActionButton.extended(
       onPressed: () => _showTaskInputDialog(),
       icon: const Icon(Icons.assignment),
-      label: const Text('Assign Task'),
+      label: Text(loc!.assignTask),
     );
   }
 
   Widget _buildBottomBar() {
+    final loc = AppLocalizations.of(context);
     return BottomAppBar(
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
           IconButton(
             icon: const Icon(Icons.play_arrow),
-            tooltip: 'Start',
+            tooltip: loc!.start,
             onPressed: () {
               // TODO: Start command
             },
           ),
           IconButton(
             icon: const Icon(Icons.stop),
-            tooltip: 'Stop',
+            tooltip: loc.stop,
             onPressed: () {
               context.read<WebSocketService>().sendStop();
               context.read<AppState>().setRunning(false);
@@ -250,7 +256,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            tooltip: 'Status',
+            tooltip: loc.status,
             onPressed: () {
               context.read<WebSocketService>().requestStatus();
             },
@@ -261,14 +267,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showTaskInputDialog() {
+    final loc = AppLocalizations.of(context);
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Assign Task'),
+        title: Text(loc!.assignTask),
         content: TextField(
           controller: _taskController,
-          decoration: const InputDecoration(
-            hintText: 'Enter task description...',
+          decoration: InputDecoration(
+            hintText: loc.taskHint,
             border: OutlineInputBorder(),
           ),
           maxLines: 3,
@@ -276,7 +283,7 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text('Cancel'),
           ),
           ElevatedButton(
             onPressed: () {
@@ -286,11 +293,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 _taskController.clear();
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Task assigned!')),
+                  SnackBar(content: Text('Task assigned!')),
                 );
               }
             },
-            child: const Text('Send'),
+            child: Text('Send'),
           ),
         ],
       ),

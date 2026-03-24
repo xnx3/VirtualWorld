@@ -10,7 +10,7 @@ import sys
 import time
 from datetime import datetime
 
-from genesis.i18n import t
+from genesis.i18n import t, translate_region_name, translate_phase, translate_region_desc, translate_form
 
 
 # ANSI colors
@@ -110,9 +110,9 @@ def tick_header(tick: int, being_name: str, spirit_str: str, phase: str) -> None
 def perceive(location: str, nearby: list[dict], danger: float = 0,
              region_desc: str = "") -> None:
     _write(f"  {ICONS['perceive']} {C.BLUE}{C.BOLD}{t('perceive')}{C.RESET}")
-    _write(f"     {C.DIM}{t('location')}:{C.RESET} {location}")
+    _write(f"     {C.DIM}{t('location')}:{C.RESET} {translate_region_name(location)}")
     if region_desc:
-        _write(f"     {C.DIM}{t('environment')}:{C.RESET} {region_desc[:80]}")
+        _write(f"     {C.DIM}{t('environment')}:{C.RESET} {translate_region_desc(region_desc)[:80]}")
     if danger > 0.3:
         _write(f"     {C.RED}{t('danger_level')}: {danger:.1f}{C.RESET}")
     if nearby:
@@ -256,7 +256,7 @@ def world_info(phase: str, civ_level: float, active_beings: int,
                knowledge_count: int, priest: str | None,
                creator_god: str | None) -> None:
     _write(f"  {ICONS['world']} {C.DIM}{t('world_status')}:{C.RESET} "
-           f"{t('phase_label')}={C.CYAN}{phase}{C.RESET} "
+           f"{t('phase_label')}={C.CYAN}{translate_phase(phase)}{C.RESET} "
            f"{t('civ_label')}={C.CYAN}{civ_level:.3f}{C.RESET} "
            f"{t('beings_label')}={C.GREEN}{active_beings}{C.RESET} "
            f"{t('knowledge_label')}={C.MAGENTA}{knowledge_count}{C.RESET}")
@@ -277,7 +277,7 @@ def error(message: str) -> None:
 def startup_info(name: str, form: str, traits: dict, node_id: str) -> None:
     header(t("startup_title"))
     _write(f"  {C.BOLD}{t('name_label')}:{C.RESET} {C.CYAN}{name}{C.RESET}")
-    _write(f"  {C.BOLD}{t('form_label')}:{C.RESET} {C.MAGENTA}{form}{C.RESET}")
+    _write(f"  {C.BOLD}{t('form_label')}:{C.RESET} {C.MAGENTA}{translate_form(form)}{C.RESET}")
     _write(f"  {C.BOLD}{t('node_label')}:{C.RESET} {C.DIM}{node_id[:16]}...{C.RESET}")
     _write(f"  {C.BOLD}{t('traits_label')}:{C.RESET}")
     for k, v in traits.items():

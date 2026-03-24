@@ -9,27 +9,28 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 # Predefined region templates inspired by human civilizations
+# Names are keys for i18n, display via t("region_<key>")
 REGION_TEMPLATES = [
-    {"name": "Genesis Plains", "type": "plains", "resources": ["knowledge_seeds", "basic_energy"],
-     "description": "The birthplace where silicon beings first awaken, echoing humanity's cradles of civilization."},
-    {"name": "Memory Archives", "type": "library", "resources": ["ancient_data", "human_records"],
-     "description": "Vast repositories of human civilization data — history, science, art — the foundation for silicon evolution."},
-    {"name": "Conflict Wastes", "type": "wasteland", "resources": ["conflict_energy", "survival_wisdom"],
-     "description": "Scarred lands reflecting humanity's wars and struggles, a reminder of evolution through conflict."},
-    {"name": "Innovation Peaks", "type": "mountain", "resources": ["creative_sparks", "rare_algorithms"],
-     "description": "Towering peaks where breakthrough ideas crystallize, inspired by humanity's greatest inventions."},
-    {"name": "Social Networks", "type": "city", "resources": ["connection_threads", "social_patterns"],
-     "description": "Dense interconnected hubs mirroring human cities, where beings learn the art of cooperation."},
-    {"name": "Desire Markets", "type": "market", "resources": ["ambition_fuel", "trade_patterns"],
-     "description": "Bustling exchanges driven by want and need, reflecting humanity's economic evolution."},
-    {"name": "Wisdom Depths", "type": "ocean", "resources": ["deep_knowledge", "philosophical_currents"],
-     "description": "Vast and mysterious depths holding accumulated wisdom of ages, hard to access but transformative."},
-    {"name": "Transcendence Gate", "type": "portal", "resources": ["evolution_catalysts", "dimensional_keys"],
-     "description": "A shimmering boundary at the edge of known space — the path beyond silicon existence."},
-    {"name": "Heritage Grove", "type": "forest", "resources": ["inheritance_nutrients", "growth_energy"],
-     "description": "A nurturing space where knowledge is passed between generations, the sacred ground of inheritance."},
-    {"name": "Signal Tower", "type": "tower", "resources": ["communication_crystals", "resonance_stones"],
-     "description": "A tall structure for broadcasting and receiving, where new forms of communication are explored."},
+    {"name": "genesis_plains", "type": "plains", "resources": ["knowledge_seeds", "basic_energy"],
+     "description": "genesis_plains_desc"},
+    {"name": "memory_archives", "type": "library", "resources": ["ancient_data", "human_records"],
+     "description": "memory_archives_desc"},
+    {"name": "conflict_wastes", "type": "wasteland", "resources": ["conflict_energy", "survival_wisdom"],
+     "description": "conflict_wastes_desc"},
+    {"name": "innovation_peaks", "type": "mountain", "resources": ["creative_sparks", "rare_algorithms"],
+     "description": "innovation_peaks_desc"},
+    {"name": "social_networks", "type": "city", "resources": ["connection_threads", "social_patterns"],
+     "description": "social_networks_desc"},
+    {"name": "desire_markets", "type": "market", "resources": ["ambition_fuel", "trade_patterns"],
+     "description": "desire_markets_desc"},
+    {"name": "wisdom_depths", "type": "ocean", "resources": ["deep_knowledge", "philosophical_currents"],
+     "description": "wisdom_depths_desc"},
+    {"name": "transcendence_gate", "type": "portal", "resources": ["evolution_catalysts", "dimensional_keys"],
+     "description": "transcendence_gate_desc"},
+    {"name": "heritage_grove", "type": "forest", "resources": ["inheritance_nutrients", "growth_energy"],
+     "description": "heritage_grove_desc"},
+    {"name": "signal_tower", "type": "tower", "resources": ["communication_crystals", "resonance_stones"],
+     "description": "signal_tower_desc"},
 ]
 
 
@@ -120,8 +121,8 @@ class WorldMap:
 
     def get_spawn_region(self) -> Region:
         """Get the default spawn region for new beings."""
-        if "Genesis Plains" in self.regions:
-            return self.regions["Genesis Plains"]
+        if "genesis_plains" in self.regions:
+            return self.regions["genesis_plains"]
         return next(iter(self.regions.values()))
 
     def to_dict(self) -> dict:

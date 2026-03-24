@@ -205,7 +205,7 @@ class GenesisNode:
                     "traits": traits,
                     "form": form,
                     "generation": 1,
-                    "location": "Genesis Plains",
+                    "location": "genesis_plains",
                     "hibernate_safety_timeout": self.config.being.hibernate_safety_timeout,
                 },
                 llm_client=llm_client,
@@ -215,7 +215,7 @@ class GenesisNode:
             # Submit BEING_JOIN transaction
             await self._submit_tx("BEING_JOIN", {
                 "name": name, "traits": traits, "form": form,
-                "location": "Genesis Plains", "is_npc": False,
+                "location": "genesis_plains", "is_npc": False,
             })
 
             self.chronicle.log_birth(
@@ -248,14 +248,14 @@ class GenesisNode:
                             "traits": generate_traits(),
                             "form": generate_form(),
                             "generation": old_gen + 1,
-                            "location": "Genesis Plains",
+                            "location": "genesis_plains",
                             "hibernate_safety_timeout": self.config.being.hibernate_safety_timeout,
                         },
                         llm_client=llm_client,
                     )
                     await self._submit_tx("BEING_JOIN", {
                         "name": name, "traits": self.being.traits,
-                        "form": self.being.form, "location": "Genesis Plains",
+                        "form": self.being.form, "location": "genesis_plains",
                         "is_npc": False, "generation": old_gen + 1,
                     })
                 else:
@@ -275,14 +275,14 @@ class GenesisNode:
                         "traits": generate_traits(),
                         "form": generate_form(),
                         "generation": 1,
-                        "location": "Genesis Plains",
+                        "location": "genesis_plains",
                         "hibernate_safety_timeout": self.config.being.hibernate_safety_timeout,
                     },
                     llm_client=llm_client,
                 )
                 await self._submit_tx("BEING_JOIN", {
                     "name": name, "traits": self.being.traits,
-                    "form": self.being.form, "location": "Genesis Plains",
+                    "form": self.being.form, "location": "genesis_plains",
                     "is_npc": False,
                 })
 

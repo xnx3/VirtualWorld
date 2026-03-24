@@ -69,11 +69,9 @@ class AppTheme {
       ),
       textTheme: const TextTheme(
         headlineMedium: TextStyle(
-          fontFamily: 'JetBrainsMono',
           fontWeight: FontWeight.bold,
         ),
         bodyMedium: TextStyle(
-          fontFamily: 'JetBrainsMono',
         ),
       ),
     );

@@ -110,9 +110,9 @@ class SiliconBeing:
             config.get("generation", 1) if isinstance(config, dict) else 1
         )
         self.location: str = (
-            config.get("location", "Genesis Plains")
+            config.get("location", "genesis_plains")
             if isinstance(config, dict)
-            else "Genesis Plains"
+            else "genesis_plains"
         )
         self.evolution_level: float = 0.0
 
@@ -971,7 +971,7 @@ class SiliconBeing:
         being.form = data.get("form", "crystalline lattice")
         being.traits = data.get("traits", {})
         being.generation = data.get("generation", 1)
-        being.location = data.get("location", "Genesis Plains")
+        being.location = data.get("location", "genesis_plains")
         being.evolution_level = data.get("evolution_level", 0.0)
         being.current_thought = data.get("current_thought")
         being.current_action = data.get("current_action")

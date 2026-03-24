@@ -97,7 +97,7 @@ class BeingRegistry:
         """Generate data for a new NPC being."""
         existing_names = {b.name for b in world_state.beings.values()}
         name = generate_being_name(existing_names)
-        spawn_region = "Genesis Plains"  # default spawn
+        spawn_region = "genesis_plains"  # default spawn
         return {
             "name": name,
             "traits": generate_traits(),

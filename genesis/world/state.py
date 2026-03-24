@@ -248,7 +248,12 @@ class WorldState:
     @classmethod
     def from_dict(cls, data: dict) -> WorldState:
         ws = cls()
-        ws.phase = CivPhase(data.get("phase", "HUMAN_SIM"))
+        # Handle both enum name (HUMAN_SIM) and value
+        phase_str = data.get("phase", "HUMAN_SIM")
+        try:
+            ws.phase = CivPhase(phase_str)  # Try by value first
+        except ValueError:
+            ws.phase = CivPhase[phase_str]  # Fallback to name
         ws.current_tick = data.get("current_tick", 0)
         ws.current_epoch = data.get("current_epoch", 0)
         ws.beings = {
