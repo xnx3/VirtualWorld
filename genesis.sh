@@ -30,12 +30,19 @@ print_banner() {
 }
 
 ensure_python() {
-    if ! command -v python3 &>/dev/null; then
+    # Prefer python3.11+, fallback to python3
+    if command -v python3.11 &>/dev/null; then
+        PYTHON_CMD="python3.11"
+    elif command -v python3.10 &>/dev/null; then
+        PYTHON_CMD="python3.10"
+    elif command -v python3 &>/dev/null; then
+        PYTHON_CMD="python3"
+    else
         echo -e "${RED}Error: Python 3 is required but not found.${NC}"
         exit 1
     fi
     local pyver
-    pyver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    pyver=$($PYTHON_CMD -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
     local major minor
     major=$(echo "$pyver" | cut -d. -f1)
     minor=$(echo "$pyver" | cut -d. -f2)
@@ -47,8 +54,8 @@ ensure_python() {
 
 ensure_venv() {
     if [ ! -d "$VENV_DIR" ]; then
-        echo -e "${YELLOW}Creating virtual environment...${NC}"
-        python3 -m venv "$VENV_DIR"
+        echo -e "${YELLOW}Creating virtual environment with $PYTHON_CMD...${NC}"
+        $PYTHON_CMD -m venv "$VENV_DIR"
     fi
     if [ ! -f "${VENV_DIR}/bin/pip" ]; then
         echo -e "${RED}Error: Virtual environment is broken. Remove venv/ and try again.${NC}"
@@ -92,19 +99,13 @@ start() {
     setup
 
     echo -e "${GREEN}Starting Genesis...${NC}"
-    nohup "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR" >> "$LOG_FILE" 2>&1 &
-    local pid=$!
-    echo $pid > "$PID_FILE"
+    echo -e "${CYAN}Press Ctrl+C to hibernate and stop.${NC}"
+    echo ""
 
-    sleep 2
-    if kill -0 $pid 2>/dev/null; then
-        echo -e "${GREEN}Genesis started successfully (PID $pid)${NC}"
-        echo -e "${CYAN}Log: $LOG_FILE${NC}"
-    else
-        echo -e "${RED}Failed to start. Check log: $LOG_FILE${NC}"
-        rm -f "$PID_FILE"
-        exit 1
-    fi
+    # Run in foreground so user can see all output
+    echo $$ > "$PID_FILE"
+    "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR" 2>&1 | tee -a "$LOG_FILE"
+    rm -f "$PID_FILE"
 }
 
 stop() {

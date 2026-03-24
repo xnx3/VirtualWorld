@@ -1,6 +1,6 @@
 """Genesis main entry point.
 
-This is the Python entry point called by vw.sh.
+This is the Python entry point called by genesis.sh.
 It orchestrates the entire node lifecycle:
 - Identity generation/loading
 - Blockchain initialization
@@ -26,13 +26,12 @@ logger = logging.getLogger("genesis")
 
 
 def setup_logging(data_dir: str) -> None:
-    """Configure logging."""
+    """Configure logging — log to file only, console is for live output."""
     log_format = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
     logging.basicConfig(
         level=logging.INFO,
         format=log_format,
         handlers=[
-            logging.StreamHandler(sys.stdout),
             logging.FileHandler(os.path.join(data_dir, "genesis.log"), encoding="utf-8"),
         ],
     )
@@ -78,8 +77,8 @@ class GenesisNode:
         logger.info("Configuration loaded")
 
         # 2. Generate or load identity
-        from genesis.node.identity import NodeIdentity, generate_or_load
-        self.identity = generate_or_load(str(self.data_dir))
+        from genesis.node.identity import NodeIdentity
+        self.identity = NodeIdentity.generate_or_load(str(self.data_dir))
         logger.info("Node ID: %s", self.identity.node_id[:16] + "...")
         is_first_run = not (self.data_dir / "being_state.json").exists()
 
@@ -275,22 +274,32 @@ class GenesisNode:
                 await self._submit_tx("PRIEST_ELECTION", {"candidate_id": new_priest})
 
         self._running = True
-        logger.info("=" * 50)
-        logger.info("Genesis Node Ready!")
-        logger.info("Being: %s | Phase: %s | Civ Level: %.3f",
-                     self.being.name, self.world_state.phase.value,
-                     self.world_state.civ_level)
-        logger.info("=" * 50)
+
+        # Show startup info on console
+        from genesis.chronicle import console as con
+        con.startup_info(
+            self.being.name, self.being.form,
+            self.being.traits, self.identity.node_id,
+        )
+        con.world_info(
+            self.world_state.phase.value, self.world_state.civ_level,
+            self.world_state.get_active_being_count(),
+            len(self.world_state.knowledge_corpus),
+            self.world_state.priest_node_id,
+            self.world_state.creator_god_node_id,
+        )
+        con.spirit_update(self.being.spirit.current, self.being.spirit.maximum, "init")
 
         # Start main loop
         await self._main_loop()
 
     async def _main_loop(self) -> None:
-        """The main simulation loop."""
+        """The main simulation loop with real-time console output."""
         tick_interval = self.config.simulation.tick_interval
         from genesis.governance.priest import PriestSystem
         from genesis.governance.creator_god import CreatorGodSystem
         from genesis.world.disasters import DisasterSystem
+        from genesis.chronicle import console as con
 
         priest_sys = PriestSystem(grace_period=self.config.chain.priest_grace_period)
         god_sys = CreatorGodSystem(
@@ -302,14 +311,88 @@ class GenesisNode:
             try:
                 tick_start = time.time()
 
-                # Load user-assigned tasks from command file
+                # === TICK HEADER ===
+                con.tick_header(
+                    self.world_state.current_tick,
+                    self.being.name,
+                    self.being.spirit.status_str(),
+                    self.world_state.phase.value,
+                )
+
+                # Load user-assigned tasks
                 self._load_user_tasks()
 
-                # Run being's tick
-                transactions = await self.being.run_tick(self.world_state)
+                # Show user tasks if any
+                pending_tasks = [t for t in self.being._user_tasks if t.get("result") is None]
+                for t in pending_tasks:
+                    con.user_task(t["task"])
 
-                # Save completed task results
+                # === PERCEIVE (shown by agent, but we also show on console) ===
+                perception = await self.being.perceive(self.world_state)
+                region = perception.get("region", {})
+                con.perceive(
+                    perception.get("location", "unknown"),
+                    perception.get("nearby_beings", []),
+                    region.get("danger_level", 0),
+                    region.get("description", ""),
+                )
+
+                # === RUN TICK ===
+                old_spirit = self.being.spirit.current
+                transactions = await self.being.run_tick(self.world_state)
+                new_spirit = self.being.spirit.current
+
+                # === CONSOLE: THINK ===
+                if self.being.current_thought:
+                    con.think(self.being.name, self.being.current_thought)
+
+                # === CONSOLE: ACTION ===
+                if self.being.current_action:
+                    action_detail = ""
+                    for tx in transactions:
+                        if tx.get("tx_type") == "ACTION":
+                            action_detail = tx.get("data", {}).get("details", "")
+                            break
+                    con.decide(
+                        self.being.name,
+                        self.being.current_action,
+                        None,
+                        action_detail,
+                    )
+
+                # === CONSOLE: SPIRIT ===
+                spirit_cost = max(0, old_spirit - new_spirit) if old_spirit > new_spirit else 0
+                spirit_gain = max(0, new_spirit - old_spirit) if new_spirit > old_spirit else 0
+                con.spirit_update(
+                    self.being.spirit.current,
+                    self.being.spirit.maximum,
+                    self.being.current_action or "",
+                    spirit_cost, spirit_gain,
+                )
+
+                # === CONSOLE: Exhaustion ===
+                if self.being.spirit.state.value == "exhausted":
+                    con.exhausted(self.being.name)
+
+                # === CONSOLE: Votes ===
+                for tx in transactions:
+                    if tx.get("tx_type") == "CONTRIBUTION_VOTE":
+                        data = tx.get("data", {})
+                        proposal_hash = data.get("proposal_tx_hash", "")
+                        proposal = self.world_state.pending_proposals.get(proposal_hash, {})
+                        con.vote_cast(
+                            proposal.get("description", proposal_hash[:12]),
+                            data.get("score", 0),
+                        )
+                    elif tx.get("tx_type") == "CONTRIBUTION_PROPOSE":
+                        data = tx.get("data", {})
+                        con.knowledge_event("discovered", data.get("description", ""))
+
+                # === CONSOLE: User task results ===
                 self._save_task_results()
+                completed = [t for t in self.being._user_tasks if t.get("result") is not None]
+                for t in completed:
+                    con.user_task(t["task"], t["result"])
 
                 # Submit transactions
                 for tx_data in transactions:
@@ -329,24 +412,31 @@ class GenesisNode:
                         self.being.current_action, "",
                     )
 
-                # Check for disasters
+                # === DISASTERS ===
                 if disaster_sys.should_trigger(self.world_state):
                     disaster = disaster_sys.generate_disaster(self.world_state)
                     killed = disaster_sys.apply_disaster(disaster, self.world_state)
                     await self._submit_tx("DISASTER_EVENT", disaster.to_dict())
+                    con.disaster_event(
+                        disaster.name, disaster.severity,
+                        disaster.affected_area, len(killed),
+                    )
                     for kid in killed:
                         await self._submit_tx("BEING_DEATH", {
                             "node_id": kid, "cause": disaster.name,
                         })
+                        being = self.world_state.get_being(kid)
+                        name = being.name if being else kid[:8]
+                        con.being_death(name, disaster.name)
                     self.chronicle.log_disaster(
                         self.world_state.current_tick, time.time(),
                         disaster.name, disaster.description,
                         disaster.severity, len(killed),
                     )
 
-                # Check priest requirement
+                # === PRIEST CHECK ===
                 if priest_sys.should_trigger_reset(self.world_state):
-                    logger.warning("NO PRIEST FOR TOO LONG — CIVILIZATION RESET!")
+                    con.priest_event("reset", "")
                     killed = disaster_sys.apply_reset(self.world_state)
                     reset_disaster = disaster_sys.generate_reset_disaster()
                     await self._submit_tx("DISASTER_EVENT", reset_disaster.to_dict())
@@ -356,13 +446,17 @@ class GenesisNode:
                         })
                     self.world_state.ticks_without_priest = 0
 
-                # Check priest election
                 if priest_sys.needs_election(self.world_state):
                     new_priest = priest_sys.select_priest_by_evolution(self.world_state)
                     if new_priest:
                         await self._submit_tx("PRIEST_ELECTION", {"candidate_id": new_priest})
+                        being = self.world_state.get_being(new_priest)
+                        name = being.name if being else new_priest[:8]
+                        con.priest_event("elected", name)
+                elif not self.world_state.priest_node_id:
+                    con.priest_event("no_priest", "")
 
-                # Check Creator God succession
+                # Creator God succession
                 new_god = god_sys.check_succession(self.world_state)
                 if new_god:
                     await self._submit_tx("CREATOR_SUCCESSION", {"challenger_id": new_god})
@@ -373,7 +467,7 @@ class GenesisNode:
                 # Advance tick
                 self.world_state.advance_tick()
 
-                # Block production (if it's our turn)
+                # Block production
                 try:
                     active_nodes = self.world_state.get_active_node_ids()
                     if self.consensus.is_my_turn(
@@ -402,36 +496,39 @@ class GenesisNode:
 
             except Exception as e:
                 logger.error("Error in main loop: %s", e, exc_info=True)
-                await asyncio.sleep(5)  # Brief pause on error
+                from genesis.chronicle import console as con2
+                con2.error(f"Loop error: {e}")
+                await asyncio.sleep(5)
 
     async def stop(self) -> None:
         """Gracefully stop the node — hibernate the being."""
+        from genesis.chronicle import console as con
+
         logger.info("Initiating shutdown...")
         self._shutdown_event.set()
 
         if self.being and self.world_state:
-            # Being prepares for hibernation
+            con.separator("━")
             logger.info("Being %s preparing for hibernation...", self.being.name)
             hibernate_data = await self.being.prepare_shutdown(self.world_state)
+            safety = hibernate_data.get("safety_status", "unknown")
 
-            # Submit hibernate transaction
+            con.hibernate_start(self.being.name, safety)
+
             await self._submit_tx("BEING_HIBERNATE", {
                 "location": self.being.location,
-                "safety_status": hibernate_data.get("safety_status", "unknown"),
+                "safety_status": safety,
             })
 
-            # Save being state
             being_state_path = str(self.data_dir / "being_state.json")
             self.being.save_state(being_state_path)
 
-            # Also save world state snapshot
             ws_path = str(self.data_dir / "world_state.json")
             Path(ws_path).write_text(
                 json.dumps(self.world_state.to_dict(), ensure_ascii=False, indent=2)
             )
 
-            logger.info("Being state saved. Safety status: %s",
-                         hibernate_data.get("safety_status", "unknown"))
+            con.header(f"{self.being.name} 已安全进入休眠。再见。")
 
         # Stop network
         if self.discovery:
