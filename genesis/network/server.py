@@ -226,6 +226,12 @@ class P2PServer:
             writer.close()
             return
 
+        # Connection diversity check — prevent single-subnet dominance
+        if not self._security.check_connection_diversity(remote_ip):
+            logger.warning("Rejected for subnet diversity from %s", remote_ip)
+            writer.close()
+            return
+
         self._security.record_connection(remote_ip)
 
         # Expect HELLO as first message.

@@ -45,6 +45,10 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
 class PeerDiscovery:
     """Discovers peers on the local network via UDP broadcast and
     optionally queries a list of bootstrap nodes for additional peers.
+
+    Bootstrap nodes can be either:
+    - HTTP bootstrap server: "http://host:port"  (Genesis bootstrap server)
+    - P2P node addresses: "host:port" (direct peer)
     """
 
     def __init__(
@@ -126,59 +130,129 @@ class PeerDiscovery:
     async def query_bootstrap(self) -> None:
         """Connect to each bootstrap node and request their peer lists.
 
-        Bootstrap node addresses are in ``host:port`` format.  We open a
-        short-lived TCP connection, send a GET_PEERS message, and fire
-        the discovery callback for every peer returned.
+        Supports two formats:
+        - "http://host:port"  → Genesis HTTP bootstrap server
+        - "host:port"         → Direct P2P peer connection
         """
         from genesis.network.protocol import Message  # avoid circular import
 
         for addr_str in self._bootstrap_nodes:
-            try:
-                host, port_str = addr_str.rsplit(":", 1)
-                port = int(port_str)
-            except ValueError:
-                logger.warning("Invalid bootstrap address: %s", addr_str)
-                continue
+            if addr_str.startswith("http://") or addr_str.startswith("https://"):
+                await self._query_http_bootstrap(addr_str)
+            else:
+                await self._query_p2p_bootstrap(addr_str)
 
-            try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(host, port), timeout=5.0
-                )
-            except (OSError, asyncio.TimeoutError) as exc:
-                logger.debug("Bootstrap %s unreachable: %s", addr_str, exc)
-                continue
+    def _validate_peer_data(self, peer_data: dict) -> tuple[bool, str, int]:
+        """Validate peer data from bootstrap response. Returns (valid, address, port)."""
+        node_id = str(peer_data.get("node_id", "")).strip()
+        address = str(peer_data.get("address", "")).strip()
+        port = peer_data.get("port", 0)
 
-            try:
-                msg = Message.get_peers(self._node_id)
-                writer.write(msg.serialize())
-                await writer.drain()
+        if not node_id or len(node_id) > 128:
+            return False, "", 0
+        if not address or len(address) > 64:
+            return False, "", 0
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            return False, "", 0
+        if not (1 <= port <= 65535):
+            return False, "", 0
 
-                # Read length prefix.
-                length_data = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
-                import struct
-                (length,) = struct.unpack("!I", length_data)
-                if length > 1_048_576:
-                    logger.warning("Bootstrap %s sent oversized response", addr_str)
-                    continue
-                body = await asyncio.wait_for(reader.readexactly(length), timeout=10.0)
-                resp = Message.deserialize(body)
+        return True, address, port
 
-                if resp.msg_type.value == "PEERS":
-                    peers_list = resp.payload.get("peers", [])
-                    for peer_data in peers_list:
+    async def _query_http_bootstrap(self, base_url: str) -> None:
+        """Query a Genesis HTTP bootstrap server."""
+        import urllib.request
+        import urllib.parse
+
+        try:
+            # Register this node
+            import json as _json
+            register_data = _json.dumps({
+                "node_id": self._node_id,
+                "port": self._listen_port,
+            }).encode()
+            req = urllib.request.Request(
+                f"{base_url.rstrip('/')}/register",
+                data=register_data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=5)
+        except Exception as exc:
+            logger.debug("HTTP bootstrap register to %s failed: %s", base_url, exc)
+
+        try:
+            # Get peers
+            import json as _json
+            url = f"{base_url.rstrip('/')}/peers?exclude={urllib.parse.quote(self._node_id)}"
+            resp = urllib.request.urlopen(url, timeout=5)
+            data = _json.loads(resp.read())
+            peers_list = data.get("peers", [])[:100]  # Max 100 peers
+            for peer_data in peers_list:
+                valid, address, port = self._validate_peer_data(peer_data)
+                if valid:
+                    await self._fire_callbacks(
+                        peer_data.get("node_id", ""),
+                        address,
+                        port,
+                    )
+            logger.debug("HTTP bootstrap %s returned %d peers", base_url, len(peers_list))
+        except Exception as exc:
+            logger.debug("HTTP bootstrap peers from %s failed: %s", base_url, exc)
+
+    async def _query_p2p_bootstrap(self, addr_str: str) -> None:
+        """Query a direct P2P bootstrap node."""
+        from genesis.network.protocol import Message
+
+        try:
+            host, port_str = addr_str.rsplit(":", 1)
+            port = int(port_str)
+        except ValueError:
+            logger.warning("Invalid bootstrap address: %s", addr_str)
+            return
+
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), timeout=5.0
+            )
+        except (OSError, asyncio.TimeoutError) as exc:
+            logger.debug("Bootstrap %s unreachable: %s", addr_str, exc)
+            return
+
+        try:
+            msg = Message.get_peers(self._node_id)
+            writer.write(msg.serialize())
+            await writer.drain()
+
+            length_data = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
+            import struct
+            (length,) = struct.unpack("!I", length_data)
+            if length > 1_048_576:
+                logger.warning("Bootstrap %s sent oversized response", addr_str)
+                return
+            body = await asyncio.wait_for(reader.readexactly(length), timeout=10.0)
+            resp = Message.deserialize(body)
+
+            if resp.msg_type.value == "PEERS":
+                peers_list = resp.payload.get("peers", [])[:100]  # Max 100 peers
+                for peer_data in peers_list:
+                    valid, address, port_p = self._validate_peer_data(peer_data)
+                    if valid:
                         await self._fire_callbacks(
                             peer_data.get("node_id", ""),
-                            peer_data.get("address", host),
-                            peer_data.get("port", port),
+                            address,
+                            port_p,
                         )
-            except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, Exception) as exc:
-                logger.debug("Bootstrap query to %s failed: %s", addr_str, exc)
-            finally:
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except OSError:
-                    pass
+        except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, Exception) as exc:
+            logger.debug("Bootstrap query to %s failed: %s", addr_str, exc)
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except OSError:
+                pass
 
     def on_peer_discovered(
         self, callback: Callable[[str, str, int], Awaitable[None] | None]
