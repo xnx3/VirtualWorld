@@ -144,7 +144,8 @@ class GenesisNode:
         from genesis.being.agent import SiliconBeing
 
         llm_client = None
-        if self.config.llm.api_key or self.config.llm.base_url:
+        has_llm = False
+        if self.config.llm.api_key and self.config.llm.api_key.strip():
             try:
                 llm_client = LLMClient(
                     base_url=self.config.llm.base_url,
@@ -153,9 +154,35 @@ class GenesisNode:
                     max_tokens=self.config.llm.max_tokens,
                     temperature=self.config.llm.temperature,
                 )
+                has_llm = True
                 logger.info("LLM client initialized (model: %s)", self.config.llm.model)
             except Exception as e:
-                logger.warning("Failed to initialize LLM client: %s. Using rule-based mode.", e)
+                logger.warning("Failed to initialize LLM client: %s", e)
+
+        # Show LLM status on console
+        from genesis.chronicle import console as con
+        if not has_llm:
+            config_path = self.data_dir / "config.yaml"
+            con.separator("─")
+            con._write(f"  {con.C.YELLOW}{con.C.BOLD}⚠ 未配置大模型 API — 生命体将没有智力!{con.C.RESET}")
+            con._write(f"  {con.C.YELLOW}当前你的生命体只能使用基础规则引擎进行简单行为。{con.C.RESET}")
+            con._write(f"  {con.C.YELLOW}要让你的生命体拥有真正的智慧，请编辑配置文件:{con.C.RESET}")
+            con._write(f"  {con.C.CYAN}{con.C.BOLD}  {config_path}{con.C.RESET}")
+            con._write(f"")
+            con._write(f"  {con.C.DIM}修改 llm 部分，填入你的 API Key，例如:{con.C.RESET}")
+            con._write(f"  {con.C.GREEN}  llm:{con.C.RESET}")
+            con._write(f"  {con.C.GREEN}    base_url: \"https://api.deepseek.com/v1\"{con.C.RESET}")
+            con._write(f"  {con.C.GREEN}    api_key: \"你的API Key\"{con.C.RESET}")
+            con._write(f"  {con.C.GREEN}    model: \"deepseek-chat\"{con.C.RESET}")
+            con._write(f"")
+            con._write(f"  {con.C.DIM}支持所有 OpenAI 兼容接口: GPT/Claude/Deepseek/Ollama 等{con.C.RESET}")
+            con._write(f"  {con.C.DIM}配置完成后执行 genesis.sh restart 重启即可{con.C.RESET}")
+            con.separator("─")
+            con._write("")
+        else:
+            con._write(f"  {con.C.GREEN}{con.C.BOLD}✓ 大模型已连接{con.C.RESET} "
+                       f"{con.C.DIM}({self.config.llm.model} @ {self.config.llm.base_url}){con.C.RESET}")
+            con._write("")
 
         being_state_path = str(self.data_dir / "being_state.json")
         if is_first_run:
