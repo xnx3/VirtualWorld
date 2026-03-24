@@ -47,7 +47,7 @@ class GenesisNode:
     def __init__(self, data_dir: str):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        self._shutdown_event = asyncio.Event()
+        self._shutdown = False
         self._running = False
 
         # Components (initialized in start())
@@ -334,7 +334,7 @@ class GenesisNode:
         )
         disaster_sys = DisasterSystem()
 
-        while not self._shutdown_event.is_set():
+        while not self._shutdown:
             try:
                 tick_start = time.time()
 
@@ -509,17 +509,14 @@ class GenesisNode:
                 except Exception as e:
                     logger.debug("Block production skipped: %s", e)
 
-                # Wait for next tick
+                # Wait for next tick (短轮询，每秒检查一次停止信号)
                 elapsed = time.time() - tick_start
                 wait_time = max(0, tick_interval - elapsed)
-                try:
-                    await asyncio.wait_for(
-                        self._shutdown_event.wait(),
-                        timeout=wait_time,
-                    )
-                    break  # Shutdown requested
-                except asyncio.TimeoutError:
-                    pass  # Normal tick completion
+                while wait_time > 0 and not self._shutdown:
+                    await asyncio.sleep(min(1.0, wait_time))
+                    wait_time -= 1.0
+                if self._shutdown:
+                    break
 
             except Exception as e:
                 logger.error("Error in main loop: %s", e, exc_info=True)
@@ -531,7 +528,7 @@ class GenesisNode:
         """Gracefully stop the node — hibernate the being. Must be fast (<5s)."""
         from genesis.chronicle import console as con
 
-        self._shutdown_event.set()
+        self._shutdown = True
 
         if self.being and self.world_state:
             con.separator("━")
@@ -708,7 +705,7 @@ def run_start(args):
 
     # 用标准 signal 模块处理 SIGTERM/SIGINT，比 asyncio 的信号处理更可靠
     def signal_handler(signum, frame):
-        node._shutdown_event.set()
+        node._shutdown = True
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
@@ -716,7 +713,7 @@ def run_start(args):
     try:
         loop.run_until_complete(node.start())
     except KeyboardInterrupt:
-        node._shutdown_event.set()
+        node._shutdown = True
     finally:
         # 确保执行 stop 保存状态
         try:
