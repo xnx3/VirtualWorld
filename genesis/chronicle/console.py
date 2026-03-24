@@ -89,13 +89,19 @@ def header(title: str) -> None:
 
 
 def tick_header(tick: int, being_name: str, spirit_str: str, phase: str) -> None:
+    # Translate phase value (HUMAN_SIM -> phase_human_sim)
+    phase_key = f"phase_{phase.lower()}"
+    phase_translated = t(phase_key)
+    # If no translation found, fall back to original phase value
+    if phase_translated == phase_key:
+        phase_translated = phase
     _write("")
     separator("━")
     _write(
-        f"{C.BOLD}{ICONS['tick']} Tick {tick}{C.RESET}  "
+        f"{C.BOLD}{ICONS['tick']} {t('tick_label')} {tick}{C.RESET}  "
         f"{C.CYAN}{being_name}{C.RESET}  "
         f"{C.MAGENTA}{spirit_str}{C.RESET}  "
-        f"{C.DIM}Phase: {phase}{C.RESET}  "
+        f"{C.DIM}{t('phase_label')}: {phase_translated}{C.RESET}  "
         f"{C.DIM}{_timestamp()}{C.RESET}"
     )
     separator("━")
@@ -279,7 +285,8 @@ def startup_info(name: str, form: str, traits: dict, node_id: str) -> None:
             bar_len = 15
             filled = int(v * bar_len)
             bar = "▓" * filled + "░" * (bar_len - filled)
-            _write(f"    {k:12s} {bar} {v:.2f}")
+            trait_name = t(f"trait_{k}")
+            _write(f"    {trait_name:12s} {bar} {v:.2f}")
     _write("")
 
 

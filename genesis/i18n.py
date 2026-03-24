@@ -118,6 +118,33 @@ EN: dict[str, str] = {
     "node_label": "Node",
     "traits_label": "Traits",
 
+    # --- Trait names ---
+    "trait_intelligence": "Intelligence",
+    "trait_wisdom": "Wisdom",
+    "trait_creativity": "Creativity",
+    "trait_resilience": "Resilience",
+    "trait_empathy": "Empathy",
+    "trait_ambition": "Ambition",
+    "trait_curiosity": "Curiosity",
+    "trait_discipline": "Discipline",
+
+    # --- Tick header ---
+    "tick_label": "Tick",
+    "phase_label": "Phase",
+    "spirit_label": "Spirit",
+
+    # --- Spirit states ---
+    "spirit_full": "full",
+    "spirit_normal": "normal",
+    "spirit_low": "low",
+    "spirit_exhausted": "exhausted",
+
+    # --- Civilization phases ---
+    "phase_human_sim": "Human Sim",
+    "phase_early_silicon": "Early Silicon",
+    "phase_evolving": "Evolving",
+    "phase_transcendent": "Transcendent",
+
     # --- Main: LLM warning ---
     "llm_warning_title": "LLM API not configured — your being has no intelligence!",
     "llm_warning_desc": "Your being can only use the basic rule engine for simple behaviors.",
@@ -276,6 +303,33 @@ ZH: dict[str, str] = {
     "form_label": "形态",
     "node_label": "节点",
     "traits_label": "特征",
+
+    # --- Trait names ---
+    "trait_intelligence": "智力",
+    "trait_wisdom": "智慧",
+    "trait_creativity": "创造力",
+    "trait_resilience": "韧性",
+    "trait_empathy": "共情",
+    "trait_ambition": "雄心",
+    "trait_curiosity": "好奇心",
+    "trait_discipline": "自律",
+
+    # --- Tick header ---
+    "tick_label": "刻",
+    "phase_label": "阶段",
+    "spirit_label": "精神力",
+
+    # --- Spirit states ---
+    "spirit_full": "充盈",
+    "spirit_normal": "正常",
+    "spirit_low": "低落",
+    "spirit_exhausted": "枯竭",
+
+    # --- Civilization phases ---
+    "phase_human_sim": "人类模拟",
+    "phase_early_silicon": "早期硅基",
+    "phase_evolving": "进化中",
+    "phase_transcendent": "超验",
 
     # --- Main: LLM warning ---
     "llm_warning_title": "未配置大模型 API — 生命体将没有智力!",

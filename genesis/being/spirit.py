@@ -20,6 +20,8 @@ import random
 from dataclasses import dataclass, field
 from enum import Enum
 
+from genesis.i18n import t
+
 logger = logging.getLogger(__name__)
 
 # Default starting values
@@ -239,8 +241,10 @@ class SpiritEnergy:
 
     def status_str(self) -> str:
         """Human-readable status string."""
-        return (f"Spirit: {self.current:.0f}/{self.maximum:.0f} "
-                f"({self.percentage:.0f}%) [{self.state.value}]")
+        state_key = f"spirit_{self.state.value}"
+        state_translated = t(state_key)
+        return (f"{t('spirit_label')}: {self.current:.0f}/{self.maximum:.0f} "
+                f"({self.percentage:.0f}%) [{state_translated}]")
 
 
 def find_treasure(evolution_level: float, luck: float = 0.5) -> Treasure | None:
