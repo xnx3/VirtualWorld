@@ -706,29 +706,31 @@ def run_start(args):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    # Handle SIGTERM/SIGINT — set shutdown event immediately
-    def signal_handler():
+    # 用标准 signal 模块处理 SIGTERM/SIGINT，比 asyncio 的信号处理更可靠
+    def signal_handler(signum, frame):
         node._shutdown_event.set()
-        # Also directly schedule stop as a task
-        loop.call_soon_threadsafe(lambda: asyncio.ensure_future(node.stop()))
 
-    try:
-        loop.add_signal_handler(signal.SIGTERM, signal_handler)
-        loop.add_signal_handler(signal.SIGINT, signal_handler)
-    except NotImplementedError:
-        pass  # Windows
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
 
     try:
         loop.run_until_complete(node.start())
     except KeyboardInterrupt:
         node._shutdown_event.set()
-        loop.run_until_complete(node.stop())
     finally:
-        # Cancel all remaining tasks
+        # 确保执行 stop 保存状态
+        try:
+            loop.run_until_complete(node.stop())
+        except Exception:
+            pass
+        # 取消所有残留 task
         pending = asyncio.all_tasks(loop)
         for task in pending:
             task.cancel()
-        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        try:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:
+            pass
         loop.close()
 
 

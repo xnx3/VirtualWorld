@@ -102,16 +102,10 @@ start() {
     echo -e "${CYAN}Press Ctrl+C to hibernate and stop.${NC}"
     echo ""
 
-    # Run Python directly in foreground, record its PID
-    "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR" &
-    local py_pid=$!
-    echo $py_pid > "$PID_FILE"
-
-    # Forward signals to the Python process
-    trap "kill -TERM $py_pid 2>/dev/null; wait $py_pid 2>/dev/null; rm -f '$PID_FILE'; exit 0" INT TERM
-
-    # Wait for Python to finish
-    wait $py_pid 2>/dev/null
+    # 直接前台运行 Python，信号直达进程
+    # 用 exec 替换当前 shell 进程，这样 PID 就是 Python 的 PID
+    echo $$ > "$PID_FILE"
+    exec "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR"
     rm -f "$PID_FILE"
 }
 
