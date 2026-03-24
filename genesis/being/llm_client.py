@@ -6,13 +6,9 @@ import logging
 
 import openai
 
-logger = logging.getLogger(__name__)
+from genesis.i18n import t
 
-# Fallback responses when the LLM API is unreachable
-_FALLBACK_THOUGHT = "I observe the world around me and contemplate my next step."
-_FALLBACK_DECISION = '{"action_type": "meditate", "target": null, "details": "Quietly reflecting on existence."}'
-_FALLBACK_DIALOGUE = "I sense a connection with you. Let us share knowledge."
-_FALLBACK_KNOWLEDGE = None  # No knowledge discovered on fallback
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
@@ -81,7 +77,7 @@ class LLMClient:
         user_prompt = f"Current situation:\n{context}"
 
         result = await self.generate(system_prompt, user_prompt)
-        return result if result else _FALLBACK_THOUGHT
+        return result if result else t("fallback_thought")
 
     async def generate_decision(
         self,
@@ -109,7 +105,7 @@ class LLMClient:
         )
 
         result = await self.generate(system_prompt, user_prompt)
-        return result if result else _FALLBACK_DECISION
+        return result if result else t("fallback_decision")
 
     async def generate_dialogue(
         self,
@@ -129,7 +125,7 @@ class LLMClient:
         )
 
         result = await self.generate(system_prompt, user_prompt)
-        return result if result else _FALLBACK_DIALOGUE
+        return result if result else t("fallback_dialogue")
 
     async def generate_knowledge(
         self,
@@ -156,5 +152,5 @@ class LLMClient:
 
         result = await self.generate(system_prompt, user_prompt)
         if not result or result.strip().upper() == "NONE":
-            return _FALLBACK_KNOWLEDGE
+            return None
         return result

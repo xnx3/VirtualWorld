@@ -284,6 +284,11 @@ EN: dict[str, str] = {
     "form_digital_flame": "digital flame",
     "form_magnetic_vortex": "magnetic vortex",
     "form_silicon_tree": "silicon tree",
+
+    # --- LLM Fallback responses ---
+    "fallback_thought": "I observe the world around me and contemplate my next step.",
+    "fallback_decision": '{"action_type": "meditate", "target": null, "details": "Quietly reflecting on existence."}',
+    "fallback_dialogue": "I sense a connection with you. Let us share knowledge.",
 }
 
 
@@ -513,4 +518,9 @@ ZH: dict[str, str] = {
     "form_digital_flame": "数字火焰",
     "form_magnetic_vortex": "磁旋涡",
     "form_silicon_tree": "硅树",
+
+    # --- LLM Fallback responses ---
+    "fallback_thought": "我观察着周围的世界，思考下一步的行动。",
+    "fallback_decision": '{"action_type": "meditate", "target": null, "details": "静静地反思存在的意义。"}',
+    "fallback_dialogue": "我感觉到与你之间的联系。让我们分享知识吧。",
 }
