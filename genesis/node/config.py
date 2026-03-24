@@ -30,7 +30,7 @@ class LLMConfig:
 class NetworkConfig:
     listen_port: int = 19841
     discovery_port: int = 19840
-    bootstrap_nodes: list[str] = field(default_factory=list)
+    bootstrap_nodes: list[str] = field(default_factory=lambda: ["http://45.205.24.48:8760"])
     max_peers: int = 50
     discovery_interval: int = 30
 

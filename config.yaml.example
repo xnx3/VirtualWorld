@@ -22,7 +22,8 @@ llm:
 network:
   listen_port: 19841          # TCP port for P2P connections
   discovery_port: 19840       # UDP port for LAN discovery
-  bootstrap_nodes: []         # List of bootstrap node addresses ["host:port"]
+  bootstrap_nodes:            # Bootstrap server addresses for global node discovery
+    - "http://45.205.24.48:8760"
   max_peers: 50               # Maximum peer connections
   discovery_interval: 30      # Seconds between LAN broadcasts
 
