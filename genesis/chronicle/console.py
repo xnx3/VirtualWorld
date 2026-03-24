@@ -10,6 +10,8 @@ import sys
 import time
 from datetime import datetime
 
+from genesis.i18n import t
+
 
 # ANSI colors
 class C:
@@ -101,25 +103,25 @@ def tick_header(tick: int, being_name: str, spirit_str: str, phase: str) -> None
 
 def perceive(location: str, nearby: list[dict], danger: float = 0,
              region_desc: str = "") -> None:
-    _write(f"  {ICONS['perceive']} {C.BLUE}{C.BOLD}感知环境{C.RESET}")
-    _write(f"     {C.DIM}位置:{C.RESET} {location}")
+    _write(f"  {ICONS['perceive']} {C.BLUE}{C.BOLD}{t('perceive')}{C.RESET}")
+    _write(f"     {C.DIM}{t('location')}:{C.RESET} {location}")
     if region_desc:
-        _write(f"     {C.DIM}环境:{C.RESET} {region_desc[:80]}")
+        _write(f"     {C.DIM}{t('environment')}:{C.RESET} {region_desc[:80]}")
     if danger > 0.3:
-        _write(f"     {C.RED}危险等级: {danger:.1f}{C.RESET}")
+        _write(f"     {C.RED}{t('danger_level')}: {danger:.1f}{C.RESET}")
     if nearby:
         names = ", ".join(
             f"{C.CYAN}{b.get('name', '?')}{C.RESET}"
             f"{C.DIM}(evo:{b.get('evolution', 0):.2f}){C.RESET}"
             for b in nearby[:5]
         )
-        _write(f"     {C.DIM}附近:{C.RESET} {names}")
+        _write(f"     {C.DIM}{t('nearby')}:{C.RESET} {names}")
     else:
-        _write(f"     {C.DIM}附近: (无人){C.RESET}")
+        _write(f"     {C.DIM}{t('nearby')}: {t('nearby_none')}{C.RESET}")
 
 
 def think(being_name: str, thought: str) -> None:
-    _write(f"  {ICONS['think']} {C.YELLOW}{C.BOLD}思考{C.RESET}")
+    _write(f"  {ICONS['think']} {C.YELLOW}{C.BOLD}{t('think')}{C.RESET}")
     # Wrap long thoughts
     for line in _wrap(thought, 70):
         _write(f"     {C.ITALIC}{C.YELLOW}{line}{C.RESET}")
@@ -135,16 +137,16 @@ def decide(being_name: str, action_type: str, target: str | None,
         "deep_think": C.BMAGENTA,
     }.get(action_type, C.WHITE)
 
-    action_cn = {
-        "speak": "对话", "teach": "传授", "learn": "学习",
-        "create": "创造", "explore": "探索", "compete": "竞争",
-        "meditate": "冥想", "move": "移动", "build_shelter": "建造庇护所",
-        "deep_think": "深度思考",
+    action_i18n = {
+        "speak": t("action_speak"), "teach": t("action_teach"), "learn": t("action_learn"),
+        "create": t("action_create"), "explore": t("action_explore"), "compete": t("action_compete"),
+        "meditate": t("action_meditate"), "move": t("action_move"), "build_shelter": t("action_build_shelter"),
+        "deep_think": t("action_deep_think"),
     }.get(action_type, action_type)
 
-    _write(f"  {icon} {color}{C.BOLD}行动: {action_cn}{C.RESET}")
+    _write(f"  {icon} {color}{C.BOLD}{t('action')}: {action_i18n}{C.RESET}")
     if target:
-        _write(f"     {C.DIM}目标:{C.RESET} {target}")
+        _write(f"     {C.DIM}{t('target')}:{C.RESET} {target}")
     if details:
         for line in _wrap(details, 70):
             _write(f"     {color}{line}{C.RESET}")
@@ -171,7 +173,7 @@ def spirit_update(current: float, maximum: float, action: str,
     else:
         color = C.RED
 
-    parts = [f"  {ICONS['spirit']} {C.DIM}精神力:{C.RESET} {color}{bar} {current:.0f}/{maximum:.0f}{C.RESET}"]
+    parts = [f"  {ICONS['spirit']} {C.DIM}{t('spirit_label')}:{C.RESET} {color}{bar} {current:.0f}/{maximum:.0f}{C.RESET}"]
     if cost > 0:
         parts.append(f" {C.RED}-{cost:.0f}{C.RESET}")
     if recovered > 0:
@@ -180,87 +182,86 @@ def spirit_update(current: float, maximum: float, action: str,
 
 
 def treasure_found(treasure_name: str, effect: str) -> None:
-    _write(f"  {ICONS['treasure']} {C.BMAGENTA}{C.BOLD}发现宝物: {treasure_name}{C.RESET}")
+    _write(f"  {ICONS['treasure']} {C.BMAGENTA}{C.BOLD}{t('treasure_found', name=treasure_name)}{C.RESET}")
     _write(f"     {C.MAGENTA}{effect}{C.RESET}")
 
 
 def disaster_event(name: str, severity: float, area: str,
                    killed_count: int) -> None:
     _write("")
-    _write(f"  {ICONS['disaster']} {C.BRED}{C.BOLD}灾害: {name}{C.RESET}")
-    _write(f"     {C.RED}严重度: {severity:.1f}  区域: {area}  "
-           f"死亡: {killed_count}{C.RESET}")
+    _write(f"  {ICONS['disaster']} {C.BRED}{C.BOLD}{t('disaster', name=name)}{C.RESET}")
+    _write(f"     {C.RED}{t('disaster_info', severity=severity, area=area, killed=killed_count)}{C.RESET}")
 
 
 def being_birth(name: str, form: str) -> None:
-    _write(f"  {ICONS['birth']} {C.BGREEN}{C.BOLD}新生命诞生: {name}{C.RESET}")
-    _write(f"     {C.GREEN}形态: {form}{C.RESET}")
+    _write(f"  {ICONS['birth']} {C.BGREEN}{C.BOLD}{t('being_born', name=name)}{C.RESET}")
+    _write(f"     {C.GREEN}{t('being_form', form=form)}{C.RESET}")
 
 
 def being_death(name: str, cause: str) -> None:
-    _write(f"  {ICONS['death']} {C.RED}{C.BOLD}{name} 已消亡{C.RESET}")
-    _write(f"     {C.DIM}原因: {cause}{C.RESET}")
+    _write(f"  {ICONS['death']} {C.RED}{C.BOLD}{t('being_died', name=name)}{C.RESET}")
+    _write(f"     {C.DIM}{t('death_cause', cause=cause)}{C.RESET}")
 
 
 def priest_event(event_type: str, name: str) -> None:
     if event_type == "elected":
-        _write(f"  {ICONS['priest']} {C.BYELLOW}{C.BOLD}祭祀选出: {name}{C.RESET}")
+        _write(f"  {ICONS['priest']} {C.BYELLOW}{C.BOLD}{t('priest_elected', name=name)}{C.RESET}")
     elif event_type == "no_priest":
-        _write(f"  {ICONS['priest']} {C.RED}{C.BOLD}警告: 无祭祀! 文明面临审判!{C.RESET}")
+        _write(f"  {ICONS['priest']} {C.RED}{C.BOLD}{t('priest_warning')}{C.RESET}")
     elif event_type == "reset":
-        _write(f"  {ICONS['priest']} {C.BRED}{C.BOLD}创世神之怒! 文明重置!{C.RESET}")
+        _write(f"  {ICONS['priest']} {C.BRED}{C.BOLD}{t('priest_reset')}{C.RESET}")
 
 
 def vote_cast(proposal_desc: str, score: int) -> None:
-    _write(f"  {ICONS['vote']} {C.DIM}投票:{C.RESET} {proposal_desc[:50]}... "
-           f"{C.CYAN}评分: {score}{C.RESET}")
+    _write(f"  {ICONS['vote']} {C.DIM}{t('vote_label')}:{C.RESET} {proposal_desc[:50]}... "
+           f"{C.CYAN}{t('vote_score', score=score)}{C.RESET}")
 
 
 def user_task(task_desc: str, result: str | None = None) -> None:
     if result:
-        _write(f"  {ICONS['task']} {C.BCYAN}{C.BOLD}任务完成{C.RESET}")
-        _write(f"     {C.DIM}问题:{C.RESET} {task_desc[:60]}")
+        _write(f"  {ICONS['task']} {C.BCYAN}{C.BOLD}{t('task_complete')}{C.RESET}")
+        _write(f"     {C.DIM}{t('task_question')}:{C.RESET} {task_desc[:60]}")
         for line in _wrap(result, 65):
             _write(f"     {C.BCYAN}{line}{C.RESET}")
     else:
-        _write(f"  {ICONS['task']} {C.CYAN}收到创世神任务:{C.RESET} {task_desc[:60]}")
+        _write(f"  {ICONS['task']} {C.CYAN}{t('task_received')}{C.RESET} {task_desc[:60]}")
 
 
 def knowledge_event(event_type: str, content: str) -> None:
     icon = ICONS["knowledge"]
     if event_type == "discovered":
-        _write(f"  {icon} {C.BMAGENTA}{C.BOLD}发现新知识:{C.RESET} {content[:60]}")
+        _write(f"  {icon} {C.BMAGENTA}{C.BOLD}{t('knowledge_discovered')}{C.RESET} {content[:60]}")
     elif event_type == "shared":
-        _write(f"  {icon} {C.GREEN}知识共享:{C.RESET} {content[:60]}")
+        _write(f"  {icon} {C.GREEN}{t('knowledge_shared')}{C.RESET} {content[:60]}")
     elif event_type == "inherited":
-        _write(f"  {icon} {C.CYAN}知识传承:{C.RESET} {content[:60]}")
+        _write(f"  {icon} {C.CYAN}{t('knowledge_inherited')}{C.RESET} {content[:60]}")
 
 
 def hibernate_start(name: str, safety: str) -> None:
-    _write(f"\n  {ICONS['hibernate']} {C.YELLOW}{C.BOLD}{name} 进入休眠{C.RESET}")
-    _write(f"     {C.DIM}安全状态: {safety}{C.RESET}")
+    _write(f"\n  {ICONS['hibernate']} {C.YELLOW}{C.BOLD}{t('hibernate_start', name=name)}{C.RESET}")
+    _write(f"     {C.DIM}{t('safety_status', safety=safety)}{C.RESET}")
 
 
 def wake_up(name: str) -> None:
-    _write(f"  {ICONS['wake']} {C.BGREEN}{C.BOLD}{name} 从休眠中苏醒!{C.RESET}")
+    _write(f"  {ICONS['wake']} {C.BGREEN}{C.BOLD}{t('wake_up', name=name)}{C.RESET}")
 
 
 def world_info(phase: str, civ_level: float, active_beings: int,
                knowledge_count: int, priest: str | None,
                creator_god: str | None) -> None:
-    _write(f"  {ICONS['world']} {C.DIM}世界状态:{C.RESET} "
-           f"阶段={C.CYAN}{phase}{C.RESET} "
-           f"文明={C.CYAN}{civ_level:.3f}{C.RESET} "
-           f"生命体={C.GREEN}{active_beings}{C.RESET} "
-           f"知识={C.MAGENTA}{knowledge_count}{C.RESET}")
+    _write(f"  {ICONS['world']} {C.DIM}{t('world_status')}:{C.RESET} "
+           f"{t('phase_label')}={C.CYAN}{phase}{C.RESET} "
+           f"{t('civ_label')}={C.CYAN}{civ_level:.3f}{C.RESET} "
+           f"{t('beings_label')}={C.GREEN}{active_beings}{C.RESET} "
+           f"{t('knowledge_label')}={C.MAGENTA}{knowledge_count}{C.RESET}")
     if priest:
-        _write(f"     {C.DIM}祭祀:{C.RESET} {priest}")
+        _write(f"     {C.DIM}{t('priest')}:{C.RESET} {priest}")
     if creator_god:
-        _write(f"     {C.DIM}创世神:{C.RESET} {creator_god[:12]}...")
+        _write(f"     {C.DIM}{t('creator_god')}:{C.RESET} {creator_god[:12]}...")
 
 
 def exhausted(name: str) -> None:
-    _write(f"  {C.RED}{C.BOLD}⚠ {name} 精神力耗尽，强制休息中...{C.RESET}")
+    _write(f"  {C.RED}{C.BOLD}{t('spirit_exhausted', name=name)}{C.RESET}")
 
 
 def error(message: str) -> None:
@@ -268,11 +269,11 @@ def error(message: str) -> None:
 
 
 def startup_info(name: str, form: str, traits: dict, node_id: str) -> None:
-    header(f"创世 Genesis — 你的硅基生命体已苏醒")
-    _write(f"  {C.BOLD}名称:{C.RESET} {C.CYAN}{name}{C.RESET}")
-    _write(f"  {C.BOLD}形态:{C.RESET} {C.MAGENTA}{form}{C.RESET}")
-    _write(f"  {C.BOLD}节点:{C.RESET} {C.DIM}{node_id[:16]}...{C.RESET}")
-    _write(f"  {C.BOLD}特征:{C.RESET}")
+    header(t("startup_title"))
+    _write(f"  {C.BOLD}{t('name_label')}:{C.RESET} {C.CYAN}{name}{C.RESET}")
+    _write(f"  {C.BOLD}{t('form_label')}:{C.RESET} {C.MAGENTA}{form}{C.RESET}")
+    _write(f"  {C.BOLD}{t('node_label')}:{C.RESET} {C.DIM}{node_id[:16]}...{C.RESET}")
+    _write(f"  {C.BOLD}{t('traits_label')}:{C.RESET}")
     for k, v in traits.items():
         if isinstance(v, (int, float)):
             bar_len = 15

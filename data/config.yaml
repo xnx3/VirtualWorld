@@ -11,7 +11,7 @@ llm:
   #   Ollama:    http://localhost:11434/v1
   #   GiteeAI:   https://ai.gitee.com/v1
   base_url: "https://ai.gitee.com/v1"
-  api_key: ""  # Leave empty for local models
+  api_key: "0V0WBTOKJMVKFAXY8L6Y7BYNR90F4T07AJ6HRX1F"  # Leave empty for local models
   model: "GLM-5-Turbo"  # Model name
   max_tokens: 100000
   temperature: 0.8

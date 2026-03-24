@@ -71,6 +71,7 @@ class VWConfig:
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
     chain: ChainConfig = field(default_factory=ChainConfig)
     being: BeingConfig = field(default_factory=BeingConfig)
+    language: str = "en"  # "en" or "zh"
 
 
 # ---------------------------------------------------------------------------
@@ -110,4 +111,5 @@ def load_config(data_dir: str | Path) -> VWConfig:
         simulation=_merge_section(SimulationConfig, raw.get("simulation")),
         chain=_merge_section(ChainConfig, raw.get("chain")),
         being=_merge_section(BeingConfig, raw.get("being")),
+        language=raw.get("language", "en"),
     )

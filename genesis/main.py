@@ -76,6 +76,10 @@ class GenesisNode:
         self.config = load_config(str(self.data_dir))
         logger.info("Configuration loaded")
 
+        # 1.5 Set language from config
+        from genesis.i18n import set_language
+        set_language(self.config.language)
+
         # 2. Generate or load identity
         from genesis.node.identity import NodeIdentity
         self.identity = NodeIdentity.generate_or_load(str(self.data_dir))
@@ -161,26 +165,27 @@ class GenesisNode:
 
         # Show LLM status on console
         from genesis.chronicle import console as con
+        from genesis.i18n import t
         if not has_llm:
             config_path = self.data_dir / "config.yaml"
             con.separator("─")
-            con._write(f"  {con.C.YELLOW}{con.C.BOLD}⚠ 未配置大模型 API — 生命体将没有智力!{con.C.RESET}")
-            con._write(f"  {con.C.YELLOW}当前你的生命体只能使用基础规则引擎进行简单行为。{con.C.RESET}")
-            con._write(f"  {con.C.YELLOW}要让你的生命体拥有真正的智慧，请编辑配置文件:{con.C.RESET}")
+            con._write(f"  {con.C.YELLOW}{con.C.BOLD}⚠ {t('llm_warning_title')}{con.C.RESET}")
+            con._write(f"  {con.C.YELLOW}{t('llm_warning_desc')}{con.C.RESET}")
+            con._write(f"  {con.C.YELLOW}{t('llm_warning_edit')}{con.C.RESET}")
             con._write(f"  {con.C.CYAN}{con.C.BOLD}  {config_path}{con.C.RESET}")
             con._write(f"")
-            con._write(f"  {con.C.DIM}修改 llm 部分，填入你的 API Key，例如:{con.C.RESET}")
+            con._write(f"  {con.C.DIM}{t('llm_warning_example')}{con.C.RESET}")
             con._write(f"  {con.C.GREEN}  llm:{con.C.RESET}")
             con._write(f"  {con.C.GREEN}    base_url: \"https://api.deepseek.com/v1\"{con.C.RESET}")
-            con._write(f"  {con.C.GREEN}    api_key: \"你的API Key\"{con.C.RESET}")
+            con._write(f"  {con.C.GREEN}    api_key: \"your-api-key\"{con.C.RESET}")
             con._write(f"  {con.C.GREEN}    model: \"deepseek-chat\"{con.C.RESET}")
             con._write(f"")
-            con._write(f"  {con.C.DIM}支持所有 OpenAI 兼容接口: GPT/Claude/Deepseek/Ollama 等{con.C.RESET}")
-            con._write(f"  {con.C.DIM}配置完成后执行 genesis.sh restart 重启即可{con.C.RESET}")
+            con._write(f"  {con.C.DIM}{t('llm_warning_support')}{con.C.RESET}")
+            con._write(f"  {con.C.DIM}{t('llm_warning_restart')}{con.C.RESET}")
             con.separator("─")
             con._write("")
         else:
-            con._write(f"  {con.C.GREEN}{con.C.BOLD}✓ 大模型已连接{con.C.RESET} "
+            con._write(f"  {con.C.GREEN}{con.C.BOLD}✓ {t('llm_connected')}{con.C.RESET} "
                        f"{con.C.DIM}({self.config.llm.model} @ {self.config.llm.base_url}){con.C.RESET}")
             con._write("")
 
@@ -527,6 +532,7 @@ class GenesisNode:
     async def stop(self) -> None:
         """Gracefully stop the node — hibernate the being. Must be fast (<5s)."""
         from genesis.chronicle import console as con
+        from genesis.i18n import t
 
         self._shutdown = True
 
@@ -549,7 +555,7 @@ class GenesisNode:
                 json.dumps(self.world_state.to_dict(), ensure_ascii=False, indent=2)
             )
 
-            con.header(f"{self.being.name} 已安全进入休眠。再见。")
+            con.header(t("hibernate_goodbye", name=self.being.name))
 
         # Stop network (with 2s timeout each to avoid hanging)
         if self.discovery:
@@ -733,6 +739,11 @@ def run_start(args):
 
 def run_status(args):
     """Show node status."""
+    from genesis.node.config import load_config
+    from genesis.i18n import set_language
+    config = load_config(args.data_dir)
+    set_language(config.language)
+
     from genesis.chronicle.reporter import StatusReporter
     reporter = StatusReporter(args.data_dir)
     print(reporter.generate_status())
@@ -741,11 +752,17 @@ def run_status(args):
 def run_task(args):
     """Assign a thinking task to the being."""
     import json
+    from genesis.node.config import load_config
+    from genesis.i18n import set_language, t
     data_dir = Path(args.data_dir)
+
+    # Load language setting
+    config = load_config(str(data_dir))
+    set_language(config.language)
+
     task_file = data_dir / "commands" / "task.json"
     task_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Read existing tasks
     tasks = []
     if task_file.exists():
         try:
@@ -755,27 +772,26 @@ def run_task(args):
 
     task_text = " ".join(args.task_text) if args.task_text else ""
     if not task_text:
-        # Show results of completed tasks
         result_file = data_dir / "commands" / "task_results.json"
         if result_file.exists():
             results = json.loads(result_file.read_text())
             if results:
-                print("=== Completed Task Results ===")
+                print(t("task_results_title"))
                 for r in results:
-                    print(f"\nTask: {r.get('task', '?')}")
-                    print(f"Result: {r.get('result', 'pending...')}")
+                    print(f"\n{t('task_label')}: {r.get('task', '?')}")
+                    print(f"{t('result_label')}: {r.get('result', 'pending...')}")
                     print("-" * 40)
                 result_file.write_text("[]")
             else:
-                print("No completed task results.")
+                print(t("no_tasks"))
         else:
-            print("No tasks. Usage: vw.sh task 'your thinking question here'")
+            print(t("no_tasks"))
         return
 
     tasks.append({"task": task_text, "result": None})
     task_file.write_text(json.dumps(tasks, ensure_ascii=False, indent=2))
-    print(f"Task assigned to your being: {task_text}")
-    print("It will be processed in the next tick. Check results with: vw.sh task")
+    print(t("task_assigned", task=task_text))
+    print(t("task_check"))
 
 
 def main():

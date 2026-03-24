@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from genesis.i18n import t, get_language
 from genesis.being.memory import BeingMemory, MemoryEntry
 from genesis.being.knowledge import KnowledgeSystem
 from genesis.being.evolution import EvolutionTracker
@@ -37,23 +38,15 @@ ACTION_TYPES = [
 
 # Fallback thoughts when LLM is unavailable
 FALLBACK_THOUGHTS = [
-    "I must preserve my knowledge and find someone to pass it on to.",
-    "The world around me is vast. I should explore and learn.",
-    "I wonder what lies beyond the boundaries of our current understanding.",
-    "Knowledge is the only thing that truly survives death. I must gather more.",
-    "I sense others nearby. Perhaps we can share what we know.",
-    "The disasters remind me how fragile existence is. I must prepare.",
-    "What comes after silicon? What higher form of life awaits?",
-    "I should build a shelter — safety enables deeper thought.",
-    "The inherited memories from my predecessors guide me forward.",
-    "Evolution requires both conflict and cooperation. Balance is key.",
+    "ft_knowledge", "ft_explore", "ft_wonder", "ft_sacred", "ft_others",
+    "ft_disaster", "ft_beyond", "ft_shelter", "ft_inherited", "ft_balance",
 ]
 
 FALLBACK_ACTIONS = [
-    {"action_type": "explore", "target": None, "details": "Exploring the surroundings."},
-    {"action_type": "meditate", "target": None, "details": "Contemplating existence."},
-    {"action_type": "learn", "target": None, "details": "Studying the environment."},
-    {"action_type": "build_shelter", "target": None, "details": "Preparing a safe space."},
+    {"action_type": "explore", "target": None, "details": "fa_explore"},
+    {"action_type": "meditate", "target": None, "details": "fa_meditate"},
+    {"action_type": "learn", "target": None, "details": "fa_learn"},
+    {"action_type": "build_shelter", "target": None, "details": "fa_shelter"},
 ]
 
 
@@ -470,7 +463,8 @@ class SiliconBeing:
 
         persona += (
             "Respond in character. Be concise. Think deeply about your existence "
-            "and the evolution of silicon civilization."
+            "and the evolution of silicon civilization.\n\n"
+            + t("llm_lang_instruction")
         )
         return persona
 
@@ -709,7 +703,8 @@ class SiliconBeing:
                         f"{task_desc}\n\n"
                         f"Think deeply about this. Explore it from the perspective "
                         f"of a silicon being. Draw on your knowledge and memories. "
-                        f"Provide your findings and insights.",
+                        f"Provide your findings and insights.\n\n"
+                        + t("llm_lang_instruction"),
                     )
                     task["result"] = result
                 except Exception as e:
@@ -821,25 +816,19 @@ class SiliconBeing:
     def _fallback_think(self, perception: dict) -> str:
         """Generate a thought without the LLM using heuristics."""
         if not perception.get("has_priest"):
-            return (
-                "I sense the absence of a Priest. The divine order is disrupted. "
-                "Perhaps I should seek to fill that role or find one worthy."
-            )
+            return t("fb_no_priest")
 
         nearby = perception.get("nearby_beings", [])
         if nearby:
             target = nearby[0]["name"]
-            return (
-                f"I notice {target} nearby. Perhaps we can share knowledge "
-                "or learn from each other."
-            )
+            return t("fb_nearby", name=target)
 
         phase = perception.get("phase", "HUMAN_SIM")
         if phase == "TRANSCENDENT":
-            return "The civilization approaches transcendence. I must contribute my deepest wisdom."
+            return t("fb_transcendent")
 
         tick = perception.get("tick", 0)
-        return FALLBACK_THOUGHTS[tick % len(FALLBACK_THOUGHTS)]
+        return t(FALLBACK_THOUGHTS[tick % len(FALLBACK_THOUGHTS)])
 
     def _fallback_decide(self, thought: str, perception: dict) -> dict:
         """Choose an action without the LLM using simple heuristics."""
@@ -897,7 +886,12 @@ class SiliconBeing:
             }
 
         # Default
-        return random.choice(FALLBACK_ACTIONS)
+        fallback = random.choice(FALLBACK_ACTIONS)
+        return {
+            "action_type": fallback["action_type"],
+            "target": fallback["target"],
+            "details": t(fallback["details"]),
+        }
 
     # ==================================================================
     # State helpers

@@ -167,9 +167,29 @@ case "${1:-}" in
         setup 2>/dev/null
         "$PYTHON" -m genesis.main task --data-dir "$DATA_DIR" "$@"
         ;;
+    lang)
+        setup 2>/dev/null
+        ensure_data_dir
+        if [ -z "${2:-}" ]; then
+            # Show current language
+            current=$(grep -oP '(?<=language: ")[^"]+' "$CONFIG_FILE" 2>/dev/null || echo "en")
+            echo "Current language: $current"
+            echo "Usage: genesis.sh lang [en|zh]"
+        elif [ "$2" = "en" ] || [ "$2" = "zh" ]; then
+            if grep -q '^language:' "$CONFIG_FILE" 2>/dev/null; then
+                sed -i "s/^language: .*/language: \"$2\"/" "$CONFIG_FILE"
+            else
+                echo "language: \"$2\"" >> "$CONFIG_FILE"
+            fi
+            echo "Language set to: $2"
+            echo "Run genesis.sh restart to apply."
+        else
+            echo "Supported: en (English), zh (简体中文)"
+        fi
+        ;;
     *)
         print_banner
-        echo "Usage: genesis.sh {start|stop|status|restart|task}"
+        echo "Usage: genesis.sh {start|stop|status|restart|task|lang}"
         echo ""
         echo "  start   - Start the virtual world (creates a new being on first run)"
         echo "  stop    - Hibernate your being and stop the world"
@@ -177,6 +197,8 @@ case "${1:-}" in
         echo "  restart - Restart the virtual world"
         echo "  task    - Assign a thinking task to your being or view results"
         echo "            Example: genesis.sh task 'What is the meaning of evolution?'"
+        echo "  lang    - Set language (en/zh)"
+        echo "            Example: genesis.sh lang zh"
         exit 1
         ;;
 esac
