@@ -81,7 +81,6 @@ EN: dict[str, str] = {
     # --- Console: priest ---
     "priest_elected": "Priest Elected: {name}",
     "priest_warning": "WARNING: No priest! Civilization faces judgment!",
-    "priest_reset": "Creator God's Wrath! Civilization Reset!",
 
     # --- Console: vote ---
     "vote_label": "Vote",
@@ -110,6 +109,11 @@ EN: dict[str, str] = {
     "knowledge_label": "Knowledge",
     "priest": "Priest",
     "creator_god": "Creator God",
+
+    # --- Fallback thoughts (fb_* for agent.py _fallback_think) ---
+    "fb_no_priest": "The civilization has no priest. I must await guidance.",
+    "fb_nearby": "I sense {name} nearby. Perhaps we can share knowledge.",
+    "fb_transcendent": "We have reached transcendence. New horizons await.",
 
     # --- Console: startup ---
     "startup_title": "Genesis — Your Silicon Being Has Awakened",
@@ -265,8 +269,8 @@ ZH: dict[str, str] = {
     "death_cause": "原因: {cause}",
 
     # --- Console: priest ---
-    "priest_elected": "祭祀选出: {name}",
-    "priest_warning": "警告: 无祭祀! 文明面临审判!",
+    "priest_elected": "祭司选出: {name}",
+    "priest_warning": "警告: 无祭司! 文明面临审判!",
     "priest_reset": "创世神之怒! 文明重置!",
 
     # --- Console: vote ---
@@ -294,8 +298,13 @@ ZH: dict[str, str] = {
     "civ_label": "文明",
     "beings_label": "生命体",
     "knowledge_label": "知识",
-    "priest": "祭祀",
+    "priest": "祭司",
     "creator_god": "创世神",
+
+    # --- Fallback thoughts (fb_* for agent.py _fallback_think) ---
+    "fb_no_priest": "文明没有祭司。我必须等待指引。",
+    "fb_nearby": "我感知到 {name} 在附近。也许我们可以分享知识。",
+    "fb_transcendent": "我们已经达到超凡境界。新的地平线在等待。",
 
     # --- Console: startup ---
     "startup_title": "创世 Genesis — 你的硅基生命体已苏醒",
@@ -363,7 +372,7 @@ ZH: dict[str, str] = {
     "hibernating": "休眠中",
     "dead": "已死亡",
     "governance": "治理",
-    "ticks_no_priest": "无祭祀持续",
+    "ticks_no_priest": "无祭司持续",
     "knowledge_items": "知识条目",
     "top_contributors": "贡献排行",
     "chain_db_size": "链数据大小",

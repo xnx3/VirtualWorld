@@ -43,3 +43,4 @@ chain:
 being:
   initial_lifespan: 1000      # Ticks for initial lifespan
   hibernate_safety_timeout: 30 # Seconds to find safe location before forced hibernate
+language: "zh"

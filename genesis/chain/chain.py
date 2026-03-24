@@ -72,10 +72,14 @@ class Blockchain:
             logger.warning("Block %d has invalid hash", block.index)
             return False
 
-        # 2. Previous-hash linkage
+        # 2. Signature verification — block must be signed by its proposer
+        if block.index > 0 and not block.verify_signature():
+            logger.warning("Block %d has invalid proposer signature", block.index)
+            return False
+
+        # 3. Previous-hash linkage
         latest = await self.storage.get_latest_block()
         if latest is None:
-            # Only the genesis block is allowed when the chain is empty
             if block.index != 0:
                 logger.warning("Non-genesis block %d submitted to empty chain", block.index)
                 return False
@@ -91,19 +95,19 @@ class Blockchain:
                 logger.warning("Block %d has wrong previous_hash", block.index)
                 return False
 
-        # 3. Timestamp sanity (not too far in the future)
+        # 4. Timestamp sanity (not too far in the future)
         if block.timestamp > time.time() + 60:
             logger.warning("Block %d has a timestamp too far in the future", block.index)
             return False
 
-        # 4. Merkle root
+        # 5. Merkle root
         tx_hashes = [tx.tx_hash for tx in block.transactions]
         expected_merkle = merkle_root(tx_hashes)
         if block.merkle_root != expected_merkle:
             logger.warning("Block %d has invalid merkle root", block.index)
             return False
 
-        # 5. Validate each transaction
+        # 6. Validate each transaction
         for tx in block.transactions:
             if not await self.validate_transaction(tx):
                 logger.warning("Block %d contains invalid tx %s", block.index, tx.tx_hash)
@@ -112,14 +116,21 @@ class Blockchain:
         return True
 
     async def validate_transaction(self, tx: Transaction) -> bool:
-        """Validate a single transaction's structural integrity."""
+        """Validate a transaction's structural integrity and signature."""
         if not tx.tx_hash:
             return False
         if tx.tx_hash != tx.compute_hash():
+            logger.warning("Transaction hash mismatch: %s", tx.tx_hash[:16])
             return False
         if not tx.signature:
+            logger.warning("Transaction missing signature: %s", tx.tx_hash[:16])
             return False
         if not tx.sender:
+            logger.warning("Transaction missing sender: %s", tx.tx_hash[:16])
+            return False
+        # Verify the transaction signature
+        if not tx.verify_signature():
+            logger.warning("Transaction signature invalid: %s", tx.tx_hash[:16])
             return False
         return True
 

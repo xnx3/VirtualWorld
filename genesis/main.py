@@ -709,6 +709,27 @@ def run_start(args):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    # === API服务支持 ===
+    api_enabled = getattr(args, 'api', False)
+    api_port = getattr(args, 'api_port', 19842)
+
+    if api_enabled:
+        try:
+            from genesis.api.bridge import install_bridge
+            from genesis.api.server import start_api_server, stop_api_server
+
+            # 安装输出桥接器
+            if install_bridge():
+                logger.info("API bridge installed")
+
+                # 启动API服务器
+                loop.run_until_complete(start_api_server("127.0.0.1", api_port))
+
+        except ImportError as e:
+            logger.warning("API module not available: %s", e)
+            logger.warning("Install websockets: pip install websockets")
+    # ===================
+
     # 用标准 signal 模块处理 SIGTERM/SIGINT，比 asyncio 的信号处理更可靠
     def signal_handler(signum, frame):
         node._shutdown = True
@@ -726,6 +747,12 @@ def run_start(args):
             loop.run_until_complete(node.stop())
         except Exception:
             pass
+        # 停止API服务器
+        if api_enabled:
+            try:
+                loop.run_until_complete(stop_api_server())
+            except Exception:
+                pass
         # 取消所有残留 task
         pending = asyncio.all_tasks(loop)
         for task in pending:
@@ -800,6 +827,10 @@ def main():
                         help="Command to execute")
     parser.add_argument("--data-dir", default="data",
                         help="Data directory path")
+    parser.add_argument("--api", action="store_true",
+                        help="Enable WebSocket API for GUI/remote access")
+    parser.add_argument("--api-port", type=int, default=19842,
+                        help="WebSocket API port (default: 19842)")
     parser.add_argument("task_text", nargs="*", default=[],
                         help="Text for task command")
 

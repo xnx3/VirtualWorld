@@ -58,6 +58,14 @@ class BeingConfig:
     hibernate_safety_timeout: int = 30
 
 
+@dataclass
+class APIConfig:
+    """WebSocket API configuration for GUI/remote access."""
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 19842
+
+
 # ---------------------------------------------------------------------------
 # Top-level configuration
 # ---------------------------------------------------------------------------
@@ -71,6 +79,7 @@ class VWConfig:
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
     chain: ChainConfig = field(default_factory=ChainConfig)
     being: BeingConfig = field(default_factory=BeingConfig)
+    api: APIConfig = field(default_factory=APIConfig)
     language: str = "en"  # "en" or "zh"
 
 
@@ -111,5 +120,6 @@ def load_config(data_dir: str | Path) -> VWConfig:
         simulation=_merge_section(SimulationConfig, raw.get("simulation")),
         chain=_merge_section(ChainConfig, raw.get("chain")),
         being=_merge_section(BeingConfig, raw.get("being")),
+        api=_merge_section(APIConfig, raw.get("api")),
         language=raw.get("language", "en"),
     )
