@@ -102,9 +102,16 @@ start() {
     echo -e "${CYAN}Press Ctrl+C to hibernate and stop.${NC}"
     echo ""
 
-    # Run in foreground so user can see all output
-    echo $$ > "$PID_FILE"
-    "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR" 2>&1 | tee -a "$LOG_FILE"
+    # Run Python directly in foreground, record its PID
+    "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR" &
+    local py_pid=$!
+    echo $py_pid > "$PID_FILE"
+
+    # Forward signals to the Python process
+    trap "kill -TERM $py_pid 2>/dev/null; wait $py_pid 2>/dev/null; rm -f '$PID_FILE'; exit 0" INT TERM
+
+    # Wait for Python to finish
+    wait $py_pid 2>/dev/null
     rm -f "$PID_FILE"
 }
 
@@ -123,12 +130,11 @@ stop() {
         exit 0
     fi
 
-    echo -e "${YELLOW}Sending hibernate signal to being...${NC}"
-    echo -e "${YELLOW}Being is preparing for safe shutdown...${NC}"
+    echo -e "${YELLOW}Hibernating...${NC}"
     kill -TERM "$pid"
 
     local waited=0
-    while kill -0 "$pid" 2>/dev/null && [ $waited -lt 60 ]; do
+    while kill -0 "$pid" 2>/dev/null && [ $waited -lt 10 ]; do
         sleep 1
         waited=$((waited + 1))
     done

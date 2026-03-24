@@ -528,25 +528,22 @@ class GenesisNode:
                 await asyncio.sleep(5)
 
     async def stop(self) -> None:
-        """Gracefully stop the node — hibernate the being."""
+        """Gracefully stop the node — hibernate the being. Must be fast (<5s)."""
         from genesis.chronicle import console as con
 
-        logger.info("Initiating shutdown...")
         self._shutdown_event.set()
 
         if self.being and self.world_state:
             con.separator("━")
-            logger.info("Being %s preparing for hibernation...", self.being.name)
-            hibernate_data = await self.being.prepare_shutdown(self.world_state)
-            safety = hibernate_data.get("safety_status", "unknown")
+
+            # Quick safety assessment (no LLM call)
+            safety = self.being.hibernation.assess_safety(
+                self.being._to_being_state(self.world_state), self.world_state,
+            )
 
             con.hibernate_start(self.being.name, safety)
 
-            await self._submit_tx("BEING_HIBERNATE", {
-                "location": self.being.location,
-                "safety_status": safety,
-            })
-
+            # Save state immediately
             being_state_path = str(self.data_dir / "being_state.json")
             self.being.save_state(being_state_path)
 
