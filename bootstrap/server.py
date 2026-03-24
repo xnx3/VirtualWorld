@@ -207,7 +207,7 @@ def create_app() -> web.Application:
     app.router.add_post("/register", handle_register)
     app.router.add_get("/peers", handle_peers)
     app.router.add_get("/health", handle_health)
-    app.on_startup.append(lambda _: asyncio.ensure_future(cleanup_task()))
+    # cleanup_task is started manually in _run(), not via on_startup
     return app
 
 
@@ -220,8 +220,24 @@ def main():
     logger.info("Genesis Bootstrap Server starting on %s:%d", args.host, args.port)
     logger.info("Node TTL: %ds | Max per IP: %d", NODE_TTL, MAX_NODES_PER_IP)
 
-    app = create_app()
-    web.run_app(app, host=args.host, port=args.port, access_log=None)
+    async def _run():
+        app = create_app()
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, args.host, args.port)
+        await site.start()
+        logger.info("Bootstrap server running on http://%s:%d", args.host, args.port)
+        # Start cleanup task
+        asyncio.create_task(cleanup_task())
+        try:
+            while True:
+                await asyncio.sleep(10)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+        finally:
+            await runner.cleanup()
+
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":
