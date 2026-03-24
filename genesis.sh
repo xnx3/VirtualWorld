@@ -87,6 +87,54 @@ setup() {
     ensure_data_dir
 }
 
+ensure_language_set() {
+    # 检查 config.yaml 中是否已经明确设置了语种
+    local lang_set=false
+    if [ -f "$CONFIG_FILE" ]; then
+        if grep -q '^language:' "$CONFIG_FILE" 2>/dev/null; then
+            lang_set=true
+        fi
+    fi
+
+    if [ "$lang_set" = "false" ]; then
+        echo ""
+        echo -e "${CYAN}╔══════════════════════════════════════════╗${NC}"
+        echo -e "${CYAN}║         请选择语言 / Choose Language      ║${NC}"
+        echo -e "${CYAN}╚══════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "  ${GREEN}1${NC}  English"
+        echo -e "  ${GREEN}2${NC}  简体中文"
+        echo ""
+        while true; do
+            read -r -p "  请输入选项 / Enter choice (1/2): " choice
+            case "$choice" in
+                1)
+                    if grep -q '^language:' "$CONFIG_FILE" 2>/dev/null; then
+                        sed -i 's/^language: .*/language: "en"/' "$CONFIG_FILE"
+                    else
+                        echo 'language: "en"' >> "$CONFIG_FILE"
+                    fi
+                    echo -e "  ${GREEN}✓ Language set to English${NC}"
+                    break
+                    ;;
+                2)
+                    if grep -q '^language:' "$CONFIG_FILE" 2>/dev/null; then
+                        sed -i 's/^language: .*/language: "zh"/' "$CONFIG_FILE"
+                    else
+                        echo 'language: "zh"' >> "$CONFIG_FILE"
+                    fi
+                    echo -e "  ${GREEN}✓ 语言已设置为简体中文${NC}"
+                    break
+                    ;;
+                *)
+                    echo -e "  ${RED}无效选项，请输入 1 或 2${NC}"
+                    ;;
+            esac
+        done
+        echo ""
+    fi
+}
+
 start() {
     print_banner
 
@@ -98,12 +146,14 @@ start() {
     echo -e "${GREEN}Initializing...${NC}"
     setup
 
+    # 检测是否已设置语种
+    ensure_language_set
+
     echo -e "${GREEN}Starting Genesis...${NC}"
     echo -e "${CYAN}Press Ctrl+C to hibernate and stop.${NC}"
     echo ""
 
     # 直接前台运行 Python，信号直达进程
-    # 用 exec 替换当前 shell 进程，这样 PID 就是 Python 的 PID
     echo $$ > "$PID_FILE"
     exec "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR"
     rm -f "$PID_FILE"
