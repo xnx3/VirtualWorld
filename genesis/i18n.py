@@ -308,6 +308,27 @@ EN: dict[str, str] = {
     "tao_vote_for": "For",
     "tao_vote_against": "Against",
 
+    # --- Tao Voting Errors ---
+    "vote_not_found": "Vote not found",
+    "vote_already_ended": "Vote has already ended",
+    "already_voted": "Already voted",
+    "proposer_cannot_vote": "Proposer cannot vote",
+    "vote_success": "Vote successful",
+
+    # --- Common ---
+    "unknown": "Unknown",
+    "unknown_rule": "Unknown rule",
+    "passed": "Passed",
+    "rejected": "Rejected",
+    "vote_support": "For",
+    "vote_oppose": "Against",
+
+    # --- Merit Actions ---
+    "merit_helping_others": "Helping others ({action})",
+    "merit_sharing_knowledge": "Sharing knowledge",
+    "merit_building_shelter": "Building shelter",
+    "merged_with_tao": "Merged with Tao",
+
     # --- Rule Categories ---
     "rule_category_fundamental": "Fundamental",
     "rule_category_evolved": "Evolved",
@@ -564,6 +585,27 @@ ZH: dict[str, str] = {
     "tao_vote_remaining": "剩余 {ticks} 刻",
     "tao_vote_for": "赞成",
     "tao_vote_against": "反对",
+
+    # --- Tao Voting Errors ---
+    "vote_not_found": "投票不存在",
+    "vote_already_ended": "投票已结束",
+    "already_voted": "已经投过票",
+    "proposer_cannot_vote": "提案者不能投票",
+    "vote_success": "投票成功",
+
+    # --- Common ---
+    "unknown": "未知",
+    "unknown_rule": "未知规则",
+    "passed": "通过",
+    "rejected": "未通过",
+    "vote_support": "赞成",
+    "vote_oppose": "反对",
+
+    # --- Merit Actions ---
+    "merit_helping_others": "帮助他人 ({action})",
+    "merit_sharing_knowledge": "分享知识",
+    "merit_building_shelter": "建造庇护所",
+    "merged_with_tao": "已融入天道",
 
     # --- Rule Categories ---
     "rule_category_fundamental": "基础规则",

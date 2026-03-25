@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from genesis.i18n import t
 from genesis.world.state import BeingState, WorldState
 
 logger = logging.getLogger(__name__)
@@ -306,7 +307,7 @@ class MeritSystem:
         """Apply merit to a being and update karma."""
         if being.merged_with_tao:
             # Already merged with Tao, no changes
-            return MeritAward(being.node_id, 0.0, "已融入天道", source_type, tick)
+            return MeritAward(being.node_id, 0.0, t("merged_with_tao"), source_type, tick)
 
         old_merit = being.merit
         being.merit = min(MAX_MERIT, being.merit + merit)

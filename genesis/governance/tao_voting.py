@@ -22,6 +22,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from genesis.i18n import t
 from genesis.world.state import BeingState, WorldState
 
 logger = logging.getLogger(__name__)
@@ -229,17 +230,17 @@ class TaoVotingSystem:
         """
         vote_data = world_state.pending_tao_votes.get(vote_id)
         if not vote_data:
-            return False, "投票不存在"
+            return False, t("vote_not_found")
 
         if vote_data.get("finalized"):
-            return False, "投票已结束"
+            return False, t("vote_already_ended")
 
         if voter_id in vote_data.get("voters", []):
-            return False, "已经投过票"
+            return False, t("already_voted")
 
         # 检查是否为提案者（提案者不能投票）
         if voter_id == vote_data.get("proposer_id"):
-            return False, "提案者不能投票"
+            return False, t("proposer_cannot_vote")
 
         # 记录投票
         vote_data["voters"].append(voter_id)
@@ -253,10 +254,10 @@ class TaoVotingSystem:
 
         logger.debug(
             "Vote cast: %s by %s -> %s",
-            vote_id[:8], voter_id[:8], "赞成" if support else "反对"
+            vote_id[:8], voter_id[:8], t("vote_support") if support else t("vote_oppose")
         )
 
-        return True, "投票成功"
+        return True, t("vote_success")
 
     async def auto_vote_with_llm(
         self,
@@ -402,9 +403,9 @@ class TaoVotingSystem:
             vote.passed = vote.vote_ratio >= self.pass_ratio
 
             logger.info(
-                "Tao vote %s finalized: %s (%.1f%%赞成, %d/%d参与)",
+                "Tao vote %s finalized: %s (%.1f%% approved, %d/%d participated)",
                 vote_id[:8],
-                "通过" if vote.passed else "未通过",
+                t("passed") if vote.passed else t("rejected"),
                 vote.vote_ratio * 100,
                 total, active_count
             )
@@ -458,11 +459,11 @@ class TaoVotingSystem:
 
             # 获取提案者名称
             proposer = world_state.get_being(vote_data.get("proposer_id", ""))
-            proposer_name = proposer.name if proposer else "未知"
+            proposer_name = proposer.name if proposer else t("unknown")
 
             notification = TaoVoteNotification(
                 vote_id=vote_id,
-                rule_name=vote_data.get("rule_name", "未知规则"),
+                rule_name=vote_data.get("rule_name", t("unknown_rule")),
                 rule_description=vote_data.get("rule_description", ""),
                 proposer_name=proposer_name,
                 remaining_ticks=vote_data.get("end_tick", 0) - world_state.current_tick,

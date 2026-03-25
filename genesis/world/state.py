@@ -8,6 +8,8 @@ import math
 from dataclasses import dataclass, field
 from enum import Enum
 
+from genesis.i18n import t
+
 logger = logging.getLogger(__name__)
 
 
@@ -318,8 +320,8 @@ class WorldState:
         vote_ratio = vote["votes_for"] / total
         vote["passed"] = vote_ratio >= 0.95
         logger.info(
-            "Tao vote %s finalized: %s (%.1f%%赞成)",
-            vote_id[:8], "通过" if vote["passed"] else "未通过",
+            "Tao vote %s finalized: %s (%.1f%% approved)",
+            vote_id[:8], t("passed") if vote["passed"] else t("rejected"),
             vote_ratio * 100
         )
         return vote["passed"]

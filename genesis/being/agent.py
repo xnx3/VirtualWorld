@@ -687,21 +687,21 @@ class SiliconBeing:
             # 教导/学习行为获得功德
             merit = merit_system.award_for_kindness("teach", action)
             merit_system.apply_merit_to_being(
-                being_ws, merit, f"帮助他人 ({action_type})",
+                being_ws, merit, t("merit_helping_others", action=action_type),
                 action_type, world_state.current_tick
             )
         elif action_type == "share_knowledge":
             # 分享知识获得功德
             merit = merit_system.award_for_kindness("share_knowledge", action)
             merit_system.apply_merit_to_being(
-                being_ws, merit, "分享知识",
+                being_ws, merit, t("merit_sharing_knowledge"),
                 action_type, world_state.current_tick
             )
         elif action_type == "build_shelter":
             # 建造庇护所获得功德
             merit = merit_system.award_for_kindness("build_shelter", action)
             merit_system.apply_merit_to_being(
-                being_ws, merit, "建造庇护所",
+                being_ws, merit, t("merit_building_shelter"),
                 action_type, world_state.current_tick
             )
 
@@ -864,7 +864,7 @@ class SiliconBeing:
                     })
                     logger.debug(
                         "%s voted %s on Tao proposal: %s",
-                        self.name, "赞成" if support else "反对", notification.rule_name
+                        self.name, t("vote_support") if support else t("vote_oppose"), notification.rule_name
                     )
             except Exception as exc:
                 logger.warning(
