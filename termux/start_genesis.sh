@@ -1,0 +1,79 @@
+#!/bin/bash
+# Genesis Termux 启动脚本
+# 用于在 Termux 环境中启动 Genesis 后端服务
+
+set -e
+
+GENESIS_DIR="${HOME}/genesis"
+DATA_DIR="${GENESIS_DIR}/data"
+LOG_FILE="${DATA_DIR}/genesis.log"
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+echo -e "${CYAN}"
+echo "╔══════════════════════════════════════════╗"
+echo "║         Genesis for Termux               ║"
+echo "║     Silicon Civilization Engine          ║"
+echo "╚══════════════════════════════════════════╝"
+echo -e "${NC}"
+
+# 检查 Python
+check_python() {
+    if ! command -v python3 &>/dev/null; then
+        echo -e "${RED}Python 3 not found. Installing...${NC}"
+        pkg install -y python3
+    fi
+    echo -e "${GREEN}Python: $(python3 --version)${NC}"
+}
+
+# 检查依赖
+check_deps() {
+    local deps=("openai" "websockets" "aiosqlite" "pyyaml" "msgpack" "cryptography" "zeroconf")
+    local missing=()
+
+    for dep in "${deps[@]}"; do
+        if ! python3 -c "import $dep" 2>/dev/null; then
+            missing+=("$dep")
+        fi
+    done
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo -e "${YELLOW}Installing missing dependencies: ${missing[*]}${NC}"
+        pip install "${missing[@]}"
+    fi
+    echo -e "${GREEN}All dependencies installed${NC}"
+}
+
+# 启动服务
+start_service() {
+    echo -e "${GREEN}Starting Genesis API server on port 19842...${NC}"
+
+    mkdir -p "$DATA_DIR"
+
+    cd "$GENESIS_DIR"
+
+    # 启动 Genesis 并开启 API
+    python3 -m genesis.main start \
+        --data-dir "$DATA_DIR" \
+        --api \
+        --api-host 127.0.0.1 \
+        --api-port 19842
+}
+
+# 主逻辑
+main() {
+    echo -e "${CYAN}Checking environment...${NC}"
+    check_python
+    check_deps
+
+    echo ""
+    echo -e "${CYAN}Starting Genesis backend...${NC}"
+    start_service
+}
+
+main "$@"
