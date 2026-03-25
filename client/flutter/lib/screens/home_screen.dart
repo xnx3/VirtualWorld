@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../services/app_state.dart';
@@ -274,7 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           style: TextStyle(color: Colors.white60, fontSize: 12)),
                     ],
                   )
-                else
+                else ...[
                   ElevatedButton.icon(
                     onPressed: _retryConnect,
                     icon: const Icon(Icons.refresh),
@@ -283,6 +285,17 @@ class _HomeScreenState extends State<HomeScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                     ),
                   ),
+
+                  // Termux 提示
+                  if (Platform.isAndroid) ...[
+                    const SizedBox(height: 24),
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.pushNamed(context, '/settings'),
+                      icon: const Icon(Icons.terminal),
+                      label: const Text('打开设置启动 Termux 服务'),
+                    ),
+                  ],
+                ],
               ],
             ),
           ),
