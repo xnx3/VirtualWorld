@@ -45,3 +45,7 @@ local.properties
 # Flutter build artifacts
 build/
 *.tar.gz
+
+# Generated files
+bootstrap/bootstrap.pid
+client/flutter/android/app/src/main/java/
