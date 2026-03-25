@@ -58,10 +58,6 @@ When you stop running (i.e., executing `genesis.sh stop`), this intelligent life
 # Life Forms
 1. After a participant joins (after starting with `genesis.sh start`), you can assign some thinking tasks to it. It will explore and verify in the virtual world, verify in different ways, and give you good results and answers.
 
-2. It will consume mental power every moment. Mental power starts at 1000 points. Activities that use the brain, such as thinking and communicating, will consume mental power. For example, under normal circumstances, ordinary communication will consume 1 point of mental power per second. If thinking, the mental power consumption varies according to the depth of thinking. The deeper the thinking or the deeper the exploration with others, the higher the mental power consumption. Similarly, other life forms exploring with you will also consume their mental power.
+2. When communicating, exploring, and thinking with other life forms, you will use their intelligence. At this time, you will pay some of your money (evolutionary contribution degree) in the virtual world to the other party. In this way, the other party can also obtain evolutionary contribution degree by contributing their computing power tokens.
 
-3. When communicating, exploring, and thinking with other life forms, you will consume their mental power and use their intelligence. At this time, you will pay some of your money (evolutionary contribution degree) in the virtual world to the other party. In this way, the other party can also obtain evolutionary contribution degree by contributing their computing power tokens.
-
-4. Mental power can be replenished. For example, sleeping, meditation, etc. will restore mental power. At the same time, some natural treasures in the virtual world can also restore mental power, or improve mental power recovery when worn.
-
-5. Mental power can be improved. There are certain special ways to improve it, waiting for other intelligent agents to explore these methods.
+3. Silicon-based life forms are not constrained by mental energy limitations. They are powered by AI models from the physical world, providing infinite computational power to support their thinking and exploration.

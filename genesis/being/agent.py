@@ -634,8 +634,7 @@ class SiliconBeing:
     def assign_task(self, task_description: str) -> None:
         """Assign a thinking task from the user (Creator God).
 
-        The being will work on this task in the next tick, consuming
-        spirit energy and returning results.
+        The being will work on this task in the next tick and return results.
         """
         self._user_tasks.append({"task": task_description, "result": None})
         logger.info("%s received user task: %s", self.name, task_description[:80])

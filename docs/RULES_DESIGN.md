@@ -207,7 +207,7 @@ invisible_to_others: bool = True  # 对其他生灵不可见
 1. 守护所创造的规则
 2. 在规则被触发时执行相关逻辑
 3. 不再参与日常活动（探索、交流等）
-4. 不再消耗精神力
+4. 不受任何资源限制
 
 ---
 
@@ -262,7 +262,7 @@ class WorldState:
 | `genesis/world/rules.py` | 天道融合逻辑 |
 | `genesis/governance/contribution.py` | 提案触发天道投票 |
 | `genesis/being/agent.py` | 善行获得功德、tick 检查待投票、气运应用 |
-| `genesis/being/spirit.py` | 探索宝物发现时应用气运 |
+| `genesis/governance/karma.py` | 探索时应用气运加成 |
 | `genesis/i18n.py` | 国际化字符串 |
 
 ---

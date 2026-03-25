@@ -73,7 +73,6 @@ lib/
 │   └── settings_screen.dart    # 设置
 ├── widgets/
 │   ├── tick_card.dart     # Tick 卡片
-│   ├── spirit_progress_bar.dart  # 精神力条
 │   ├── think_bubble.dart  # 思考气泡
 │   ├── action_card.dart   # 行动卡片
 │   └── event_log_card.dart  # 事件日志
@@ -109,9 +108,6 @@ WebSocket 连接到 `ws://127.0.0.1:19842`
 
 // 行动
 {"type": "action", "data": {"action_type": "explore", "details": "..."}}
-
-// 精神力
-{"type": "spirit", "data": {"current": 850, "maximum": 1000}}
 
 // 灾害
 {"type": "disaster", "data": {"name": "地震", "severity": 0.8}}
