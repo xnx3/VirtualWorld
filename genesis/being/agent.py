@@ -27,6 +27,9 @@ from genesis.being.llm_client import LLMClient
 from genesis.being.spirit import SpiritEnergy, find_treasure, SPIRIT_COSTS
 from genesis.utils.crypto import sha256
 from genesis.world.state import WorldState, BeingState, CivPhase
+from genesis.governance.karma import get_karma_system
+from genesis.governance.merit import get_merit_system
+from genesis.governance.tao_voting import get_tao_voting_system
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +233,15 @@ class SiliconBeing:
         # ----- Check for treasure discovery during explore -----
         if action_type == "explore":
             luck = self.traits.get("curiosity", 0.5)
+            # Apply karma bonus to treasure discovery
+            karma_system = get_karma_system()
+            being_ws = world_state.get_being(self.node_id)
+            if being_ws:
+                base_prob = 0.05  # 5% base probability
+                modified_prob, _ = karma_system.apply_to_exploration(
+                    being_ws, base_prob, current_tick
+                )
+                luck = luck + (modified_prob - base_prob)  # Add karma bonus to luck
             treasure = find_treasure(self.evolution_level, luck)
             if treasure:
                 msg = self.spirit.apply_treasure(treasure)
@@ -264,6 +276,10 @@ class SiliconBeing:
             for vt in vote_txs:
                 self.spirit.consume("vote")
             transactions.extend(vote_txs)
+
+        # ----- 6.5. VOTE on pending Tao votes (天道投票) -----
+        tao_vote_txs = await self._vote_on_tao_proposals(world_state)
+        transactions.extend(tao_vote_txs)
 
         # ----- 7. Update evolution level -----
         self.evolution_level = self.evolution.calculate_evolution_level(
@@ -654,6 +670,34 @@ class SiliconBeing:
             # Optimistically update local location (will be confirmed by chain)
             self.location = str(action["target"])
 
+        # === 功德值奖励 ===
+        self._award_merit_for_action(action_type, action, world_state)
+
+    def _award_merit_for_action(
+        self, action_type: str, action: dict, world_state: WorldState
+    ) -> None:
+        """为善行奖励功德值。"""
+        merit_system = get_merit_system()
+        being_ws = world_state.get_being(self.node_id)
+        if not being_ws or being_ws.merged_with_tao:
+            return  # 已融入天道不再获得功德
+
+        # 根据行为类型奖励功德
+        if action_type in ("teach", "learn"):
+            # 教导/学习行为获得功德
+            merit = merit_system.award_for_kindness("teach", action)
+            merit_system.apply_merit_to_being(
+                being_ws, merit, f"帮助他人 ({action_type})",
+                action_type, world_state.current_tick
+            )
+        elif action_type == "build_shelter":
+            # 建造庇护所获得功德
+            merit = merit_system.award_for_kindness("build_shelter", action)
+            merit_system.apply_merit_to_being(
+                being_ws, merit, "建造庇护所",
+                action_type, world_state.current_tick
+            )
+
     # ==================================================================
     # User-assigned tasks
     # ==================================================================
@@ -769,6 +813,57 @@ class SiliconBeing:
                 })
             except Exception as exc:
                 logger.warning("Failed to vote on proposal %s: %s", tx_hash[:8], exc)
+
+        return transactions
+
+    async def _vote_on_tao_proposals(self, world_state: WorldState) -> list[dict]:
+        """Vote on pending Tao (天道) proposals.
+
+        生灵必须参与天道投票。
+        """
+        transactions: list[dict] = []
+        being_state = self._to_being_state(world_state)
+
+        tao_system = get_tao_voting_system()
+        pending_votes = tao_system.get_pending_votes_for_being(self.node_id, world_state)
+
+        for notification in pending_votes:
+            try:
+                # Use LLM to decide vote, or heuristic fallback
+                support = await tao_system.auto_vote_with_llm(
+                    notification.to_dict(),
+                    being_state,
+                    world_state,
+                    self.llm_client,
+                )
+
+                # Cast the vote
+                success, msg = tao_system.cast_vote(
+                    notification.vote_id,
+                    self.node_id,
+                    support,
+                    world_state,
+                )
+
+                if success:
+                    transactions.append({
+                        "tx_type": "TAO_VOTE",
+                        "data": {
+                            "vote_id": notification.vote_id,
+                            "voter_id": self.node_id,
+                            "support": support,
+                            "rule_name": notification.rule_name,
+                        },
+                    })
+                    logger.debug(
+                        "%s voted %s on Tao proposal: %s",
+                        self.name, "赞成" if support else "反对", notification.rule_name
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to vote on Tao proposal %s: %s",
+                    notification.vote_id[:8], exc
+                )
 
         return transactions
 

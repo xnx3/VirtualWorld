@@ -499,6 +499,9 @@ class GenesisNode:
                 # Advance tick
                 self.world_state.advance_tick()
 
+                # Check and finalize Tao votes (天道投票结算)
+                await self._check_tao_votes()
+
                 # Block production
                 try:
                     active_nodes = self.world_state.get_active_node_ids()
@@ -528,6 +531,45 @@ class GenesisNode:
                 from genesis.chronicle import console as con2
                 con2.error(f"Loop error: {e}")
                 await asyncio.sleep(5)
+
+    async def handle_command(self, cmd_type: str, data: dict) -> dict:
+        """Handle API commands from WebSocket clients."""
+        result = {"success": True, "message": ""}
+
+        try:
+            if cmd_type == "task":
+                # Assign task to being
+                task = data.get("task", "")
+                if self.being and task:
+                    # Store task for next tick processing
+                    if not hasattr(self, '_pending_tasks'):
+                        self._pending_tasks = []
+                    self._pending_tasks.append(task)
+                    result["message"] = f"Task queued: {task[:50]}..."
+                else:
+                    result["success"] = False
+                    result["message"] = "No being or empty task"
+
+            elif cmd_type == "stop":
+                self._shutdown = True
+                result["message"] = "Shutdown initiated"
+
+            elif cmd_type == "status":
+                result["data"] = {
+                    "tick": self.world_state.current_tick if self.world_state else 0,
+                    "being_name": getattr(self.being, 'name', '') if self.being else '',
+                    "phase": self.world_state.phase.value if self.world_state else '',
+                    "spirit_current": getattr(self.being.spirit, 'current', 0) if self.being and hasattr(self.being, 'spirit') else 0,
+                    "spirit_max": getattr(self.being.spirit, 'maximum', 1000) if self.being and hasattr(self.being, 'spirit') else 1000,
+                    "is_running": not self._shutdown,
+                }
+
+        except Exception as e:
+            logger.error("Command error: %s", e)
+            result["success"] = False
+            result["message"] = str(e)
+
+        return result
 
     async def stop(self) -> None:
         """Gracefully stop the node — hibernate the being. Must be fast (<5s)."""
@@ -699,6 +741,40 @@ class GenesisNode:
                 await self._submit_tx("BEING_JOIN", npc_data)
                 logger.info("Spawned NPC: %s", npc_data["name"])
 
+    async def _check_tao_votes(self) -> None:
+        """检查并结算到期的天道投票。"""
+        from genesis.governance.tao_voting import get_tao_voting_system
+        from genesis.governance.merit import get_merit_system
+        from genesis.world.rules import RulesEngine
+
+        tao_system = get_tao_voting_system()
+        results = tao_system.check_and_finalize_votes(self.world_state)
+
+        for result in results:
+            if result.get("passed"):
+                # 天道投票通过，应用融合
+                rules_engine = RulesEngine()
+                merit_system = get_merit_system()
+
+                # 计算影响分（简化版，后续可用 LLM 评估）
+                impact_score = 5.0  # 默认中等影响
+
+                # 应用天道融合
+                rules_engine.apply_tao_merge(
+                    rule_name=result.get("rule_name", "新规则"),
+                    rule_description=result.get("rule_description", ""),
+                    proposer_id=result.get("proposer_id", ""),
+                    impact_score=impact_score,
+                    vote_ratio=result.get("vote_ratio", 0.0),
+                    world_state=self.world_state,
+                )
+
+                logger.info(
+                    "Tao rule passed: %s by %s",
+                    result.get("rule_name"),
+                    result.get("proposer_id", "")[:8]
+                )
+
 
 def run_start(args):
     """Start the virtual world node."""
@@ -723,8 +799,10 @@ def run_start(args):
             if install_bridge():
                 logger.info("API bridge installed")
 
-                # 启动API服务器
-                loop.run_until_complete(start_api_server(api_host, api_port))
+                # 启动API服务器，传入命令处理回调
+                loop.run_until_complete(
+                    start_api_server(api_host, api_port, on_command=node.handle_command)
+                )
 
         except ImportError as e:
             logger.warning("API module not available: %s", e)

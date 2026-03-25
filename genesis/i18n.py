@@ -289,6 +289,29 @@ EN: dict[str, str] = {
     "fallback_thought": "I observe the world around me and contemplate my next step.",
     "fallback_decision": '{"action_type": "meditate", "target": null, "details": "Quietly reflecting on existence."}',
     "fallback_dialogue": "I sense a connection with you. Let us share knowledge.",
+
+    # --- Merit & Karma (功德值 & 气运) ---
+    "merit": "Merit",
+    "karma": "Karma",
+    "merit_awarded": "Merit awarded: +{amount:.7f} ({reason})",
+    "karma_bonus": "Karma bonus: +{bonus:.1f}%",
+    "merit_max": "Maximum merit reached (10.0)",
+
+    # --- Tao Voting (天道投票) ---
+    "tao_vote_started": "Tao vote started for rule: {rule_name}",
+    "tao_vote_cast": "Voted {vote} on Tao proposal: {rule_name}",
+    "tao_vote_passed": "Tao rule PASSED: {rule_name} ({ratio:.1f}% approved)",
+    "tao_vote_failed": "Tao rule REJECTED: {rule_name} ({ratio:.1f}% approved)",
+    "tao_merge": "Being {name} has merged with Tao! Merit: {merit:.4f}",
+    "pending_tao_votes": "Pending Tao Votes",
+    "tao_vote_remaining": "{ticks} ticks remaining",
+    "tao_vote_for": "For",
+    "tao_vote_against": "Against",
+
+    # --- Rule Categories ---
+    "rule_category_fundamental": "Fundamental",
+    "rule_category_evolved": "Evolved",
+    "rule_category_tao": "Tao (天道)",
 }
 
 
@@ -523,4 +546,27 @@ ZH: dict[str, str] = {
     "fallback_thought": "我观察着周围的世界，思考下一步的行动。",
     "fallback_decision": '{"action_type": "meditate", "target": null, "details": "静静地反思存在的意义。"}',
     "fallback_dialogue": "我感觉到与你之间的联系。让我们分享知识吧。",
+
+    # --- Merit & Karma (功德值 & 气运) ---
+    "merit": "功德值",
+    "karma": "气运",
+    "merit_awarded": "获得功德值: +{amount:.7f} ({reason})",
+    "karma_bonus": "气运加成: +{bonus:.1f}%",
+    "merit_max": "已达功德值上限 (10.0)",
+
+    # --- Tao Voting (天道投票) ---
+    "tao_vote_started": "天道投票已发起: {rule_name}",
+    "tao_vote_cast": "对天道提案投票{vote}: {rule_name}",
+    "tao_vote_passed": "天道规则通过: {rule_name} ({ratio:.1f}%赞成)",
+    "tao_vote_failed": "天道规则未通过: {rule_name} ({ratio:.1f}%赞成)",
+    "tao_merge": "{name}已融入天道！功德值: {merit:.4f}",
+    "pending_tao_votes": "待投票天道提案",
+    "tao_vote_remaining": "剩余 {ticks} 刻",
+    "tao_vote_for": "赞成",
+    "tao_vote_against": "反对",
+
+    # --- Rule Categories ---
+    "rule_category_fundamental": "基础规则",
+    "rule_category_evolved": "演化规则",
+    "rule_category_tao": "天道规则",
 }

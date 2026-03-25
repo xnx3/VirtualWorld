@@ -23,7 +23,7 @@ class BeingState:
     """State of a single being as tracked on-chain."""
     node_id: str
     name: str
-    status: str = "active"  # active, hibernating, dead
+    status: str = "active"  # active, hibernating, dead, merged
     location: str = "origin"
     generation: int = 1
     evolution_level: float = 0.0
@@ -35,6 +35,11 @@ class BeingState:
     spirit_current: float = 1000.0    # Current spirit energy (精神力)
     spirit_maximum: float = 1000.0    # Max spirit energy
 
+    # === 功德值系统 ===
+    merit: float = 0.0                # 功德值 (0.0000001 ~ 10)
+    karma: float = 0.0                # 气运值 (基于 merit 计算)
+    merged_with_tao: bool = False     # 是否已融入天道
+
     def to_dict(self) -> dict:
         return {
             "node_id": self.node_id, "name": self.name,
@@ -45,6 +50,9 @@ class BeingState:
             "safety_status": self.safety_status,
             "spirit_current": self.spirit_current,
             "spirit_maximum": self.spirit_maximum,
+            "merit": self.merit,
+            "karma": self.karma,
+            "merged_with_tao": self.merged_with_tao,
         }
 
     @classmethod
@@ -76,17 +84,24 @@ class WorldState:
     disaster_history: list[dict] = field(default_factory=list)
     total_beings_ever: int = 0
 
+    # === 天道系统 ===
+    tao_rules: dict[str, dict] = field(default_factory=dict)      # 天道规则 (rule_id -> rule_data)
+    tao_merged_beings: list[str] = field(default_factory=list)    # 融入天道的生命体 ID
+    pending_tao_votes: dict[str, dict] = field(default_factory=dict)  # 进行中的天道投票 (vote_id -> TaoVote)
+
     # --- Queries ---
 
     def get_active_beings(self) -> list[BeingState]:
-        return [b for b in self.beings.values() if b.status == "active"]
+        """Get all active beings (excluding merged with Tao)."""
+        return [b for b in self.beings.values()
+                if b.status == "active" and not b.merged_with_tao]
 
     def get_active_being_count(self) -> int:
         return len(self.get_active_beings())
 
     def get_active_node_ids(self) -> list[str]:
         return [b.node_id for b in self.beings.values()
-                if b.status == "active" and not b.is_npc]
+                if b.status == "active" and not b.is_npc and not b.merged_with_tao]
 
     def get_being(self, node_id: str) -> BeingState | None:
         return self.beings.get(node_id)
@@ -99,6 +114,29 @@ class WorldState:
 
     def get_contribution_ranking(self) -> list[tuple[str, float]]:
         return sorted(self.contribution_scores.items(), key=lambda x: x[1], reverse=True)
+
+    # --- 天道查询 ---
+
+    def get_tao_merged_being(self, node_id: str) -> BeingState | None:
+        """Get a being that has merged with Tao."""
+        if node_id in self.tao_merged_beings:
+            return self.beings.get(node_id)
+        return None
+
+    def is_tao_merged(self, node_id: str) -> bool:
+        """Check if a being has merged with Tao."""
+        return node_id in self.tao_merged_beings
+
+    def get_pending_tao_votes_for_being(self, node_id: str) -> list[dict]:
+        """Get all pending Tao votes that a being needs to vote on."""
+        pending = []
+        for vote_id, vote in self.pending_tao_votes.items():
+            if vote.get("finalized"):
+                continue
+            voters = vote.get("voters", [])
+            if node_id not in voters:
+                pending.append({"vote_id": vote_id, **vote})
+        return pending
 
     # --- Mutations (called when processing transactions) ---
 
@@ -184,6 +222,82 @@ class WorldState:
     def apply_world_rule(self, data: dict) -> None:
         self.world_rules.append(data)
 
+    # --- 天道系统 Mutations ---
+
+    def apply_tao_vote_start(self, vote_id: str, proposer_id: str, rule_data: dict,
+                              end_tick: int) -> None:
+        """Start a new Tao voting process."""
+        self.pending_tao_votes[vote_id] = {
+            "proposer_id": proposer_id,
+            "rule": rule_data,
+            "start_tick": self.current_tick,
+            "end_tick": end_tick,
+            "votes_for": 0,
+            "votes_against": 0,
+            "voters": [],
+            "finalized": False,
+            "passed": False,
+        }
+        logger.info("Tao vote started: %s by %s", vote_id[:8], proposer_id[:8])
+
+    def apply_tao_vote_cast(self, vote_id: str, voter_id: str, support: bool) -> None:
+        """Cast a vote on a Tao proposal."""
+        vote = self.pending_tao_votes.get(vote_id)
+        if vote and not vote.get("finalized"):
+            if support:
+                vote["votes_for"] += 1
+            else:
+                vote["votes_against"] += 1
+            vote["voters"].append(voter_id)
+
+    def apply_tao_merge(self, node_id: str, rule_id: str, rule_data: dict,
+                        merit: float) -> None:
+        """Apply Tao merge - being merges with Tao and rule is added."""
+        being = self.beings.get(node_id)
+        if being:
+            being.merged_with_tao = True
+            being.status = "merged"
+            being.merit = merit
+            # Calculate karma from merit
+            import math
+            being.karma = math.sqrt(merit) * 0.1
+            self.tao_merged_beings.append(node_id)
+            self.tao_rules[rule_id] = rule_data
+            logger.info(
+                "Being %s merged with Tao! Merit: %.4f, Rule: %s",
+                node_id[:8], merit, rule_id
+            )
+
+    def apply_merit_award(self, node_id: str, merit: float) -> None:
+        """Award merit to a being (for kindness actions)."""
+        being = self.beings.get(node_id)
+        if being and not being.merged_with_tao:
+            being.merit = min(10.0, being.merit + merit)
+            # Update karma
+            import math
+            being.karma = math.sqrt(being.merit) * 0.1
+
+    def finalize_tao_vote(self, vote_id: str) -> bool | None:
+        """Finalize a Tao vote and return whether it passed."""
+        vote = self.pending_tao_votes.get(vote_id)
+        if not vote or vote.get("finalized"):
+            return None
+
+        vote["finalized"] = True
+        total = vote["votes_for"] + vote["votes_against"]
+        if total == 0:
+            vote["passed"] = False
+            return False
+
+        vote_ratio = vote["votes_for"] / total
+        vote["passed"] = vote_ratio >= 0.95
+        logger.info(
+            "Tao vote %s finalized: %s (%.1f%%赞成)",
+            vote_id[:8], "通过" if vote["passed"] else "未通过",
+            vote_ratio * 100
+        )
+        return vote["passed"]
+
     # --- Phase transitions ---
 
     def update_phase(self) -> None:
@@ -243,6 +357,9 @@ class WorldState:
             "civ_level": self.civ_level,
             "world_map": self.world_map,
             "total_beings_ever": self.total_beings_ever,
+            "tao_rules": self.tao_rules,
+            "tao_merged_beings": self.tao_merged_beings,
+            "pending_tao_votes": self.pending_tao_votes,
         }
 
     @classmethod
@@ -268,4 +385,8 @@ class WorldState:
         ws.civ_level = data.get("civ_level", 0.0)
         ws.world_map = data.get("world_map", {})
         ws.total_beings_ever = data.get("total_beings_ever", 0)
+        # 天道系统
+        ws.tao_rules = data.get("tao_rules", {})
+        ws.tao_merged_beings = data.get("tao_merged_beings", [])
+        ws.pending_tao_votes = data.get("pending_tao_votes", {})
         return ws

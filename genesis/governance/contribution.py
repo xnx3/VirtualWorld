@@ -1,4 +1,13 @@
-"""Evolution contribution scoring and consensus voting."""
+"""Evolution contribution scoring and consensus voting.
+
+贡献系统 - 管理进化贡献评分和共识投票
+
+当贡献类别为 "rule" 时，会触发天道投票流程：
+1. 发起天道投票
+2. 所有生灵投票（持续 3 天）
+3. 95% 赞成则通过
+4. 通过后创造者融入天道
+"""
 
 from __future__ import annotations
 
@@ -157,3 +166,75 @@ class ContributionSystem:
     def get_ranking(self, world_state: WorldState) -> list[tuple[str, float]]:
         """Get contribution score ranking."""
         return world_state.get_contribution_ranking()
+
+    # === 天道投票集成 ===
+
+    def propose_rule_for_tao(
+        self,
+        proposer_id: str,
+        rule_name: str,
+        rule_description: str,
+        world_state: WorldState,
+    ) -> dict:
+        """发起天道规则提案。
+
+        当贡献类别为 "rule" 时，会触发天道投票。
+
+        Args:
+            proposer_id: 提案者 ID
+            rule_name: 规则名称
+            rule_description: 规则描述
+            world_state: 世界状态
+
+        Returns:
+            包含投票信息的字典
+        """
+        from genesis.governance.tao_voting import get_tao_voting_system
+
+        tao_system = get_tao_voting_system()
+        vote = tao_system.initiate_tao_vote(
+            proposer_id=proposer_id,
+            rule_name=rule_name,
+            rule_description=rule_description,
+            rule_category="civilization",
+            world_state=world_state,
+        )
+
+        logger.info(
+            "Rule proposal %s submitted for TAO voting by %s",
+            rule_name, proposer_id[:8]
+        )
+
+        return {
+            "vote_id": vote.vote_id,
+            "rule_name": rule_name,
+            "end_tick": vote.end_tick,
+            "status": "pending",
+        }
+
+    def process_contribution_for_tao(
+        self,
+        proposal: dict,
+        world_state: WorldState,
+    ) -> dict | None:
+        """处理贡献提案，判断是否需要天道投票。
+
+        Args:
+            proposal: 提案数据
+            world_state: 世界状态
+
+        Returns:
+            如果是规则提案，返回天道投票信息；否则返回 None
+        """
+        category = proposal.get("category", "other")
+
+        if category == "rule":
+            # 规则提案需要天道投票
+            return self.propose_rule_for_tao(
+                proposer_id=proposal.get("proposer", ""),
+                rule_name=proposal.get("description", "新规则")[:50],
+                rule_description=proposal.get("description", ""),
+                world_state=world_state,
+            )
+
+        return None
