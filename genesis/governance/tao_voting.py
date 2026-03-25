@@ -73,15 +73,13 @@ class TaoVote:
             return 0.0
         return self.votes_for / self.total_votes
 
-    @property
-    def remaining_ticks(self) -> int:
-        """剩余 tick 数（需要传入当前 tick）"""
-        return self.end_tick - self.start_tick  # 需要从外部计算
+    def get_remaining_ticks(self, current_tick: int) -> int:
+        """获取剩余 tick 数。"""
+        return max(0, self.end_tick - current_tick)
 
-    @property
-    def is_expired(self) -> bool:
-        """是否已过期（需要从外部判断）"""
-        return False  # 需要从外部判断
+    def is_expired(self, current_tick: int) -> bool:
+        """判断是否已过期。"""
+        return current_tick >= self.end_tick
 
     def to_dict(self) -> dict:
         return {

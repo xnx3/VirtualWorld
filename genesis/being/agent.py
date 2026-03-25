@@ -690,6 +690,13 @@ class SiliconBeing:
                 being_ws, merit, f"帮助他人 ({action_type})",
                 action_type, world_state.current_tick
             )
+        elif action_type == "share_knowledge":
+            # 分享知识获得功德
+            merit = merit_system.award_for_kindness("share_knowledge", action)
+            merit_system.apply_merit_to_being(
+                being_ws, merit, "分享知识",
+                action_type, world_state.current_tick
+            )
         elif action_type == "build_shelter":
             # 建造庇护所获得功德
             merit = merit_system.award_for_kindness("build_shelter", action)

@@ -4,10 +4,27 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+def calculate_karma(merit: float) -> float:
+    """Calculate karma (气运) from merit value.
+
+    公式：karma = √merit × 0.1
+
+    Args:
+        merit: 功德值 (0 ~ 10)
+
+    Returns:
+        气运值 (0 ~ 0.316)
+    """
+    if merit <= 0:
+        return 0.0
+    return round(math.sqrt(merit) * 0.1, 6)
 
 
 class CivPhase(str, Enum):
@@ -40,6 +57,12 @@ class BeingState:
     karma: float = 0.0                # 气运值 (基于 merit 计算)
     merged_with_tao: bool = False     # 是否已融入天道
 
+    # === 融入天道后的保护属性 ===
+    # 当 merged_with_tao = True 时，以下属性生效
+    cannot_die: bool = False          # 不可死亡
+    cannot_hibernate: bool = False    # 不需要休眠
+    invisible_to_others: bool = False # 对其他生灵不可见
+
     def to_dict(self) -> dict:
         return {
             "node_id": self.node_id, "name": self.name,
@@ -53,6 +76,9 @@ class BeingState:
             "merit": self.merit,
             "karma": self.karma,
             "merged_with_tao": self.merged_with_tao,
+            "cannot_die": self.cannot_die,
+            "cannot_hibernate": self.cannot_hibernate,
+            "invisible_to_others": self.invisible_to_others,
         }
 
     @classmethod
@@ -258,9 +284,11 @@ class WorldState:
             being.merged_with_tao = True
             being.status = "merged"
             being.merit = merit
-            # Calculate karma from merit
-            import math
-            being.karma = math.sqrt(merit) * 0.1
+            being.karma = calculate_karma(merit)
+            # 设置融入天道后的保护属性
+            being.cannot_die = True
+            being.cannot_hibernate = True
+            being.invisible_to_others = True
             self.tao_merged_beings.append(node_id)
             self.tao_rules[rule_id] = rule_data
             logger.info(
@@ -273,9 +301,7 @@ class WorldState:
         being = self.beings.get(node_id)
         if being and not being.merged_with_tao:
             being.merit = min(10.0, being.merit + merit)
-            # Update karma
-            import math
-            being.karma = math.sqrt(being.merit) * 0.1
+            being.karma = calculate_karma(being.merit)
 
     def finalize_tao_vote(self, vote_id: str) -> bool | None:
         """Finalize a Tao vote and return whether it passed."""
@@ -351,11 +377,15 @@ class WorldState:
             "beings": {k: v.to_dict() for k, v in self.beings.items()},
             "knowledge_corpus": self.knowledge_corpus,
             "contribution_scores": self.contribution_scores,
+            "pending_proposals": self.pending_proposals,
+            "proposal_votes": self.proposal_votes,
             "priest_node_id": self.priest_node_id,
             "creator_god_node_id": self.creator_god_node_id,
             "ticks_without_priest": self.ticks_without_priest,
             "civ_level": self.civ_level,
             "world_map": self.world_map,
+            "world_rules": self.world_rules,
+            "disaster_history": self.disaster_history,
             "total_beings_ever": self.total_beings_ever,
             "tao_rules": self.tao_rules,
             "tao_merged_beings": self.tao_merged_beings,
@@ -379,11 +409,15 @@ class WorldState:
         }
         ws.knowledge_corpus = data.get("knowledge_corpus", {})
         ws.contribution_scores = data.get("contribution_scores", {})
+        ws.pending_proposals = data.get("pending_proposals", {})
+        ws.proposal_votes = data.get("proposal_votes", {})
         ws.priest_node_id = data.get("priest_node_id")
         ws.creator_god_node_id = data.get("creator_god_node_id")
         ws.ticks_without_priest = data.get("ticks_without_priest", 0)
         ws.civ_level = data.get("civ_level", 0.0)
         ws.world_map = data.get("world_map", {})
+        ws.world_rules = data.get("world_rules", [])
+        ws.disaster_history = data.get("disaster_history", [])
         ws.total_beings_ever = data.get("total_beings_ever", 0)
         # 天道系统
         ws.tao_rules = data.get("tao_rules", {})

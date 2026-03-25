@@ -96,13 +96,24 @@ class RulesEngine:
     - tao: 天道规则，由生灵创造，不可修改
     """
 
-    def __init__(self):
+    def __init__(self, world_state: WorldState | None = None):
         self.rules: dict[str, WorldRule] = {}
         self._load_fundamental_rules()
+        # 从 world_state 恢复天道规则
+        if world_state is not None:
+            self._restore_tao_rules(world_state)
 
     def _load_fundamental_rules(self) -> None:
         for rule in FUNDAMENTAL_RULES:
             self.rules[rule.rule_id] = rule
+
+    def _restore_tao_rules(self, world_state: WorldState) -> None:
+        """从 WorldState 恢复天道规则到内存。"""
+        for rule_id, rule_data in world_state.tao_rules.items():
+            if rule_id not in self.rules:
+                rule = WorldRule.from_dict(rule_data)
+                self.rules[rule_id] = rule
+                logger.debug("Restored TAO rule: %s", rule.name)
 
     def get_active_rules(self) -> list[WorldRule]:
         return [r for r in self.rules.values() if r.active]

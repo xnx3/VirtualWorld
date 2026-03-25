@@ -753,7 +753,8 @@ class GenesisNode:
         for result in results:
             if result.get("passed"):
                 # 天道投票通过，应用融合
-                rules_engine = RulesEngine()
+                # 传入 world_state 以恢复已有的天道规则
+                rules_engine = RulesEngine(world_state=self.world_state)
                 merit_system = get_merit_system()
 
                 # 计算影响分（简化版，后续可用 LLM 评估）

@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import random
 from dataclasses import dataclass
 
@@ -78,11 +77,12 @@ class KarmaSystem:
     def calculate_karma_from_merit(self, merit: float) -> float:
         """Calculate karma from merit value.
 
+        委托给 state.calculate_karma 统一实现。
+
         公式：karma = √merit × 0.1
         """
-        if merit <= 0:
-            return 0.0
-        return round(math.sqrt(merit) * 0.1, 6)
+        from genesis.world.state import calculate_karma
+        return calculate_karma(merit)
 
     # === 探索加成 ===
 
