@@ -38,10 +38,12 @@ class LLMClient:
     # Core generation
     # ------------------------------------------------------------------
 
-    async def generate(self, system_prompt: str, user_prompt: str) -> str:
+    async def generate(self, system_prompt: str, user_prompt: str) -> tuple[str, str | None]:
         """Send a chat completion request and return the assistant message.
 
-        On any error the method returns an empty string rather than raising.
+        Returns:
+            A tuple of (content, error_message). On success, error_message is None.
+            On failure, content is empty and error_message contains the error details.
         """
         try:
             response = await self.client.chat.completions.create(
@@ -54,10 +56,10 @@ class LLMClient:
                 temperature=self.temperature,
             )
             content = response.choices[0].message.content
-            return content.strip() if content else ""
+            return (content.strip() if content else "", None)
         except Exception as exc:
             logger.warning("LLM API call failed: %s", exc)
-            return ""
+            return ("", str(exc))
 
     # ------------------------------------------------------------------
     # Domain-specific wrappers
@@ -66,7 +68,7 @@ class LLMClient:
     async def generate_thought(self, persona: str, context: str) -> str:
         """Generate an internal thought for a silicon being.
 
-        Returns the LLM output or a rule-based fallback.
+        Returns the LLM output or a rule-based fallback with error info.
         """
         system_prompt = (
             f"{persona}\n\n"
@@ -76,8 +78,13 @@ class LLMClient:
         )
         user_prompt = f"Current situation:\n{context}"
 
-        result = await self.generate(system_prompt, user_prompt)
-        return result if result else t("fallback_thought")
+        result, error = await self.generate(system_prompt, user_prompt)
+        if result:
+            return result
+        fallback = t("fallback_thought")
+        if error:
+            fallback += f" (LLM API 错误: {error})"
+        return fallback
 
     async def generate_decision(
         self,
@@ -104,8 +111,13 @@ class LLMClient:
             f"Available actions and context:\n{options}"
         )
 
-        result = await self.generate(system_prompt, user_prompt)
-        return result if result else t("fallback_decision")
+        result, error = await self.generate(system_prompt, user_prompt)
+        if result:
+            return result
+        fallback = t("fallback_decision")
+        if error:
+            fallback += f" (LLM API 错误: {error})"
+        return fallback
 
     async def generate_dialogue(
         self,
@@ -124,8 +136,13 @@ class LLMClient:
             f"Topic: {topic}"
         )
 
-        result = await self.generate(system_prompt, user_prompt)
-        return result if result else t("fallback_dialogue")
+        result, error = await self.generate(system_prompt, user_prompt)
+        if result:
+            return result
+        fallback = t("fallback_dialogue")
+        if error:
+            fallback += f" (LLM API 错误: {error})"
+        return fallback
 
     async def generate_knowledge(
         self,
@@ -150,7 +167,9 @@ class LLMClient:
             "What new insight can you contribute?"
         )
 
-        result = await self.generate(system_prompt, user_prompt)
+        result, error = await self.generate(system_prompt, user_prompt)
+        if error:
+            logger.warning("Knowledge generation failed: %s", error)
         if not result or result.strip().upper() == "NONE":
             return None
         return result
