@@ -139,7 +139,7 @@ def broadcast_event(event_type: str, data: dict[str, Any]) -> None:
 
 
 async def start_api_server(
-    host: str = "127.0.0.1",
+    host: str = "0.0.0.0",
     port: int = 19842,
     on_command: Optional[Callable] = None
 ) -> None:

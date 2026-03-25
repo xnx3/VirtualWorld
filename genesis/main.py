@@ -149,11 +149,17 @@ class GenesisNode:
 
         llm_client = None
         has_llm = False
-        if self.config.llm.api_key and self.config.llm.api_key.strip():
+
+        # 优先从配置文件读取 api_key，否则从环境变量读取
+        api_key = self.config.llm.api_key and self.config.llm.api_key.strip()
+        if not api_key:
+            api_key = os.environ.get("Genesis-openai-key", "").strip()
+
+        if api_key:
             try:
                 llm_client = LLMClient(
                     base_url=self.config.llm.base_url,
-                    api_key=self.config.llm.api_key,
+                    api_key=api_key,
                     model=self.config.llm.model,
                     max_tokens=self.config.llm.max_tokens,
                     temperature=self.config.llm.temperature,
@@ -181,6 +187,7 @@ class GenesisNode:
             con._write(f"  {con.C.GREEN}    model: \"deepseek-chat\"{con.C.RESET}")
             con._write(f"")
             con._write(f"  {con.C.DIM}{t('llm_warning_support')}{con.C.RESET}")
+            con._write(f"  {con.C.CYAN}{t('llm_warning_env')}{con.C.RESET}")
             con._write(f"  {con.C.DIM}{t('llm_warning_restart')}{con.C.RESET}")
             con.separator("─")
             con._write("")

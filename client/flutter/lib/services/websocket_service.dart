@@ -14,8 +14,8 @@ class WebSocketService with ChangeNotifier {
   int _serverPort;
   String? _lastError;
 
-  // 预设服务器配置 - 使用用户当前网络可达的服务器
-  static const String defaultHost = '192.168.31.250';
+  // 预设服务器配置 - 空值表示首次使用需要用户配置
+  static const String defaultHost = '';
   static const int defaultPort = 19842;
 
   // 重连配置
@@ -64,6 +64,13 @@ class WebSocketService with ChangeNotifier {
     if (host != null) _serverUrl = host;
     if (port != null) _serverPort = port;
 
+    // 检查服务器地址是否有效
+    if (_serverUrl.isEmpty) {
+      _lastError = '请先配置服务器地址\n\n点击下方"检查服务器设置"\n输入运行Genesis服务的电脑IP地址';
+      notifyListeners();
+      return false;
+    }
+
     _isConnecting = true;
     _lastError = null;
     notifyListeners();
@@ -72,8 +79,8 @@ class WebSocketService with ChangeNotifier {
       final uri = Uri.parse('ws://$_serverUrl:$_serverPort');
       _channel = WebSocketChannel.connect(uri);
 
-      // 等待连接建立
-      await _channel!.ready;
+      // 等待连接建立，设置超时
+      await _channel!.ready.timeout(const Duration(seconds: 10));
 
       // 取消之前的订阅
       await _subscription?.cancel();
