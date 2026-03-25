@@ -21,7 +21,6 @@ class EventType(str, Enum):
     TICK = "tick"
     THINK = "think"
     ACTION = "action"
-    SPIRIT = "spirit"
     DISASTER = "disaster"
     PRIEST = "priest"
     BIRTH = "birth"
@@ -59,7 +58,6 @@ class TickEvent:
     """Tick事件数据"""
     tick: int
     being_name: str
-    spirit: str
     phase: str
 
 
@@ -77,20 +75,6 @@ class ActionEvent:
     action_type: str
     target: Optional[str]
     details: str
-
-
-@dataclass
-class SpiritEvent:
-    """精神力事件数据"""
-    current: float
-    maximum: float
-    action: str
-    cost: float
-    recovered: float
-
-    @property
-    def percentage(self) -> float:
-        return (self.current / self.maximum * 100) if self.maximum > 0 else 0
 
 
 @dataclass

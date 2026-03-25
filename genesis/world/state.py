@@ -51,8 +51,6 @@ class BeingState:
     joined_at_tick: int = 0
     is_npc: bool = False
     safety_status: str = "unknown"
-    spirit_current: float = 1000.0    # Current spirit energy (精神力)
-    spirit_maximum: float = 1000.0    # Max spirit energy
 
     # === 功德值系统 ===
     merit: float = 0.0                # 功德值 (0.0000001 ~ 10)
@@ -73,8 +71,6 @@ class BeingState:
             "traits": self.traits, "knowledge_ids": self.knowledge_ids,
             "joined_at_tick": self.joined_at_tick, "is_npc": self.is_npc,
             "safety_status": self.safety_status,
-            "spirit_current": self.spirit_current,
-            "spirit_maximum": self.spirit_maximum,
             "merit": self.merit,
             "karma": self.karma,
             "merged_with_tao": self.merged_with_tao,

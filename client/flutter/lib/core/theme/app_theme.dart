@@ -6,12 +6,6 @@ class AppTheme {
   static const Color secondaryColor = Color(0xFF7C4DFF);
   static const Color accentColor = Color(0xFFFF4081);
 
-  // 状态颜色
-  static const Color spiritHigh = Color(0xFF4CAF50);
-  static const Color spiritMedium = Color(0xFFFFC107);
-  static const Color spiritLow = Color(0xFFFF5722);
-  static const Color spiritExhausted = Color(0xFFF44336);
-
   // 事件颜色
   static const Color thinkColor = Color(0xFFFFEB3B);
   static const Color actionColor = Color(0xFF2196F3);

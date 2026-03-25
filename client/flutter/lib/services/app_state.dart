@@ -17,17 +17,6 @@ class AppState with ChangeNotifier {
   String _beingPhase = '';
   String get beingPhase => _beingPhase;
 
-  // 精神力
-  double _spiritCurrent = 1000;
-  double _spiritMaximum = 1000;
-  double get spiritCurrent => _spiritCurrent;
-  double get spiritMaximum => _spiritMaximum;
-  double get spiritPercentage {
-    if (_spiritMaximum <= 0) return 0;
-    final pct = _spiritCurrent / _spiritMaximum;
-    return pct.clamp(0.0, 1.0);
-  }
-
   // 事件日志
   final List<ChronicleEvent> _events = [];
   List<ChronicleEvent> get events => List.unmodifiable(_events);
@@ -56,17 +45,10 @@ class AppState with ChangeNotifier {
   }
 
   /// 更新 Tick
-  void updateTick(int tick, String name, String spirit, String phase) {
+  void updateTick(int tick, String name, String phase) {
     _currentTick = tick;
     _beingName = name.isEmpty ? 'Unknown' : name;
     _beingPhase = phase.isEmpty ? 'Unknown' : phase;
-    notifyListeners();
-  }
-
-  /// 更新精神力
-  void updateSpirit(double current, double maximum, {double cost = 0, double recovered = 0}) {
-    _spiritCurrent = current.clamp(0.0, double.infinity);
-    _spiritMaximum = maximum > 0 ? maximum : 1000;
     notifyListeners();
   }
 
@@ -115,7 +97,6 @@ class AppState with ChangeNotifier {
         updateTick(
           payload['tick'] as int? ?? 0,
           payload['being_name'] as String? ?? '',
-          payload['spirit'] as String? ?? '',
           payload['phase'] as String? ?? '',
         );
         break;
@@ -150,15 +131,6 @@ class AppState with ChangeNotifier {
         }
         break;
 
-      case 'spirit':
-        updateSpirit(
-          (payload['current'] as num?)?.toDouble() ?? 0,
-          (payload['maximum'] as num?)?.toDouble() ?? 1000,
-          cost: (payload['cost'] as num?)?.toDouble() ?? 0,
-          recovered: (payload['recovered'] as num?)?.toDouble() ?? 0,
-        );
-        break;
-
       case 'disaster':
         final name = payload['name'] as String? ?? 'Unknown';
         final severity = payload['severity'] as num? ?? 0;
@@ -189,15 +161,8 @@ class AppState with ChangeNotifier {
           updateTick(
             statusData['tick'] as int? ?? _currentTick,
             statusData['being_name'] as String? ?? _beingName,
-            '',
             statusData['phase'] as String? ?? _beingPhase,
           );
-          if (statusData['spirit_current'] != null && statusData['spirit_max'] != null) {
-            updateSpirit(
-              (statusData['spirit_current'] as num?)?.toDouble() ?? _spiritCurrent,
-              (statusData['spirit_max'] as num?)?.toDouble() ?? _spiritMaximum,
-            );
-          }
           // Sync running state from server
           if (statusData['is_running'] == true) {
             setRunning(true);
@@ -246,7 +211,6 @@ enum EventType {
   tick,
   think,
   action,
-  spirit,
   disaster,
   priest,
   birth,

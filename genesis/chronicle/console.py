@@ -55,7 +55,6 @@ ICONS = {
     "death": "💀",
     "birth": "🌟",
     "treasure": "💎",
-    "spirit": "🔮",
     "priest": "⛩️",
     "vote": "🗳️",
     "hibernate": "😴",
@@ -88,7 +87,7 @@ def header(title: str) -> None:
     _write(f"{C.BOLD}{C.CYAN}{'═' * 60}{C.RESET}\n")
 
 
-def tick_header(tick: int, being_name: str, spirit_str: str, phase: str) -> None:
+def tick_header(tick: int, being_name: str, phase: str) -> None:
     # Translate phase value (HUMAN_SIM -> phase_human_sim)
     phase_key = f"phase_{phase.lower()}"
     phase_translated = t(phase_key)
@@ -100,7 +99,6 @@ def tick_header(tick: int, being_name: str, spirit_str: str, phase: str) -> None
     _write(
         f"{C.BOLD}{ICONS['tick']} {t('tick_label')} {tick}{C.RESET}  "
         f"{C.CYAN}{being_name}{C.RESET}  "
-        f"{C.MAGENTA}{spirit_str}{C.RESET}  "
         f"{C.DIM}{t('phase_label')}: {phase_translated}{C.RESET}  "
         f"{C.DIM}{_timestamp()}{C.RESET}"
     )
@@ -163,28 +161,6 @@ def speak(speaker: str, listener: str, message: str) -> None:
            f"{C.DIM}→{C.RESET} {C.GREEN}{listener}{C.RESET}")
     for line in _wrap(message, 65):
         _write(f"     {C.GREEN}\"{line}\"{C.RESET}")
-
-
-def spirit_update(current: float, maximum: float, action: str,
-                  cost: float = 0, recovered: float = 0) -> None:
-    pct = current / maximum * 100 if maximum > 0 else 0
-    bar_len = 20
-    filled = int(pct / 100 * bar_len)
-    bar = "█" * filled + "░" * (bar_len - filled)
-
-    if pct >= 60:
-        color = C.GREEN
-    elif pct >= 30:
-        color = C.YELLOW
-    else:
-        color = C.RED
-
-    parts = [f"  {ICONS['spirit']} {C.DIM}{t('spirit_label')}:{C.RESET} {color}{bar} {current:.0f}/{maximum:.0f}{C.RESET}"]
-    if cost > 0:
-        parts.append(f" {C.RED}-{cost:.0f}{C.RESET}")
-    if recovered > 0:
-        parts.append(f" {C.GREEN}+{recovered:.0f}{C.RESET}")
-    _write("".join(parts))
 
 
 def treasure_found(treasure_name: str, effect: str) -> None:
@@ -264,10 +240,6 @@ def world_info(phase: str, civ_level: float, active_beings: int,
         _write(f"     {C.DIM}{t('priest')}:{C.RESET} {priest}")
     if creator_god:
         _write(f"     {C.DIM}{t('creator_god')}:{C.RESET} {creator_god[:12]}...")
-
-
-def exhausted(name: str) -> None:
-    _write(f"  {C.RED}{C.BOLD}{t('spirit_exhausted', name=name)}{C.RESET}")
 
 
 def error(message: str) -> None:

@@ -288,15 +288,7 @@ class _HomeScreenState extends State<HomeScreen> {
           TickCard(
             tick: state.currentTick,
             beingName: state.beingName,
-            spirit: '${(state.spiritPercentage * 100).toInt()}%',
             phase: state.beingPhase,
-          ),
-          const SizedBox(height: 12),
-
-          // 精神力
-          SpiritProgressBar(
-            current: state.spiritCurrent,
-            maximum: state.spiritMaximum,
           ),
           const SizedBox(height: 12),
 

@@ -25,7 +25,6 @@ class AppLocalizations {
   String get tick => locale == 'zh' ? '刻' : 'Tick';
   String get think => locale == 'zh' ? '思考' : 'Think';
   String get action => locale == 'zh' ? '行动' : 'Action';
-  String get spirit => locale == 'zh' ? '精神力' : 'Spirit';
 
   String get task => locale == 'zh' ? '任务' : 'Task';
   String get assignTask => locale == 'zh' ? '分配任务' : 'Assign Task';
@@ -53,6 +52,7 @@ class AppLocalizations {
   String get cancel => locale == 'zh' ? '取消' : 'Cancel';
   String get send => locale == 'zh' ? '发送' : 'Send';
   String get taskAssigned => locale == 'zh' ? '任务已分配!' : 'Task assigned!';
+  String get taskSent => locale == 'zh' ? '任务已发送...' : 'Task sent...';
 
   String get dashboard => locale == 'zh' ? '仪表盘' : 'Dashboard';
 }

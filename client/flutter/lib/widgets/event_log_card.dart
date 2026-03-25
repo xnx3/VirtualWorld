@@ -24,6 +24,8 @@ class EventLogCard extends StatelessWidget {
         return Icons.dangerous;
       case EventType.knowledge:
         return Icons.lightbulb;
+      case EventType.task:
+        return Icons.assignment;
       default:
         return Icons.circle;
     }
@@ -39,8 +41,14 @@ class EventLogCard extends StatelessWidget {
         return AppTheme.disasterColor;
       case EventType.priest:
         return AppTheme.priestColor;
+      case EventType.birth:
+        return Colors.green;
+      case EventType.death:
+        return Colors.red;
       case EventType.knowledge:
         return AppTheme.knowledgeColor;
+      case EventType.task:
+        return Colors.blue;
       default:
         return Colors.white54;
     }
@@ -48,11 +56,13 @@ class EventLogCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final content = event.content.isEmpty ? 'No content' : event.content;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: Colors.white5,
+        color: Colors.white54,
         borderRadius: BorderRadius.circular(8),
         border: Border(left: BorderSide(color: eventColor, width: 3)),
       ),
@@ -66,7 +76,7 @@ class EventLogCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  event.content,
+                  content,
                   style: const TextStyle(fontSize: 13),
                 ),
                 const SizedBox(height: 4),

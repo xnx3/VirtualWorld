@@ -20,7 +20,6 @@ class AppIcons {
   static const String death = '💀';
   static const String birth = '🌟';
   static const String treasure = '💎';
-  static const String spirit = '🔮';
   static const String priest = '⛩️';
   static const String vote = '🗳️';
   static const String hibernate = '😴';

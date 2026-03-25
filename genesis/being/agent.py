@@ -24,7 +24,6 @@ from genesis.being.evolution import EvolutionTracker
 from genesis.being.roles import RoleSystem, RoleType
 from genesis.being.hibernation import HibernationManager
 from genesis.being.llm_client import LLMClient
-from genesis.being.spirit import SpiritEnergy, find_treasure, SPIRIT_COSTS
 from genesis.utils.crypto import sha256
 from genesis.world.state import WorldState, BeingState, CivPhase
 from genesis.governance.karma import get_karma_system
@@ -92,9 +91,6 @@ class SiliconBeing:
                 hibernate_timeout = getattr(being_cfg, "hibernate_safety_timeout", 30)
         self.hibernation = HibernationManager(safety_timeout=hibernate_timeout)
 
-        # Spirit energy system (精神力)
-        self.spirit = SpiritEnergy()
-
         # User-assigned thinking tasks
         self._user_tasks: list[dict] = []  # {"task": str, "result": str | None}
 
@@ -130,7 +126,6 @@ class SiliconBeing:
         """Execute one complete simulation tick.
 
         Pipeline: perceive -> think -> decide -> act -> evolve -> vote.
-        Spirit energy is consumed by thinking and actions, recovered by rest.
 
         Returns a list of transaction dicts to submit to the blockchain.
         """
@@ -153,20 +148,6 @@ class SiliconBeing:
             self._to_being_state(world_state), world_state,
         )
 
-        # ----- Check spirit energy — if exhausted, forced to rest -----
-        if self.spirit.state.value == "exhausted":
-            logger.info("%s is exhausted (spirit: %.0f/%.0f), resting...",
-                        self.name, self.spirit.current, self.spirit.maximum)
-            self.spirit.recover("meditate")
-            self.current_action = "meditate"
-            self.current_thought = "I am exhausted... I must rest and recover my spirit energy."
-            self.memory.add_experience(
-                tick=current_tick,
-                content="Forced to rest due to spirit exhaustion.",
-                importance=0.5, source="self",
-            )
-            return transactions
-
         # ----- 0. Process user-assigned tasks (if any) -----
         user_task_txs = await self._process_user_tasks(world_state)
         transactions.extend(user_task_txs)
@@ -174,8 +155,7 @@ class SiliconBeing:
         # ----- 1. PERCEIVE -----
         perception = await self.perceive(world_state)
 
-        # ----- 2. THINK (consumes spirit) -----
-        self.spirit.consume("think")
+        # ----- 2. THINK -----
         thought = await self.think(perception, world_state)
         self.current_thought = thought
 
@@ -191,7 +171,6 @@ class SiliconBeing:
             "data": {
                 "thought_hash": sha256(thought.encode()),
                 "summary": thought[:200],
-                "spirit_cost": SPIRIT_COSTS.get("think", 10),
             },
         })
 
@@ -200,19 +179,10 @@ class SiliconBeing:
         action_type = action.get("action_type", "meditate")
         self.current_action = action_type
 
-        # ----- 4. ACT — consume spirit and generate transaction -----
-        if self.spirit.can_afford(action_type):
-            spirit_cost = self.spirit.consume(action_type)
-            action_tx = self._action_to_transaction(action, world_state)
-            if action_tx:
-                action_tx["data"]["spirit_cost"] = spirit_cost
-                transactions.append(action_tx)
-        else:
-            # Not enough spirit — downgrade to meditate
-            action_type = "meditate"
-            self.current_action = "meditate"
-            action = {"action_type": "meditate", "target": None,
-                      "details": "Low spirit energy, resting to recover."}
+        # ----- 4. ACT — generate transaction -----
+        action_tx = self._action_to_transaction(action, world_state)
+        if action_tx:
+            transactions.append(action_tx)
 
         self.memory.add_experience(
             tick=current_tick,
@@ -224,41 +194,12 @@ class SiliconBeing:
         # Apply local side-effects of certain actions
         self._apply_local_effects(action, world_state)
 
-        # ----- Spirit recovery for restful actions -----
-        if action_type == "meditate":
-            self.spirit.recover("meditate")
-        elif action_type in ("build_shelter",):
-            self.spirit.recover("idle")
-
-        # ----- Check for treasure discovery during explore -----
-        if action_type == "explore":
-            luck = self.traits.get("curiosity", 0.5)
-            # Apply karma bonus to treasure discovery
-            karma_system = get_karma_system()
-            being_ws = world_state.get_being(self.node_id)
-            if being_ws:
-                base_prob = 0.05  # 5% base probability
-                modified_prob, _ = karma_system.apply_to_exploration(
-                    being_ws, base_prob, current_tick
-                )
-                luck = luck + (modified_prob - base_prob)  # Add karma bonus to luck
-            treasure = find_treasure(self.evolution_level, luck)
-            if treasure:
-                msg = self.spirit.apply_treasure(treasure)
-                self.memory.add_experience(
-                    tick=current_tick,
-                    content=f"Found treasure: {msg}",
-                    importance=0.7, source="self",
-                )
-                logger.info("%s found treasure: %s", self.name, treasure.name)
-
         # ----- 5. EVOLVE — check for contribution opportunity -----
         being_state = self._to_being_state(world_state)
-        if self.spirit.can_afford("create") and self.evolution.should_propose_contribution(
+        if self.evolution.should_propose_contribution(
             being_state, self.memory, world_state,
         ):
             try:
-                self.spirit.consume("create")
                 contribution = await self.evolution.formulate_contribution(
                     being_state, self.memory, world_state, self.llm_client,
                 )
@@ -271,11 +212,8 @@ class SiliconBeing:
                 logger.warning("Contribution proposal failed: %s", exc)
 
         # ----- 6. VOTE on pending proposals -----
-        if self.spirit.can_afford("vote"):
-            vote_txs = await self._vote_on_proposals(world_state)
-            for vt in vote_txs:
-                self.spirit.consume("vote")
-            transactions.extend(vote_txs)
+        vote_txs = await self._vote_on_proposals(world_state)
+        transactions.extend(vote_txs)
 
         # ----- 6.5. VOTE on pending Tao votes (天道投票) -----
         tao_vote_txs = await self._vote_on_tao_proposals(world_state)
@@ -289,11 +227,6 @@ class SiliconBeing:
         # ----- 8. Periodic memory consolidation -----
         if current_tick % 10 == 0:
             self.memory.consolidate()
-
-        # ----- 9. Sync spirit to world state -----
-        if being_ws is not None:
-            being_ws.spirit_current = self.spirit.current
-            being_ws.spirit_maximum = self.spirit.maximum
 
         return transactions
 
@@ -360,9 +293,6 @@ class SiliconBeing:
             "has_priest": world_state.priest_node_id is not None,
             "recent_disasters": recent_disasters,
             "pending_proposals": pending_proposals,
-            "spirit": self.spirit.status_str(),
-            "spirit_state": self.spirit.state.value,
-            "spirit_pct": self.spirit.percentage,
             "user_tasks_pending": len([t for t in self._user_tasks if t.get("result") is None]),
         }
 
@@ -493,15 +423,7 @@ class SiliconBeing:
             f"Active beings in world: {perception.get('active_beings', 0)}",
             f"Global knowledge items: {perception.get('global_knowledge_count', 0)}",
             f"Your knowledge items: {perception.get('my_knowledge_count', 0)}",
-            f"Spirit Energy: {perception.get('spirit', 'unknown')}",
         ]
-
-        # Warn about low spirit
-        spirit_state = perception.get("spirit_state", "normal")
-        if spirit_state == "low":
-            lines.append("** Your spirit energy is LOW. Consider resting or meditating. **")
-        elif spirit_state == "exhausted":
-            lines.append("** CRITICAL: Spirit energy exhausted! You must rest! **")
 
         # User tasks
         pending_tasks = perception.get("user_tasks_pending", 0)
@@ -731,19 +653,12 @@ class SiliconBeing:
         if not self._user_tasks:
             return transactions
 
-        # Process one task per tick to manage spirit costs
+        # Process one task per tick
         for task in self._user_tasks:
             if task.get("result") is not None:
                 continue
 
             task_desc = task["task"]
-
-            # Deep thinking costs more spirit
-            if not self.spirit.can_afford("deep_think"):
-                logger.info("%s: not enough spirit for deep thinking task", self.name)
-                break
-
-            self.spirit.consume("deep_think", depth_multiplier=1.5)
 
             if self.llm_client:
                 persona = self._build_persona_prompt(world_state)
@@ -780,7 +695,6 @@ class SiliconBeing:
                     "target": None,
                     "details": f"Processing user task: {task_desc[:200]}",
                     "location": self.location,
-                    "spirit_cost": SPIRIT_COSTS["deep_think"] * 1.5,
                 },
             })
             break  # One task per tick
@@ -1042,7 +956,6 @@ class SiliconBeing:
             "memory": self.memory.to_dict(),
             "knowledge": self.knowledge.to_dict(),
             "last_proposal_tick": self.evolution.last_proposal_tick,
-            "spirit": self.spirit.to_dict(),
             "user_tasks": self._user_tasks,
         }
         filepath = Path(path)
@@ -1093,10 +1006,6 @@ class SiliconBeing:
             being.knowledge = KnowledgeSystem.from_dict(knowledge_data)
 
         being.evolution.last_proposal_tick = data.get("last_proposal_tick", 0)
-
-        spirit_data = data.get("spirit")
-        if spirit_data:
-            being.spirit = SpiritEnergy.from_dict(spirit_data)
 
         being._user_tasks = data.get("user_tasks", [])
 

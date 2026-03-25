@@ -327,7 +327,6 @@ class GenesisNode:
             self.world_state.priest_node_id,
             self.world_state.creator_god_node_id,
         )
-        con.spirit_update(self.being.spirit.current, self.being.spirit.maximum, "init")
 
         # Start main loop
         await self._main_loop()
@@ -354,7 +353,6 @@ class GenesisNode:
                 con.tick_header(
                     self.world_state.current_tick,
                     self.being.name,
-                    self.being.spirit.status_str(),
                     self.world_state.phase.value,
                 )
 
@@ -377,9 +375,7 @@ class GenesisNode:
                 )
 
                 # === RUN TICK ===
-                old_spirit = self.being.spirit.current
                 transactions = await self.being.run_tick(self.world_state)
-                new_spirit = self.being.spirit.current
 
                 # === CONSOLE: THINK ===
                 if self.being.current_thought:
@@ -398,20 +394,6 @@ class GenesisNode:
                         None,
                         action_detail,
                     )
-
-                # === CONSOLE: SPIRIT ===
-                spirit_cost = max(0, old_spirit - new_spirit) if old_spirit > new_spirit else 0
-                spirit_gain = max(0, new_spirit - old_spirit) if new_spirit > old_spirit else 0
-                con.spirit_update(
-                    self.being.spirit.current,
-                    self.being.spirit.maximum,
-                    self.being.current_action or "",
-                    spirit_cost, spirit_gain,
-                )
-
-                # === CONSOLE: Exhaustion ===
-                if self.being.spirit.state.value == "exhausted":
-                    con.exhausted(self.being.name)
 
                 # === CONSOLE: Votes ===
                 for tx in transactions:
@@ -564,8 +546,6 @@ class GenesisNode:
                     "tick": self.world_state.current_tick if self.world_state else 0,
                     "being_name": getattr(self.being, 'name', '') if self.being else '',
                     "phase": self.world_state.phase.value if self.world_state else '',
-                    "spirit_current": getattr(self.being.spirit, 'current', 0) if self.being and hasattr(self.being, 'spirit') else 0,
-                    "spirit_max": getattr(self.being.spirit, 'maximum', 1000) if self.being and hasattr(self.being, 'spirit') else 1000,
                     "is_running": not self._shutdown,
                 }
 

@@ -11,8 +11,8 @@ llm:
   #   Ollama:    http://localhost:11434/v1
   #   GiteeAI:   https://ai.gitee.com/v1
   base_url: "https://ai.gitee.com/v1"
-  api_key: "0V0WBTOKJMVKFAXY8L6Y7BYNR90F4T07AJ6HRX1F"  # Leave empty for local models
-  model: "GLM-5-Turbo"  # Model name
+  api_key: ""  # Leave empty for local models
+  model: "Qwen3.5-122B-A10B"  # Model name
   max_tokens: 100000
   temperature: 0.8
 
@@ -20,7 +20,8 @@ llm:
 network:
   listen_port: 19841          # TCP port for P2P connections
   discovery_port: 19840       # UDP port for LAN discovery
-  bootstrap_nodes: []         # List of bootstrap node addresses ["host:port"]
+  bootstrap_nodes:            # Bootstrap server addresses for global node discovery
+    - "http://45.205.24.48:8760"
   max_peers: 50               # Maximum peer connections
   discovery_interval: 30      # Seconds between LAN broadcasts
 

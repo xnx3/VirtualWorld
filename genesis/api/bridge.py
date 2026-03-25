@@ -72,12 +72,11 @@ def _bridge_structured_events(con, broadcast_event: Callable) -> None:
 
     # 保存并桥接 tick_header
     _original_functions['tick_header'] = con.tick_header
-    def bridged_tick_header(tick: int, being_name: str, spirit_str: str, phase: str) -> None:
-        _original_functions['tick_header'](tick, being_name, spirit_str, phase)
+    def bridged_tick_header(tick: int, being_name: str, phase: str) -> None:
+        _original_functions['tick_header'](tick, being_name, phase)
         broadcast_event("tick", {
             "tick": tick,
             "being_name": being_name,
-            "spirit": spirit_str,
             "phase": phase
         })
     con.tick_header = bridged_tick_header
@@ -103,19 +102,6 @@ def _bridge_structured_events(con, broadcast_event: Callable) -> None:
             "details": details
         })
     con.decide = bridged_decide
-
-    # 保存并桥接 spirit_update
-    _original_functions['spirit_update'] = con.spirit_update
-    def bridged_spirit_update(current: float, maximum: float, action: str, cost: float = 0, recovered: float = 0) -> None:
-        _original_functions['spirit_update'](current, maximum, action, cost, recovered)
-        broadcast_event("spirit", {
-            "current": current,
-            "maximum": maximum,
-            "action": action,
-            "cost": cost,
-            "recovered": recovered
-        })
-    con.spirit_update = bridged_spirit_update
 
     # 保存并桥接 disaster_event
     _original_functions['disaster_event'] = con.disaster_event

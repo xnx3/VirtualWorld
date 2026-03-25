@@ -5,14 +5,12 @@ import '../core/theme/app_theme.dart';
 class TickCard extends StatelessWidget {
   final int tick;
   final String beingName;
-  final String spirit;
   final String phase;
 
   const TickCard({
     super.key,
     required this.tick,
     required this.beingName,
-    required this.spirit,
     required this.phase,
   });
 
@@ -59,22 +57,6 @@ class TickCard extends StatelessWidget {
                         ),
                   ),
                 ],
-              ),
-            ),
-
-            // 精神力状态
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.white12,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                spirit,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Colors.white70,
-                ),
               ),
             ),
           ],

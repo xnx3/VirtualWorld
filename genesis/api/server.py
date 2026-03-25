@@ -108,7 +108,7 @@ def broadcast_event(event_type: str, data: dict[str, Any]) -> None:
     """广播事件给所有连接的客户端
 
     Args:
-        event_type: 事件类型 (tick, think, action, spirit, disaster等)
+        event_type: 事件类型 (tick, think, action, disaster等)
         data: 事件数据
     """
     if not _clients:

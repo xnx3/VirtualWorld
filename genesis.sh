@@ -156,7 +156,7 @@ start() {
     # 构建启动参数
     API_ARGS=""
     if [ "${ENABLE_API:-false}" = "true" ]; then
-        API_HOST="${API_HOST:-127.0.0.1}"
+        API_HOST="${API_HOST:-0.0.0.0}"
         API_PORT="${API_PORT:-19842}"
         API_ARGS="--api --api-host $API_HOST --api-port $API_PORT"
         echo -e "${CYAN}API server enabled: ws://${API_HOST}:${API_PORT}${NC}"
@@ -279,12 +279,13 @@ case "${1:-}" in
         echo "  lang    - Set language (en/zh)"
         echo "            Example: genesis.sh lang zh"
         echo ""
-        echo "Environment variables for API server:"
-        echo "  ENABLE_API=true    - Enable WebSocket API for GUI/remote access"
-        echo "  API_HOST=0.0.0.0   - Listen on all interfaces (default: 127.0.0.1)"
-        echo "  API_PORT=19842     - API port (default: 19842)"
+        echo "API options for 'start' command:"
+        echo "  --api              - Enable WebSocket API for GUI/remote access"
+        echo "  --api-host HOST    - API listen host (default: 0.0.0.0)"
+        echo "  --api-port PORT    - API port (default: 19842)"
         echo ""
-        echo "Example: ENABLE_API=true API_HOST=0.0.0.0 ./genesis.sh start"
+        echo "Example: ./genesis.sh start --api"
+        echo "         ./genesis.sh start --api --api-host 0.0.0.0 --api-port 19842"
         exit 1
         ;;
 esac

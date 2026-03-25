@@ -88,10 +88,6 @@ EN: dict[str, str] = {
     "action_deep_think": "Deep Think",
     "target": "Target",
 
-    # --- Console: spirit ---
-    "spirit_label": "Spirit",
-    "spirit_exhausted": "{name} spirit exhausted, forced to rest...",
-
     # --- Console: treasure ---
     "treasure_found": "Treasure Found: {name}",
 
@@ -162,13 +158,6 @@ EN: dict[str, str] = {
     # --- Tick header ---
     "tick_label": "Tick",
     "phase_label": "Phase",
-    "spirit_label": "Spirit",
-
-    # --- Spirit states ---
-    "spirit_full": "full",
-    "spirit_normal": "normal",
-    "spirit_low": "low",
-    "spirit_exhausted": "exhausted",
 
     # --- Civilization phases ---
     "phase_human_sim": "Human Sim",
@@ -366,10 +355,6 @@ ZH: dict[str, str] = {
     "action_deep_think": "深度思考",
     "target": "目标",
 
-    # --- Console: spirit ---
-    "spirit_label": "精神力",
-    "spirit_exhausted": "{name} 精神力耗尽，强制休息中...",
-
     # --- Console: treasure ---
     "treasure_found": "发现宝物: {name}",
 
@@ -441,13 +426,6 @@ ZH: dict[str, str] = {
     # --- Tick header ---
     "tick_label": "刻",
     "phase_label": "阶段",
-    "spirit_label": "精神力",
-
-    # --- Spirit states ---
-    "spirit_full": "充盈",
-    "spirit_normal": "正常",
-    "spirit_low": "低落",
-    "spirit_exhausted": "枯竭",
 
     # --- Civilization phases ---
     "phase_human_sim": "人类模拟",
