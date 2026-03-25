@@ -213,13 +213,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       : (loc?.disconnected ?? 'Disconnected'),
                   style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 8),
-
-                // 服务器地址
-                Text(
-                  '${ws.serverUrl}:${ws.serverPort}',
-                  style: const TextStyle(color: Colors.white60, fontSize: 12),
-                ),
                 const SizedBox(height: 16),
 
                 // 错误信息
@@ -262,7 +255,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       CircularProgressIndicator(),
                       SizedBox(height: 16),
-                      Text('正在尝试连接...',
+                      Text('正在连接本地服务...',
                           style: TextStyle(color: Colors.white60, fontSize: 12)),
                     ],
                   )
@@ -275,15 +268,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                     ),
                   ),
-
-                const SizedBox(height: 24),
-
-                // 设置入口
-                TextButton.icon(
-                  onPressed: () => Navigator.pushNamed(context, '/settings'),
-                  icon: const Icon(Icons.settings, size: 18),
-                  label: const Text('检查服务器设置'),
-                ),
               ],
             ),
           ),

@@ -66,7 +66,7 @@ class WebSocketService with ChangeNotifier {
 
     // 检查服务器地址是否有效
     if (_serverUrl.isEmpty) {
-      _lastError = '请先配置服务器地址\n\n点击下方"检查服务器设置"\n输入运行Genesis服务的电脑IP地址';
+      _lastError = '服务器地址未配置';
       notifyListeners();
       return false;
     }
@@ -119,18 +119,16 @@ class WebSocketService with ChangeNotifier {
     if (error.contains('Connection refused') ||
         error.contains('SocketException') ||
         error.contains('Failed host lookup')) {
-      return '无法连接到服务器\n'
-          '服务器: $_serverUrl:$_serverPort\n\n'
+      return '无法连接到本地 Genesis 服务\n\n'
           '请检查:\n'
           '1. Genesis 服务是否已启动\n'
-          '2. 服务器地址是否正确\n'
-          '3. 网络是否可达';
+          '2. 应用是否正常运行';
     }
     if (error.contains('timed out') || error.contains('TimeoutException')) {
-      return '连接超时\n请检查网络连接或服务器状态';
+      return '连接超时\n请检查服务状态';
     }
     if (error.contains('No address associated')) {
-      return '无法解析服务器地址\n请检查地址是否正确';
+      return '无法解析服务器地址';
     }
     return '连接失败: $error';
   }
