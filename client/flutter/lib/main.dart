@@ -5,8 +5,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'services/app_state.dart';
 import 'services/websocket_service.dart';
+import 'services/log_service.dart';
 import 'screens/home_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/log_screen.dart';
 import 'core/theme/app_theme.dart';
 import 'l10n/app_localizations.dart';
 
@@ -48,6 +50,9 @@ class GenesisApp extends StatelessWidget {
         ChangeNotifierProvider(
           create: (_) => WebSocketService(host: initialHost, port: initialPort),
         ),
+        ChangeNotifierProvider(
+          create: (_) => LogService(),
+        ),
       ],
       child: Consumer<AppState>(
         builder: (context, appState, _) {
@@ -77,6 +82,7 @@ class GenesisApp extends StatelessWidget {
             home: const HomeScreen(),
             routes: {
               '/settings': (context) => const SettingsScreen(),
+              '/logs': (context) => const LogScreen(),
             },
           );
         },

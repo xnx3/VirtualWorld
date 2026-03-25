@@ -55,6 +55,13 @@ class AppLocalizations {
   String get taskSent => locale == 'zh' ? '任务已发送...' : 'Task sent...';
 
   String get dashboard => locale == 'zh' ? '仪表盘' : 'Dashboard';
+
+  String get logs => locale == 'zh' ? '日志' : 'Logs';
+  String get clearLogs => locale == 'zh' ? '清空日志' : 'Clear Logs';
+  String get copyAll => locale == 'zh' ? '复制全部' : 'Copy All';
+  String get searchLogs => locale == 'zh' ? '搜索日志...' : 'Search logs...';
+  String get noLogs => locale == 'zh' ? '暂无日志' : 'No logs';
+  String get logsCopied => locale == 'zh' ? '日志已复制到剪贴板' : 'Logs copied to clipboard';
 }
 
 class AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {

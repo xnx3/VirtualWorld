@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../services/app_state.dart';
 import '../services/websocket_service.dart';
+import '../services/log_service.dart';
 import '../widgets/widgets.dart';
 import '../l10n/app_localizations.dart';
 
@@ -59,15 +60,21 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final ws = context.read<WebSocketService>();
     final state = context.read<AppState>();
+    final logService = context.read<LogService>();
+
+    logService.info('正在连接本地服务...', source: 'flutter');
 
     final connected = await ws.connect();
 
     if (!mounted) return;
 
     if (connected) {
+      logService.info('连接成功', source: 'flutter');
       // Event listener is set up via connectionChanges stream in _setupConnectionListener
       // Only set running state here; avoid duplicate _setupEventListener call
       state.setRunning(true);
+    } else {
+      logService.error('连接失败: ${ws.lastError ?? "未知错误"}', source: 'flutter');
     }
   }
 
@@ -172,6 +179,14 @@ class _HomeScreenState extends State<HomeScreen> {
             onTap: () => Navigator.pop(context),
           ),
           const Divider(),
+          ListTile(
+            leading: const Icon(Icons.article_outlined),
+            title: const Text('日志'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.pushNamed(context, '/logs');
+            },
+          ),
           ListTile(
             leading: const Icon(Icons.settings),
             title: Text(loc?.settings ?? 'Settings'),
