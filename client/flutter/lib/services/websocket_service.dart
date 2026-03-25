@@ -14,8 +14,8 @@ class WebSocketService with ChangeNotifier {
   int _serverPort;
   String? _lastError;
 
-  // 预设服务器配置 - 默认服务器地址
-  static const String defaultHost = '192.168.31.250';
+  // 预设服务器配置 - APK 内置 Genesis 后端，连接本地
+  static const String defaultHost = '127.0.0.1';
   static const int defaultPort = 19842;
 
   // 重连配置

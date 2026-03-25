@@ -153,7 +153,7 @@ class GenesisNode:
         # 优先从配置文件读取 api_key，否则从环境变量读取
         api_key = self.config.llm.api_key and self.config.llm.api_key.strip()
         if not api_key:
-            api_key = os.environ.get("Genesis-openai-key", "").strip()
+            api_key = os.environ.get("GENESIS_OPENAI_KEY", "").strip()
 
         if api_key:
             try:
