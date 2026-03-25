@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/app_state.dart';
-import '../services/termux_service.dart';
 import '../l10n/app_localizations.dart';
 
 /// 设置界面
