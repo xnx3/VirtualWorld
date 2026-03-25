@@ -14,8 +14,8 @@ class WebSocketService with ChangeNotifier {
   int _serverPort;
   String? _lastError;
 
-  // 预设服务器配置 - 空值表示首次使用需要用户配置
-  static const String defaultHost = '';
+  // 预设服务器配置 - 默认服务器地址
+  static const String defaultHost = '192.168.31.250';
   static const int defaultPort = 19842;
 
   // 重连配置
