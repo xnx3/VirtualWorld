@@ -16,6 +16,7 @@ class AppLocalizations {
 
   // 常用字符串
   String get appName => locale == 'zh' ? '创世' : 'Genesis';
+  String get appDesc => locale == 'zh' ? '硅基文明' : 'Silicon Civilization';
 
   String get start => locale == 'zh' ? '启动' : 'Start';
   String get stop => locale == 'zh' ? '停止' : 'Stop';
@@ -33,15 +34,27 @@ class AppLocalizations {
   String get settings => locale == 'zh' ? '设置' : 'Settings';
   String get connection => locale == 'zh' ? '连接' : 'Connection';
   String get language => locale == 'zh' ? '语言' : 'Language';
+  String get about => locale == 'zh' ? '关于' : 'About';
 
   String get running => locale == 'zh' ? '运行中' : 'Running';
   String get stopped => locale == 'zh' ? '已停止' : 'Stopped';
   String get connected => locale == 'zh' ? '已连接' : 'Connected';
   String get disconnected => locale == 'zh' ? '未连接' : 'Disconnected';
+  String get connecting => locale == 'zh' ? '连接中...' : 'Connecting...';
 
   String get eventLog => locale == 'zh' ? '事件日志' : 'Event Log';
   String get chronicle => locale == 'zh' ? '编年史' : 'Chronicle';
   String get world => locale == 'zh' ? '世界' : 'World';
+
+  String get serverAddress => locale == 'zh' ? '服务器地址' : 'Server Address';
+  String get port => locale == 'zh' ? '端口' : 'Port';
+  String get connect => locale == 'zh' ? '连接' : 'Connect';
+  String get retryConnection => locale == 'zh' ? '重试连接' : 'Retry Connection';
+  String get cancel => locale == 'zh' ? '取消' : 'Cancel';
+  String get send => locale == 'zh' ? '发送' : 'Send';
+  String get taskAssigned => locale == 'zh' ? '任务已分配!' : 'Task assigned!';
+
+  String get dashboard => locale == 'zh' ? '仪表盘' : 'Dashboard';
 }
 
 class AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {

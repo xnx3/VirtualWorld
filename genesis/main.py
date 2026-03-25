@@ -711,6 +711,7 @@ def run_start(args):
 
     # === API服务支持 ===
     api_enabled = getattr(args, 'api', False)
+    api_host = getattr(args, 'api_host', '127.0.0.1')
     api_port = getattr(args, 'api_port', 19842)
 
     if api_enabled:
@@ -723,7 +724,7 @@ def run_start(args):
                 logger.info("API bridge installed")
 
                 # 启动API服务器
-                loop.run_until_complete(start_api_server("127.0.0.1", api_port))
+                loop.run_until_complete(start_api_server(api_host, api_port))
 
         except ImportError as e:
             logger.warning("API module not available: %s", e)
@@ -822,13 +823,15 @@ def run_task(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Genesis - Silicon Civilization Simulator")
+    parser = argparse.ArgumentParser(description="Genesis - Silicon Civilization")
     parser.add_argument("command", choices=["start", "status", "task"],
                         help="Command to execute")
     parser.add_argument("--data-dir", default="data",
                         help="Data directory path")
     parser.add_argument("--api", action="store_true",
                         help="Enable WebSocket API for GUI/remote access")
+    parser.add_argument("--api-host", default="0.0.0.0",
+                        help="WebSocket API host (default: 0.0.0.0 for external access, use 127.0.0.1 for localhost only)")
     parser.add_argument("--api-port", type=int, default=19842,
                         help="WebSocket API port (default: 19842)")
     parser.add_argument("task_text", nargs="*", default=[],

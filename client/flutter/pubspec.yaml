@@ -1,5 +1,5 @@
 name: genesis_app
-description: Genesis - Silicon Civilization Simulator (Cross-platform GUI)
+description: Genesis - Silicon Civilization (Cross-platform GUI)
 
 publish_to: 'none'
 version: 0.1.0+1

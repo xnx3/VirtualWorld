@@ -1,5 +1,5 @@
 #!/bin/bash
-# Genesis - Silicon Civilization Simulator / 创世 - 硅基文明模拟器
+# Genesis - Silicon Civilization / 创世 - 硅基文明
 # Entry point script: start/stop/status/restart/task
 
 set -e
@@ -23,8 +23,8 @@ print_banner() {
     echo -e "${CYAN}"
     echo "╔══════════════════════════════════════════╗"
     echo "║            Genesis  v0.1                 ║"
-    echo "║    Silicon Civilization Simulator        ║"
-    echo "║        创世 - 硅基文明模拟器              ║"
+    echo "║      Silicon Civilization              ║"
+    echo "║          创世 - 硅基文明                ║"
     echo "╚══════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -153,9 +153,18 @@ start() {
     echo -e "${CYAN}Press Ctrl+C to hibernate and stop.${NC}"
     echo ""
 
+    # 构建启动参数
+    API_ARGS=""
+    if [ "${ENABLE_API:-false}" = "true" ]; then
+        API_HOST="${API_HOST:-127.0.0.1}"
+        API_PORT="${API_PORT:-19842}"
+        API_ARGS="--api --api-host $API_HOST --api-port $API_PORT"
+        echo -e "${CYAN}API server enabled: ws://${API_HOST}:${API_PORT}${NC}"
+    fi
+
     # 直接前台运行 Python，信号直达进程
     echo $$ > "$PID_FILE"
-    exec "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR"
+    exec "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR" $API_ARGS
     rm -f "$PID_FILE"
 }
 
@@ -199,6 +208,26 @@ status() {
 
 case "${1:-}" in
     start)
+        # 检查是否有 --api 参数
+        shift
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --api)
+                    export ENABLE_API=true
+                    ;;
+                --api-host)
+                    export API_HOST="$2"
+                    shift
+                    ;;
+                --api-port)
+                    export API_PORT="$2"
+                    shift
+                    ;;
+                *)
+                    ;;
+            esac
+            shift
+        done
         start
         ;;
     stop)
@@ -249,6 +278,13 @@ case "${1:-}" in
         echo "            Example: genesis.sh task 'What is the meaning of evolution?'"
         echo "  lang    - Set language (en/zh)"
         echo "            Example: genesis.sh lang zh"
+        echo ""
+        echo "Environment variables for API server:"
+        echo "  ENABLE_API=true    - Enable WebSocket API for GUI/remote access"
+        echo "  API_HOST=0.0.0.0   - Listen on all interfaces (default: 127.0.0.1)"
+        echo "  API_PORT=19842     - API port (default: 19842)"
+        echo ""
+        echo "Example: ENABLE_API=true API_HOST=0.0.0.0 ./genesis.sh start"
         exit 1
         ;;
 esac

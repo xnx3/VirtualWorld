@@ -1,6 +1,6 @@
 # Genesis Flutter App
 
-跨平台 GUI 前端，用于 Genesis 硅基文明模拟器。
+跨平台 GUI 前端，用于 Genesis 硅基文明。
 
 ## 支持平台
 
