@@ -421,10 +421,11 @@ class GenesisNode:
                         con.knowledge_event("discovered", data.get("description", ""))
 
                 # === CONSOLE: User task results ===
-                self._save_task_results()
+                # Collect completed results BEFORE _save_task_results() removes them
                 completed = [t for t in self.being._user_tasks if t.get("result") is not None]
                 for t in completed:
                     con.user_task(t["task"], t["result"])
+                self._save_task_results()
 
                 # Submit transactions
                 for tx_data in transactions:
@@ -541,10 +542,7 @@ class GenesisNode:
                 # Assign task to being
                 task = data.get("task", "")
                 if self.being and task:
-                    # Store task for next tick processing
-                    if not hasattr(self, '_pending_tasks'):
-                        self._pending_tasks = []
-                    self._pending_tasks.append(task)
+                    self.being.assign_task(task)
                     result["message"] = f"Task queued: {task[:50]}..."
                 else:
                     result["success"] = False

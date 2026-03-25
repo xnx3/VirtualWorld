@@ -58,19 +58,46 @@ async def _handle_command(websocket, data: dict):
                 "success": result.get("success", True),
                 "message": result.get("message", "")
             }))
+        else:
+            await websocket.send(json.dumps({
+                "type": "task_response",
+                "success": False,
+                "message": "Command handler not initialized"
+            }))
 
     elif cmd_type == "stop":
         # 停止节点
         if _on_command:
-            await _on_command("stop", {})
+            result = await _on_command("stop", {})
+            await websocket.send(json.dumps({
+                "type": "stop_response",
+                "success": result.get("success", True),
+                "message": result.get("message", "")
+            }))
+        else:
+            await websocket.send(json.dumps({
+                "type": "stop_response",
+                "success": False,
+                "message": "Command handler not initialized"
+            }))
 
     elif cmd_type == "status":
         # 获取状态
         if _on_command:
-            status = await _on_command("status", {})
+            result = await _on_command("status", {})
+            # result 包含 success, message, data
             await websocket.send(json.dumps({
                 "type": "status",
-                "data": status
+                "data": result.get("data", {}),
+                "success": result.get("success", True),
+                "message": result.get("message", "")
+            }))
+        else:
+            await websocket.send(json.dumps({
+                "type": "status",
+                "data": {},
+                "success": False,
+                "message": "Command handler not initialized"
             }))
 
     else:
@@ -96,10 +123,16 @@ def broadcast_event(event_type: str, data: dict[str, Any]) -> None:
     for client in list(_clients):
         try:
             if _loop and not _loop.is_closed():
-                asyncio.run_coroutine_threadsafe(
+                future = asyncio.run_coroutine_threadsafe(
                     client.send(message),
                     _loop
                 )
+                # Observe the future to detect and remove dead clients
+                def _on_send_done(fut, c=client):
+                    if fut.exception():
+                        logger.debug("Broadcast send failed, removing client: %s", fut.exception())
+                        _clients.discard(c)
+                future.add_done_callback(_on_send_done)
         except Exception as e:
             logger.debug("Broadcast error: %s", e)
             _clients.discard(client)
@@ -139,7 +172,7 @@ async def start_api_server(
 
 async def stop_api_server() -> None:
     """停止WebSocket API服务器"""
-    global _server
+    global _server, _loop, _on_command
 
     if _server:
         _server.close()
@@ -147,3 +180,6 @@ async def stop_api_server() -> None:
         logger.info("API server stopped")
 
     _clients.clear()
+    _server = None
+    _loop = None
+    _on_command = None

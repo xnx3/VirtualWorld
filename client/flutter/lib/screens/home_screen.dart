@@ -18,6 +18,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final _taskController = TextEditingController();
   StreamSubscription? _eventSubscription;
+  StreamSubscription? _connectionSubscription;
   bool _initialized = false;
 
   @override
@@ -25,29 +26,60 @@ class _HomeScreenState extends State<HomeScreen> {
     super.didChangeDependencies();
     if (!_initialized) {
       _initialized = true;
+      // 监听连接状态变化
+      _setupConnectionListener();
       // 延迟连接，避免在 build 中调用
       Future.microtask(() => _connectToBackend());
     }
   }
 
+  void _setupConnectionListener() {
+    final ws = context.read<WebSocketService>();
+    _connectionSubscription = ws.connectionChanges.listen((connected) {
+      if (connected && mounted) {
+        _setupEventListener();
+        context.read<AppState>().setRunning(true);
+      } else if (!connected && mounted) {
+        context.read<AppState>().setRunning(false);
+      }
+    });
+  }
+
+  void _setupEventListener() {
+    _eventSubscription?.cancel();
+    final ws = context.read<WebSocketService>();
+    final state = context.read<AppState>();
+    _eventSubscription = ws.events.listen((event) {
+      state.handleServerEvent(event);
+    });
+  }
+
   Future<void> _connectToBackend() async {
+    if (!mounted) return;
+
     final ws = context.read<WebSocketService>();
     final state = context.read<AppState>();
 
-    // 尝试连接
     final connected = await ws.connect();
-    if (connected && mounted) {
-      // 监听事件
-      _eventSubscription = ws.events.listen((event) {
-        state.handleServerEvent(event);
-      });
+
+    if (!mounted) return;
+
+    if (connected) {
+      // Event listener is set up via connectionChanges stream in _setupConnectionListener
+      // Only set running state here; avoid duplicate _setupEventListener call
       state.setRunning(true);
     }
+  }
+
+  Future<void> _retryConnect() async {
+    final ws = context.read<WebSocketService>();
+    await ws.retryConnect();
   }
 
   @override
   void dispose() {
     _eventSubscription?.cancel();
+    _connectionSubscription?.cancel();
     _taskController.dispose();
     super.dispose();
   }
@@ -76,10 +108,11 @@ class _HomeScreenState extends State<HomeScreen> {
     return AppBar(
       title: Row(
         children: [
-          Text(loc?.appName ?? 'Genesis', style: const TextStyle(fontWeight: FontWeight.bold)),
+          Text(loc?.appName ?? 'Genesis',
+              style: const TextStyle(fontWeight: FontWeight.bold)),
           const SizedBox(width: 8),
           Text(loc?.appName == '创世' ? 'Genesis' : '创世',
-            style: const TextStyle(fontSize: 14, color: Colors.white60)),
+              style: const TextStyle(fontSize: 14, color: Colors.white60)),
         ],
       ),
       actions: [
@@ -92,9 +125,8 @@ class _HomeScreenState extends State<HomeScreen> {
             return Container(
               margin: const EdgeInsets.only(right: 8),
               child: Chip(
-                label: Text(state.isRunning
-                  ? (loc?.running ?? 'Running')
-                  : (loc?.stopped ?? 'Stopped')),
+                label: Text(
+                    state.isRunning ? (loc?.running ?? 'Running') : (loc?.stopped ?? 'Stopped')),
                 backgroundColor: state.isRunning ? Colors.green : Colors.red,
                 labelStyle: const TextStyle(color: Colors.white, fontSize: 12),
               ),
@@ -116,10 +148,10 @@ class _HomeScreenState extends State<HomeScreen> {
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 Text(loc?.appName ?? 'Genesis',
-                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
                 Text(loc?.appDesc ?? 'Silicon Civilization',
-                  style: const TextStyle(color: Colors.white70)),
+                    style: const TextStyle(color: Colors.white70)),
               ],
             ),
           ),
@@ -154,45 +186,109 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildDisconnectedState(AppLocalizations? loc) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.cloud_off, size: 64, color: Colors.white30),
-          const SizedBox(height: 16),
-          Text(loc?.disconnected ?? 'Disconnected'),
-          const SizedBox(height: 8),
-          Text(
-            loc?.appDesc ?? 'Check server connection',
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white60, fontSize: 12),
-          ),
-          const SizedBox(height: 24),
-          Consumer<WebSocketService>(
-            builder: (context, ws, _) {
-              if (ws.isReconnecting) {
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+    return Consumer<WebSocketService>(
+      builder: (context, ws, _) {
+        return Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // 图标
+                Icon(
+                  ws.isConnecting || ws.isReconnecting
+                      ? Icons.cloud_sync
+                      : Icons.cloud_off,
+                  size: 64,
+                  color: ws.isConnecting || ws.isReconnecting
+                      ? Colors.orange
+                      : Colors.red.withOpacity(0.7),
+                ),
+                const SizedBox(height: 16),
+
+                // 状态文字
+                Text(
+                  ws.isConnecting || ws.isReconnecting
+                      ? (loc?.connecting ?? 'Connecting...')
+                      : (loc?.disconnected ?? 'Disconnected'),
+                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+
+                // 服务器地址
+                Text(
+                  '${ws.serverUrl}:${ws.serverPort}',
+                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+                ),
+                const SizedBox(height: 16),
+
+                // 错误信息
+                if (ws.lastError != null && !ws.isConnecting && !ws.isReconnecting) ...[
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.red.withOpacity(0.3)),
                     ),
-                    const SizedBox(width: 12),
-                    Text(loc?.connecting ?? 'Connecting...'),
-                  ],
-                );
-              }
-              return ElevatedButton.icon(
-                onPressed: _connectToBackend,
-                icon: const Icon(Icons.refresh),
-                label: Text(loc?.retryConnection ?? 'Retry Connection'),
-              );
-            },
+                    child: Column(
+                      children: [
+                        const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.error_outline, color: Colors.orange, size: 20),
+                            SizedBox(width: 8),
+                            Text('连接失败',
+                                style: TextStyle(
+                                    color: Colors.orange, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          ws.lastError!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white70, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                ],
+
+                // 重试按钮或加载指示器
+                if (ws.isConnecting || ws.isReconnecting)
+                  const Column(
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 16),
+                      Text('正在尝试连接...',
+                          style: TextStyle(color: Colors.white60, fontSize: 12)),
+                    ],
+                  )
+                else
+                  ElevatedButton.icon(
+                    onPressed: _retryConnect,
+                    icon: const Icon(Icons.refresh),
+                    label: Text(loc?.retryConnection ?? 'Retry Connection'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    ),
+                  ),
+
+                const SizedBox(height: 24),
+
+                // 设置入口
+                TextButton.icon(
+                  onPressed: () => Navigator.pushNamed(context, '/settings'),
+                  icon: const Icon(Icons.settings, size: 18),
+                  label: const Text('检查服务器设置'),
+                ),
+              ],
+            ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -316,7 +412,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 _taskController.clear();
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(loc?.taskAssigned ?? 'Task assigned!')),
+                  SnackBar(
+                    content: Text(loc?.taskSent ?? 'Task sent to server...'),
+                    duration: const Duration(seconds: 2),
+                  ),
                 );
               }
             },
