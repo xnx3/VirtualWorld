@@ -25,3 +25,23 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+*.iml
+
+# Android
+.gradle/
+gradle/
+gradlew
+gradlew.bat
+local.properties
+*.apk
+*.aab
+
+# Flutter build artifacts
+build/
+*.tar.gz
