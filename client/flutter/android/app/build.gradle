@@ -60,6 +60,33 @@ android {
     }
 }
 
+// 复制 Genesis 文件到 assets
+task copyGenesisAssets(type: Copy) {
+    description = 'Copy Genesis backend files to Android assets'
+    from '../../../genesis'
+    into 'src/main/assets/genesis'
+    exclude '**/__pycache__/**'
+    exclude '**/*.pyc'
+}
+
+task copyTermuxScripts(type: Copy) {
+    description = 'Copy Termux scripts to Android assets'
+    from '../../../termux'
+    into 'src/main/assets'
+    include 'start_genesis.sh'
+    include 'install.sh'
+}
+
+task copyConfigExample(type: Copy) {
+    description = 'Copy config example to Android assets'
+    from '../../../config.yaml.example'
+    into 'src/main/assets'
+}
+
+preBuild.dependsOn copyGenesisAssets
+preBuild.dependsOn copyTermuxScripts
+preBuild.dependsOn copyConfigExample
+
 flutter {
     source '../..'
 }
