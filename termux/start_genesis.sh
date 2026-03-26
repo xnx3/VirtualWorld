@@ -7,6 +7,7 @@ set -e
 GENESIS_DIR="${HOME}/genesis"
 DATA_DIR="${GENESIS_DIR}/data"
 LOG_FILE="${DATA_DIR}/genesis.log"
+PYTHON=""  # Will be set by check_python()
 
 # 颜色定义
 RED='\033[0;31m'
@@ -24,20 +25,30 @@ echo -e "${NC}"
 
 # 检查 Python
 check_python() {
+    # 优先使用 venv Python
+    if [ -f "$GENESIS_DIR/venv/bin/python3" ]; then
+        PYTHON="$GENESIS_DIR/venv/bin/python3"
+        echo -e "${GREEN}Using venv Python: $($PYTHON --version)${NC}"
+        return
+    fi
+
+    # 回退到系统 Python
     if ! command -v python3 &>/dev/null; then
         echo -e "${RED}Python 3 not found. Installing...${NC}"
         pkg install -y python3
     fi
-    echo -e "${GREEN}Python: $(python3 --version)${NC}"
+    PYTHON="python3"
+    echo -e "${GREEN}Using system Python: $($PYTHON --version)${NC}"
 }
 
 # 检查依赖
 check_deps() {
-    local deps=("openai" "websockets" "aiosqlite" "pyyaml" "msgpack" "cryptography" "zeroconf")
+    # 注意: pyyaml 的 import 名称是 yaml，不是 pyyaml
+    local deps_import=("openai" "websockets" "aiosqlite" "yaml" "msgpack" "cryptography" "zeroconf")
     local missing=()
 
-    for dep in "${deps[@]}"; do
-        if ! python3 -c "import $dep" 2>/dev/null; then
+    for dep in "${deps_import[@]}"; do
+        if ! "$PYTHON" -c "import $dep" 2>/dev/null; then
             missing+=("$dep")
         fi
     done
@@ -58,7 +69,7 @@ start_service() {
     cd "$GENESIS_DIR"
 
     # 启动 Genesis 并开启 API
-    python3 -m genesis.main start \
+    "$PYTHON" -m genesis.main start \
         --data-dir "$DATA_DIR" \
         --api \
         --api-host 127.0.0.1 \

@@ -18,6 +18,10 @@ import java.io.IOException
  * 2. 生成安装脚本，放到共享存储
  * 3. 提示用户在 Termux 中运行安装脚本
  * 4. 脚本将文件复制到 ~/genesis/
+ *
+ * 支持两种安装方式：
+ * - 快速安装：使用预构建的 bundle（genesis-termux-bundle.tar.gz），解压即用
+ * - 完整安装：从源码安装，需要 pip install 编译依赖
  */
 object GenesisInstaller {
 
@@ -134,7 +138,11 @@ object GenesisInstaller {
             // Step 5: 复制配置和脚本文件
             copyAssetToFile(context, "start_genesis.sh", File(sharedDir, "start_genesis.sh"))
             copyAssetToFile(context, "install.sh", File(sharedDir, "install.sh"))
+            copyAssetToFile(context, "quick_install.sh", File(sharedDir, "quick_install.sh"))
             copyAssetToFile(context, "config.yaml.example", File(sharedDir, "config.yaml.example"))
+
+            // Step 5.5: 复制预构建 bundle（如果存在）
+            val hasBundle = copyBundleIfExists(context, sharedDir)
 
             progressCallback?.invoke("生成安装指令", 80)
 
@@ -146,13 +154,27 @@ object GenesisInstaller {
 
             Log.i(TAG, "Genesis files copied to: ${sharedDir.absolutePath}")
 
-            return InstallResult(
-                success = true,
-                message = "文件已准备就绪！\n\n" +
+            val installInstructions = if (hasBundle) {
+                // 有 bundle，推荐快速安装
+                "文件已准备就绪！\n\n" +
+                    "安装文件位置:\n${sharedDir.absolutePath}\n\n" +
+                    "【推荐】快速安装（约1分钟）：\n" +
+                    "1. termux-setup-storage\n" +
+                    "2. bash ~/storage/downloads/Genesis/quick_install.sh\n\n" +
+                    "或者完整安装（约20分钟）：\n" +
+                    "bash ~/storage/downloads/Genesis/install.sh"
+            } else {
+                // 无 bundle，使用完整安装
+                "文件已准备就绪！\n\n" +
                     "安装文件位置:\n${sharedDir.absolutePath}\n\n" +
                     "请在 Termux 中执行:\n" +
                     "1. termux-setup-storage\n" +
                     "2. bash ~/storage/downloads/Genesis/install.sh"
+            }
+
+            return InstallResult(
+                success = true,
+                message = installInstructions
             )
 
         } catch (e: Exception) {
@@ -367,6 +389,45 @@ object GenesisInstaller {
         } catch (e: IOException) {
             Log.e(TAG, "Failed to copy asset $assetPath: ${e.message}")
             throw e
+        }
+    }
+
+    /**
+     * 复制预构建 bundle（如果存在）
+     * 直接尝试打开 bundle 文件，避免遍历所有 assets
+     * @return true 如果 bundle 复制成功
+     */
+    private fun copyBundleIfExists(context: Context, targetDir: File): Boolean {
+        val bundleName = "genesis-termux-bundle.tar.gz"
+        val sha256Name = "genesis-termux-bundle.tar.gz.sha256"
+
+        return try {
+            // 直接尝试打开 bundle 文件 - 比遍历所有 assets 更高效
+            context.assets.open(bundleName).use { input ->
+                FileOutputStream(File(targetDir, bundleName)).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Log.i(TAG, "Bundle file copied: $bundleName")
+
+            // 尝试复制 SHA256 文件（可选）
+            try {
+                context.assets.open(sha256Name).use { input ->
+                    FileOutputStream(File(targetDir, sha256Name)).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                Log.i(TAG, "SHA256 file copied: $sha256Name")
+            } catch (e: IOException) {
+                Log.d(TAG, "No SHA256 file found, skipping")
+            }
+
+            val sizeMB = File(targetDir, bundleName).length() / (1024 * 1024)
+            Log.i(TAG, "Bundle size: $sizeMB MB")
+            true
+        } catch (e: IOException) {
+            Log.i(TAG, "No pre-built bundle found in assets")
+            false
         }
     }
 

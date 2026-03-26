@@ -75,6 +75,7 @@ task copyTermuxScripts(type: Copy) {
     into 'src/main/assets'
     include 'start_genesis.sh'
     include 'install.sh'
+    include 'quick_install.sh'
 }
 
 task copyConfigExample(type: Copy) {
