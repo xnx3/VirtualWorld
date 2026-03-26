@@ -191,30 +191,34 @@ class AppState with ChangeNotifier {
         String content;
         switch (eventType) {
           case 'started':
-            // 天道投票发起: {rule_name} (剩余 {ticks} ticks)
+            // 天道投票发起: {rule_name} (提案者: {proposer}, 剩余 {ticks} 刻)
+            final proposerInfo = proposerName.isNotEmpty
+                ? (_language == 'zh' ? '(提案者: $proposerName)' : '(proposer: $proposerName)')
+                : '';
             content = _language == 'zh'
-                ? '天道投票发起: $ruleName (剩余 $remainingTicks 刻)'
-                : 'Tao vote started: $ruleName ($remainingTicks ticks remaining)';
+                ? '天道投票发起: $ruleName $proposerInfo (剩余 $remainingTicks 刻)'
+                : 'Tao vote started: $ruleName $proposerInfo ($remainingTicks ticks remaining)';
           case 'vote_cast':
             // 投票: {voter_name} 对 {rule_name} 投票 (赞成: {for}, 反对: {against})
             final voterInfo = voterName.isNotEmpty
-                ? (_language == 'zh' ? '($voterName)' : '($voterName)')
+                ? '($voterName)'
                 : '';
             content = _language == 'zh'
                 ? '投票$voterInfo: $ruleName (赞成: $votesFor, 反对: $votesAgainst)'
                 : 'Vote$voterInfo: $ruleName (For: $votesFor, Against: $votesAgainst)';
           case 'passed':
-            // 天道规则通过: {rule_name} ({ratio}%赞成)
+            // 天道规则通过: {rule_name} ({ratio}%赞成, 赞成: {for}, 反对: {against}, 功德: {merit})
             final ratioPercent = (ratio * 100).toStringAsFixed(1);
+            final meritStr = merit.toStringAsFixed(4);
             content = _language == 'zh'
-                ? '天道规则通过: $ruleName ($ratioPercent%赞成)'
-                : 'Tao rule passed: $ruleName ($ratioPercent% approved)';
+                ? '天道规则通过: $ruleName ($ratioPercent%赞成, 赞成: $votesFor, 反对: $votesAgainst, 功德: $meritStr)'
+                : 'Tao rule passed: $ruleName ($ratioPercent% approved, For: $votesFor, Against: $votesAgainst, Merit: $meritStr)';
           case 'rejected':
-            // 天道规则未通过: {rule_name} ({ratio}%赞成)
+            // 天道规则未通过: {rule_name} ({ratio}%赞成, 赞成: {for}, 反对: {against})
             final ratioPercent = (ratio * 100).toStringAsFixed(1);
             content = _language == 'zh'
-                ? '天道规则未通过: $ruleName ($ratioPercent%赞成)'
-                : 'Tao rule rejected: $ruleName ($ratioPercent% approved)';
+                ? '天道规则未通过: $ruleName ($ratioPercent%赞成, 赞成: $votesFor, 反对: $votesAgainst)'
+                : 'Tao rule rejected: $ruleName ($ratioPercent% approved, For: $votesFor, Against: $votesAgainst)';
           default:
             content = _language == 'zh'
                 ? '天道投票: $ruleName'
