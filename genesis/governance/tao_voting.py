@@ -533,6 +533,10 @@ class TaoVotingSystem:
             merit=vote.merit_awarded,
         )
 
+        # 从 pending 中移除已结算的投票
+        if vote_id in world_state.pending_tao_votes:
+            del world_state.pending_tao_votes[vote_id]
+
         return {
             "vote_id": vote_id,
             "passed": vote.passed,
