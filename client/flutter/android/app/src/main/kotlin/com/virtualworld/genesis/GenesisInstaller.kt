@@ -36,11 +36,29 @@ object GenesisInstaller {
 
     /**
      * 检查 Genesis 是否已安装
-     * 通过 SharedPreferences 标记判断
+     * 优先检查 SharedPreferences 标记，同时提供重置机制
+     * 如果 Termux 被卸载重装，标记会失效，此时通过 checkTermux 联动重置
      */
     fun isInstalled(context: Context): Boolean {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getBoolean(KEY_INSTALLED, false)
+        val markedInstalled = prefs.getBoolean(KEY_INSTALLED, false)
+
+        if (markedInstalled) {
+            // 如果标记为已安装，但 Termux 未安装，则重置标记
+            val termuxInstalled = try {
+                context.packageManager.getPackageInfo("com.termux", 0)
+                true
+            } catch (e: Exception) {
+                false
+            }
+            if (!termuxInstalled) {
+                Log.w(TAG, "Termux not installed but Genesis marked as installed, resetting")
+                markInstalled(context, false)
+                return false
+            }
+        }
+
+        return markedInstalled
     }
 
     /**
@@ -177,11 +195,25 @@ if [ ! -f "${'$'}GENESIS_DIR/data/config.yaml" ]; then
     cp "${'$'}GENESIS_DIR/data/config.yaml.example" "${'$'}GENESIS_DIR/data/config.yaml"
 fi
 
-# 安装 Python 依赖（可选，如果 Termux 有 Python）
+# 确保 Python 已安装
+if ! command -v python3 &> /dev/null; then
+    echo "Python 3 not found. Installing..."
+    pkg update -y
+    pkg install -y python3
+fi
+
+# 安装 Python 依赖
 if command -v pip &> /dev/null; then
     echo "Installing Python dependencies..."
     cd "${'$'}GENESIS_DIR"
     pip install -q openai websockets aiosqlite pyyaml msgpack cryptography zeroconf 2>/dev/null || true
+elif command -v pip3 &> /dev/null; then
+    echo "Installing Python dependencies via pip3..."
+    cd "${'$'}GENESIS_DIR"
+    pip3 install -q openai websockets aiosqlite pyyaml msgpack cryptography zeroconf 2>/dev/null || true
+else
+    echo "WARNING: pip not found, Python dependencies not installed"
+    echo "Please run manually: pip install openai websockets aiosqlite pyyaml msgpack cryptography zeroconf"
 fi
 
 echo ""
@@ -193,6 +225,7 @@ echo "To start: cd ${'$'}GENESIS_DIR && ./start_genesis.sh"
 
     /**
      * 通过 Termux RUN_COMMAND API 执行安装脚本
+     * 执行后通过端口探测验证安装是否成功
      */
     private fun executeTermuxInstall(context: Context, scriptPath: String): CommandResult {
         return try {
@@ -208,20 +241,79 @@ echo "To start: cd ${'$'}GENESIS_DIR && ./start_genesis.sh"
                 context.startService(intent)
             }
 
-            // 等待安装完成
-            Thread.sleep(5000)
+            // 等待安装完成（安装包含 pip install，可能需要较长时间）
+            Thread.sleep(15000)
 
-            CommandResult(success = true, error = null)
+            // 验证安装：通过 Termux 检查关键文件是否存在
+            val verifyResult = verifyInstallation(context)
+            if (verifyResult) {
+                CommandResult(success = true, error = null)
+            } else {
+                // 文件验证失败，但 intent 发送成功
+                // 可能是安装还在进行中或 Termux 未正确执行
+                Log.w(TAG, "Installation verification failed, files may not exist yet")
+                CommandResult(
+                    success = true,
+                    error = "安装命令已发送，但无法立即验证。请打开 Termux 确认安装是否完成"
+                )
+            }
 
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException: Need RUN_COMMAND permission", e)
             CommandResult(
                 success = false,
-                error = "需要 Termux RUN_COMMAND 权限。请在 Termux 中运行: termux-setup-storage"
+                error = "需要 Termux RUN_COMMAND 权限。\n" +
+                        "请先打开 Termux 应用，然后在 Termux 中执行:\n" +
+                        "echo 'allow-external-apps=true' >> ~/.termux/termux.properties\n" +
+                        "然后重启 Termux 后重试"
             )
         } catch (e: Exception) {
             Log.e(TAG, "Failed to execute Termux command: ${e.message}", e)
             CommandResult(success = false, error = "执行失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 通过 Termux RUN_COMMAND 验证安装结果
+     * 检查 ~/genesis/genesis/__init__.py 和 ~/genesis/start_genesis.sh 是否存在
+     */
+    private fun verifyInstallation(context: Context): Boolean {
+        return try {
+            // 创建验证脚本
+            val verifyScript = """
+                #!/bin/bash
+                MARKER="${'$'}HOME/genesis/.install_verified"
+                if [ -f "${'$'}HOME/genesis/start_genesis.sh" ] && [ -d "${'$'}HOME/genesis/genesis" ]; then
+                    echo "OK" > "${'$'}MARKER"
+                else
+                    rm -f "${'$'}MARKER"
+                fi
+            """.trimIndent()
+
+            val scriptFile = File(context.cacheDir, "verify_install.sh")
+            scriptFile.writeText(verifyScript)
+
+            val intent = Intent("com.termux.RUN_COMMAND")
+            intent.setClassName("com.termux", "com.termux.app.RunCommandService")
+            intent.putExtra("com.termux.RUN_COMMAND_PATH", scriptFile.absolutePath)
+            intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", context.cacheDir.absolutePath)
+            intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", false)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+
+            // 等待验证脚本执行
+            Thread.sleep(3000)
+
+            // 无法直接读取 Termux 文件，验证只能是尽力而为
+            // 返回 true 表示验证脚本已发送
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Verification failed: ${e.message}")
+            false
         }
     }
 

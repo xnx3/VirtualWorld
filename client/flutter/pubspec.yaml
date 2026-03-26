@@ -42,7 +42,7 @@ flutter:
     - assets/genesis/
     - assets/install.sh
     - assets/start_genesis.sh
-    # - assets/termux-arm64-v8a.apk  # 需要手动下载
+    - assets/termux-arm64-v8a.apk
 
   fonts:
     - family: JetBrainsMono

@@ -190,108 +190,31 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * 安装内嵌的 Termux APK
-     * 返回包含成功状态和错误信息的 Map
+     * 安装 Termux
+     * 优先使用内嵌 APK，如果不存在则引导用户从 GitHub 下载
      */
     private fun installBundledTermux(): Map<String, Any> {
         return try {
             Log.i("MainActivity", "Starting Termux installation...")
 
-            // 检查 Android 8.0+ 的安装权限
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                if (!packageManager.canRequestPackageInstalls()) {
-                    Log.w("MainActivity", "No permission to install packages")
-                    // 引导用户到设置页面授权
-                    val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
-                    intent.data = Uri.parse("package:$packageName")
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(intent)
-                    return mapOf(
-                        "success" to false,
-                        "error" to "需要安装权限，请在设置中授权后重试",
-                        "stage" to "permission"
-                    )
-                }
-            }
-
-            Log.i("MainActivity", "Permission OK, copying APK from assets...")
-
             // 检查 assets 中是否有 Termux APK
-            try {
-                val assetFiles = assets.list("") ?: emptyArray()
-                Log.i("MainActivity", "Assets files: ${assetFiles.joinToString()}")
-                if (!assetFiles.contains(TERMUX_APK_NAME)) {
-                    return mapOf(
-                        "success" to false,
-                        "error" to "APK 文件不存在: $TERMUX_APK_NAME",
-                        "stage" to "asset_check",
-                        "availableAssets" to assetFiles.toList()
-                    )
-                }
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Failed to list assets: ${e.message}")
-                return mapOf(
-                    "success" to false,
-                    "error" to "无法访问 assets: ${e.message}",
-                    "stage" to "asset_list"
-                )
-            }
+            val assetFiles = assets.list("") ?: emptyArray()
+            val hasBundledApk = assetFiles.contains(TERMUX_APK_NAME)
 
-            // 从 assets 复制 Termux APK 到缓存目录
-            val apkFile = File(cacheDir, TERMUX_APK_NAME)
-            try {
-                assets.open(TERMUX_APK_NAME).use { input ->
-                    FileOutputStream(apkFile).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-                Log.i("MainActivity", "APK copied to: ${apkFile.absolutePath}, size: ${apkFile.length()}")
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Failed to copy APK: ${e.message}")
-                return mapOf(
-                    "success" to false,
-                    "error" to "复制 APK 失败: ${e.message}",
-                    "stage" to "copy_apk"
-                )
-            }
-
-            // 使用 FileProvider 获取 URI
-            val apkUri = try {
-                FileProvider.getUriForFile(
-                    this,
-                    "${packageName}.fileprovider",
-                    apkFile
-                )
-            } catch (e: Exception) {
-                Log.e("MainActivity", "FileProvider error: ${e.message}")
-                return mapOf(
-                    "success" to false,
-                    "error" to "FileProvider 错误: ${e.message}",
-                    "stage" to "fileprovider"
-                )
-            }
-
-            Log.i("MainActivity", "APK URI: $apkUri")
-
-            // 启动安装
-            try {
-                val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE)
-                installIntent.data = apkUri
-                installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(installIntent)
-
-                Log.i("MainActivity", "Termux installation intent sent successfully")
+            if (hasBundledApk) {
+                // 有内嵌 APK，走安装流程
+                installBundledTermuxApk()
+            } else {
+                // 没有内嵌 APK，引导用户从 GitHub 下载
+                Log.i("MainActivity", "No bundled APK, redirecting to GitHub releases")
+                val intent = Intent(Intent.ACTION_VIEW)
+                intent.data = Uri.parse("https://github.com/termux/termux-app/releases")
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
                 mapOf(
                     "success" to true,
-                    "message" to "请在系统界面完成 Termux 安装"
-                )
-            } catch (e: Exception) {
-                Log.e("MainActivity", "Failed to start install intent: ${e.message}")
-                mapOf(
-                    "success" to false,
-                    "error" to "启动安装失败: ${e.message}",
-                    "stage" to "start_install"
+                    "message" to "请从 GitHub 下载并安装 Termux（选择 arm64-v8a 版本），安装后返回此应用",
+                    "stage" to "redirect_download"
                 )
             }
         } catch (e: Exception) {
@@ -300,6 +223,77 @@ class MainActivity : FlutterActivity() {
                 "success" to false,
                 "error" to "未知错误: ${e.message}",
                 "stage" to "unknown"
+            )
+        }
+    }
+
+    /**
+     * 安装内嵌的 Termux APK（当 APK 存在于 assets 时）
+     */
+    private fun installBundledTermuxApk(): Map<String, Any> {
+        // 检查 Android 8.0+ 的安装权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (!packageManager.canRequestPackageInstalls()) {
+                Log.w("MainActivity", "No permission to install packages")
+                val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                intent.data = Uri.parse("package:$packageName")
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                return mapOf(
+                    "success" to false,
+                    "error" to "需要安装权限，请在设置中授权后重试",
+                    "stage" to "permission"
+                )
+            }
+        }
+
+        // 从 assets 复制 Termux APK 到缓存目录
+        val apkFile = File(cacheDir, TERMUX_APK_NAME)
+        try {
+            assets.open(TERMUX_APK_NAME).use { input ->
+                FileOutputStream(apkFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Log.i("MainActivity", "APK copied to: ${apkFile.absolutePath}, size: ${apkFile.length()}")
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to copy APK: ${e.message}")
+            return mapOf(
+                "success" to false,
+                "error" to "复制 APK 失败: ${e.message}",
+                "stage" to "copy_apk"
+            )
+        }
+
+        // 使用 FileProvider 获取 URI
+        val apkUri = try {
+            FileProvider.getUriForFile(this, "${packageName}.fileprovider", apkFile)
+        } catch (e: Exception) {
+            Log.e("MainActivity", "FileProvider error: ${e.message}")
+            return mapOf(
+                "success" to false,
+                "error" to "FileProvider 错误: ${e.message}",
+                "stage" to "fileprovider"
+            )
+        }
+
+        // 启动安装
+        return try {
+            val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE)
+            installIntent.data = apkUri
+            installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(installIntent)
+            mapOf(
+                "success" to true,
+                "message" to "请在系统界面完成 Termux 安装"
+            )
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to start install intent: ${e.message}")
+            mapOf(
+                "success" to false,
+                "error" to "启动安装失败: ${e.message}",
+                "stage" to "start_install"
             )
         }
     }
@@ -339,21 +333,41 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /**
+     * 停止 Genesis 服务
+     * 通过 Termux RUN_COMMAND 执行 kill，确保能看到 Termux 进程
+     */
     private fun stopGenesisService(): Boolean {
         return try {
-            val process = Runtime.getRuntime().exec("pkill -f genesis.main")
-            process.waitFor()
+            val intent = Intent("com.termux.RUN_COMMAND")
+            intent.setClassName("com.termux", "com.termux.app.RunCommandService")
+            intent.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
+            intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-c", "pkill -f 'genesis.main' 2>/dev/null; exit 0"))
+            intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", GenesisInstaller.GENESIS_DIR)
+            intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
             true
         } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to stop Genesis: ${e.message}")
             false
         }
     }
 
+    /**
+     * 检查 Genesis 是否在运行
+     * 通过尝试连接 WebSocket 端口来判断，比 pgrep 跨进程更可靠
+     */
     private fun isGenesisRunning(): Boolean {
         return try {
-            val process = Runtime.getRuntime().exec("pgrep -f genesis.main")
-            val exitCode = process.waitFor()
-            exitCode == 0
+            val socket = java.net.Socket()
+            socket.connect(java.net.InetSocketAddress("127.0.0.1", 19842), 1000)
+            socket.close()
+            true
         } catch (e: Exception) {
             false
         }

@@ -176,31 +176,32 @@ class WebSocketService with ChangeNotifier {
     notifyListeners();
   }
 
-  /// 发送命令
-  void sendCommand(String type, Map<String, dynamic> data) {
+  /// 发送命令，返回是否成功发送
+  bool sendCommand(String type, Map<String, dynamic> data) {
     final channel = _channel;
     if (!_isConnected || channel == null) {
       debugPrint('WebSocket not connected, cannot send command');
-      return;
+      return false;
     }
 
     final message = jsonEncode({'type': type, ...data});
     channel.sink.add(message);
+    return true;
   }
 
-  /// 分配任务
-  void sendTask(String task) {
-    sendCommand('task', {'task': task});
+  /// 分配任务，返回是否成功发送
+  bool sendTask(String task) {
+    return sendCommand('task', {'task': task});
   }
 
-  /// 请求停止
-  void sendStop() {
-    sendCommand('stop', {});
+  /// 请求停止，返回是否成功发送
+  bool sendStop() {
+    return sendCommand('stop', {});
   }
 
-  /// 请求状态
-  void requestStatus() {
-    sendCommand('status', {});
+  /// 请求状态，返回是否成功发送
+  bool requestStatus() {
+    return sendCommand('status', {});
   }
 
   /// 处理收到的消息

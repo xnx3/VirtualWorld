@@ -416,12 +416,15 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: () {
               final task = _taskController.text.trim();
               if (task.isNotEmpty) {
-                context.read<WebSocketService>().sendTask(task);
+                final sent = context.read<WebSocketService>().sendTask(task);
                 _taskController.clear();
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text(loc?.taskSent ?? 'Task sent to server...'),
+                    content: Text(sent
+                        ? (loc?.taskSent ?? 'Task sent to server...')
+                        : '发送失败：未连接到服务器'),
+                    backgroundColor: sent ? null : Colors.red,
                     duration: const Duration(seconds: 2),
                   ),
                 );

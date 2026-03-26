@@ -15,10 +15,14 @@ import java.io.File
 object GenesisConfig {
 
     private const val TAG = "GenesisConfig"
+    private const val PREFS_NAME = "genesis_llm_config"
+    private const val KEY_BASE_URL = "llm_base_url"
+    private const val KEY_API_KEY = "llm_api_key"
+    private const val KEY_MODEL = "llm_model"
 
     /**
      * 保存 LLM 配置到 config.yaml
-     * 通过 Termux RUN_COMMAND 在 Termux 环境中写入
+     * 通过 Termux RUN_COMMAND 在 Termux 环境中写入，同时缓存到 SharedPreferences
      */
     fun saveLLMConfig(
         context: Context,
@@ -27,6 +31,14 @@ object GenesisConfig {
         model: String
     ): ConfigResult {
         try {
+            // 先缓存到 SharedPreferences（确保下次能读到）
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString(KEY_BASE_URL, baseUrl)
+                .putString(KEY_API_KEY, apiKey)
+                .putString(KEY_MODEL, model)
+                .apply()
+
             // 生成配置更新脚本
             val scriptContent = buildConfigUpdateScript(baseUrl, apiKey, model)
 
@@ -50,7 +62,7 @@ object GenesisConfig {
             // 等待执行完成
             Thread.sleep(2000)
 
-            Log.i(TAG, "LLM config saved via Termux")
+            Log.i(TAG, "LLM config saved via Termux and cached locally")
             return ConfigResult(success = true, message = "配置已保存")
 
         } catch (e: Exception) {
@@ -113,10 +125,38 @@ language: "zh"
 DEFAULTCONFIG
 fi
 
-# 使用 sed 更新配置值
-sed -i 's|^  base_url:.*|  base_url: "'$escapedBaseUrl'"|' "${'$'}CONFIG_FILE"
-sed -i 's|^  api_key:.*|  api_key: "'$escapedApiKey'"|' "${'$'}CONFIG_FILE"
-sed -i 's|^  model:.*|  model: "'$escapedModel'"|' "${'$'}CONFIG_FILE"
+# 使用 Python 精确更新 llm section 的配置值（避免 sed 误改其他 section）
+python3 -c "
+import sys
+config_path = '${'$'}CONFIG_FILE'
+with open(config_path, 'r') as f:
+    lines = f.readlines()
+
+in_llm = False
+new_lines = []
+for line in lines:
+    stripped = line.rstrip()
+    if stripped == 'llm:':
+        in_llm = True
+        new_lines.append(line)
+        continue
+    if in_llm and stripped and not stripped.startswith(' ') and not stripped.startswith('\t'):
+        in_llm = False
+    if in_llm:
+        if stripped.lstrip().startswith('base_url:'):
+            new_lines.append('  base_url: \"$escapedBaseUrl\"\n')
+            continue
+        elif stripped.lstrip().startswith('api_key:'):
+            new_lines.append('  api_key: \"$escapedApiKey\"\n')
+            continue
+        elif stripped.lstrip().startswith('model:'):
+            new_lines.append('  model: \"$escapedModel\"\n')
+            continue
+    new_lines.append(line)
+
+with open(config_path, 'w') as f:
+    f.writelines(new_lines)
+"
 
 echo "Config updated: ${'$'}CONFIG_FILE"
 """.trimIndent()
@@ -124,15 +164,14 @@ echo "Config updated: ${'$'}CONFIG_FILE"
 
     /**
      * 读取当前 LLM 配置
-     * 通过 Termux 执行命令读取
+     * 优先从 SharedPreferences 缓存读取，无缓存时返回默认值
      */
     fun readLLMConfig(context: Context): Map<String, String> {
-        // 由于无法直接读取 Termux 文件，返回默认值
-        // 实际配置会在 UI 层通过 SharedPreferences 缓存
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         return mapOf(
-            "base_url" to "https://api.openai.com/v1",
-            "api_key" to "",
-            "model" to "gpt-4o-mini"
+            "base_url" to (prefs.getString(KEY_BASE_URL, "https://api.openai.com/v1") ?: "https://api.openai.com/v1"),
+            "api_key" to (prefs.getString(KEY_API_KEY, "") ?: ""),
+            "model" to (prefs.getString(KEY_MODEL, "gpt-4o-mini") ?: "gpt-4o-mini")
         )
     }
 
