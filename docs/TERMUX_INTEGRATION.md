@@ -16,19 +16,33 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 前置要求
+## 自动安装（推荐）
 
-1. Android 7.0+ 设备
-2. 安装 Termux 应用
-3. 安装 Termux:API 插件（可选，用于后台服务）
+在 Flutter 应用中，打开 **设置** 界面，按照 3 步流程操作：
 
-## 安装步骤
+### Step 1: 安装 Termux
+- 应用会检测 Termux 是否已安装
+- 点击"下载 Termux"跳转到 F-Droid 下载页面
+- 安装 Termux 后返回应用
+
+### Step 2: 一键安装 Genesis
+- 点击"一键安装 Genesis"按钮
+- 应用会自动将 Genesis 文件复制到 Termux 目录
+- 等待安装完成（约 10-30 秒）
+
+### Step 3: 启动服务
+- 点击"启动服务"按钮
+- 服务将在后台运行
+- 返回主界面，应用会自动连接 `ws://127.0.0.1:19842`
+
+## 手动安装（备选）
+
+如果自动安装失败，可以手动操作：
 
 ### 1. 安装 Termux
 
 从 F-Droid 安装（推荐，Google Play 版本已过时）：
 - Termux: https://f-droid.org/packages/com.termux/
-- Termux:API: https://f-droid.org/packages/com.termux.api/
 
 ### 2. 在 Termux 中安装 Genesis
 
@@ -39,8 +53,8 @@ git clone https://github.com/your-repo/VirtualWorld.git
 cd VirtualWorld/termux
 bash install.sh
 
-# 方法 B: 手动复制文件
-# 将 genesis/ 目录复制到 ~/genesis/
+# 方法 B: 从 APK assets 复制
+# Genesis 文件位于 /data/data/com.termux/files/home/genesis/
 ```
 
 ### 3. 配置 API 密钥
@@ -65,34 +79,21 @@ cd ~/genesis
 
 服务将在 `ws://127.0.0.1:19842` 启动。
 
-## Flutter 应用集成
+## 文件结构
 
-Flutter 应用会自动尝试连接本地服务：
-
-```dart
-// 默认配置
-static const String defaultHost = '127.0.0.1';
-static const int defaultPort = 19842;
 ```
-
-### 检查服务状态
-
-在 Flutter 中使用 MethodChannel：
-
-```dart
-final channel = MethodChannel('com.virtualworld.genesis/termux');
-
-// 检查 Termux 是否安装
-bool installed = await channel.invokeMethod('checkTermux');
-
-// 打开 Termux
-await channel.invokeMethod('openTermux');
-
-// 启动 Genesis 服务
-bool started = await channel.invokeMethod('startGenesis');
-
-// 检查服务是否运行
-bool running = await channel.invokeMethod('checkServiceRunning');
+~/genesis/                          # Termux 主目录
+├── genesis/                        # Python 后端源码
+│   ├── main.py                     # 入口文件
+│   ├── being/                      # 生命体模块
+│   ├── world/                      # 世界模块
+│   └── ...
+├── data/                           # 数据目录
+│   ├── config.yaml                 # 配置文件（需手动配置 API）
+│   ├── genesis.log                 # 日志文件
+│   └── chronicle/                  # 历史记录
+├── start_genesis.sh                # 启动脚本
+└── install.sh                      # 安装依赖脚本
 ```
 
 ## 后台运行
@@ -148,17 +149,22 @@ pip install --force-reinstall -r ~/genesis/requirements.txt
 
 1. 确认服务正在运行：`pgrep -f genesis.main`
 2. 确认端口监听：`netstat -tlnp | grep 19842`
-3. 检查防火墙设置
+3. 在设置界面点击"刷新状态"按钮
 
-## 文件结构
+### Termux RUN_COMMAND 权限问题
 
-```
-~/genesis/
-├── genesis/          # Python 后端源码
-├── data/             # 数据目录
-│   ├── config.yaml   # 配置文件
-│   ├── genesis.log   # 日志文件
-│   └── chronicle/    # 历史记录
-├── start_genesis.sh  # 启动脚本
-└── requirements.txt  # Python 依赖
-```
+如果启动服务失败，可能需要手动授权：
+
+1. 打开 Termux 应用
+2. 运行 `termux-setup-storage` 授权存储访问
+3. 返回 Flutter 应用重试
+
+## API 配置（待实现）
+
+当前版本需要手动配置 API 密钥。后续版本将在应用内提供配置界面。
+
+临时解决方案：
+1. 打开 Termux
+2. 编辑 `~/genesis/data/config.yaml`
+3. 添加 `llm.api_key` 配置
+4. 重启服务
