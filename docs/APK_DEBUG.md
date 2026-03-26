@@ -1,32 +1,91 @@
 # Flutter APK 使用说明
 
-## APK 内置 Genesis 后端
+## 架构概述
 
-APK 已内置 Genesis 服务，**安装后可直接使用，无需任何配置**。
+Genesis Android 版本采用 **Flutter + Termux** 架构：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Android 设备                            │
+│                                                             │
+│  ┌─────────────────┐     WebSocket      ┌────────────────┐  │
+│  │  Flutter 应用    │ ◄───────────────► │  Genesis 后端  │  │
+│  │  (Genesis GUI)  │    ws://127.0.0.1   │  (Termux)     │  │
+│  └─────────────────┘      :19842         └────────────────┘  │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**重要说明**：
+- APK 本身**不包含** Python 运行环境
+- Python 后端运行在 **Termux** 应用中
+- 用户需要同时安装 Flutter APK 和 Termux
+
+## 安装流程
+
+### 方式一：快速安装（推荐）
+
+使用预构建 Bundle，安装时间约 **1 分钟**。
+
+1. 安装 Flutter APK
+2. 安装 Termux（从 F-Droid）
+3. 打开 Flutter 应用，进入设置
+4. 点击"一键安装 Genesis"
+5. 在 Termux 中执行：
+   ```bash
+   termux-setup-storage
+   bash ~/storage/downloads/Genesis/quick_install.sh
+   ```
+
+### 方式二：完整安装
+
+从源码安装，安装时间约 **20 分钟**。
+
+```bash
+termux-setup-storage
+bash ~/storage/downloads/Genesis/install.sh
+```
+
+详细说明请参阅 [Termux 集成指南](./TERMUX_INTEGRATION.md)。
 
 ## 使用方法
 
-1. 安装 APK
-2. 打开应用，点击启动服务
-3. 自动连接本地 Genesis 后端
+1. 打开 Flutter 应用
+2. 点击"启动服务"（或打开 Termux 运行 `./start_genesis.sh`）
+3. 应用自动连接本地 Genesis 后端
 
 ## 技术说明
 
-- **WebSocket 地址**: `127.0.0.1:19842`
-- **后端服务**: APK 内置 Python 环境，自动启动 Genesis
-- **无需外部服务器**
+| 组件 | 说明 |
+|------|------|
+| Flutter APK | GUI 前端，提供用户界面 |
+| Termux | Linux 环境，运行 Python 后端 |
+| WebSocket | 前后端通信，端口 19842 |
+| Genesis 后端 | Python 应用，硅基文明模拟 |
 
 ## 故障排查
 
-### 服务启动失败？
+### 服务无法启动？
 
-检查 APK 日志，确认 Python 环境是否正常。
+1. 确认 Termux 已安装
+2. 在 Termux 中检查：
+   ```bash
+   cd ~/genesis
+   ./start_genesis.sh
+   ```
 
 ### 连接失败？
 
-服务启动后自动连接本地端口，无需手动配置。
+1. 确认服务正在运行：`pgrep -f genesis.main`
+2. 确认端口监听：`netstat -tlnp | grep 19842`
+3. 在 Flutter 应用中点击"刷新状态"
 
-## 相关文件
+### 安装失败？
 
-- `client/flutter/lib/services/websocket_service.dart` - WebSocket 连接逻辑
-- `client/flutter/lib/screens/settings_screen.dart` - 服务器设置界面
+参考 [Termux 集成指南](./TERMUX_INTEGRATION.md) 的故障排除章节。
+
+## 相关文档
+
+- [Termux 集成指南](./TERMUX_INTEGRATION.md) - 详细安装说明
+- [Android APK 打包指南](./ANDROID_APK_BUILD.md) - 开发者构建指南
+- [Termux Bundle 部署](./TERMUX_BUNDLE_DEPLOY.md) - 快速部署方案
