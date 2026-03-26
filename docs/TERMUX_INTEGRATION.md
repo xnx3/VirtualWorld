@@ -159,12 +159,41 @@ pip install --force-reinstall -r ~/genesis/requirements.txt
 2. 运行 `termux-setup-storage` 授权存储访问
 3. 返回 Flutter 应用重试
 
-## API 配置（待实现）
+## API 配置
 
-当前版本需要手动配置 API 密钥。后续版本将在应用内提供配置界面。
+在 Flutter 应用设置界面，可以直接配置 LLM API：
 
-临时解决方案：
-1. 打开 Termux
-2. 编辑 `~/genesis/data/config.yaml`
-3. 添加 `llm.api_key` 配置
-4. 重启服务
+1. 打开 **设置** → **LLM API 配置**
+2. 选择预设提供商（OpenAI/DeepSeek/Claude/Ollama）或手动输入
+3. 输入 **API Key**
+4. 确认 **Model** 名称正确
+5. 点击 **保存并验证**
+
+应用会自动测试 API 连接，验证成功后配置将保存到 Termux 的 `config.yaml`。
+
+### 支持的提供商
+
+| 提供商 | Base URL | 默认模型 |
+|--------|----------|----------|
+| OpenAI | https://api.openai.com/v1 | gpt-4o-mini |
+| DeepSeek | https://api.deepseek.com/v1 | deepseek-chat |
+| Claude | https://api.anthropic.com/v1 | claude-3-haiku-20240307 |
+| Ollama | http://localhost:11434/v1 | llama3 |
+
+### 手动配置（备选）
+
+如需手动编辑配置文件：
+
+```bash
+nano ~/genesis/data/config.yaml
+```
+
+配置格式：
+```yaml
+llm:
+  base_url: "https://api.openai.com/v1"
+  api_key: "your-api-key"
+  model: "gpt-4o-mini"
+  max_tokens: 4096
+  temperature: 0.7
+```
