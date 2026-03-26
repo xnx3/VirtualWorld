@@ -109,6 +109,61 @@ flutter build apk --release
 
 APK 会自动包含 bundle 文件，Flutter 应用安装时会将其复制到共享存储供 Termux 使用。
 
+## Termux APK 内置（推荐）
+
+**目标**：用户只需安装一个 APK，无需手动下载 Termux。
+
+### Step 1: 下载 Termux APK
+
+从 F-Droid 下载最新版 Termux APK：
+
+```bash
+# 下载地址
+# https://f-droid.org/packages/com.termux/
+
+# 使用 wget 下载
+wget -O termux/termux-app.apk https://f-droid.org/repo/com.termux_1020.apk
+
+# 或手动下载后放入 termux/ 目录
+```
+
+### Step 2: 将 Termux APK 放入项目
+
+```
+termux/termux-app.apk  ← Termux APK 文件
+```
+
+### Step 3: 构建 APK
+
+```bash
+cd client/flutter
+flutter build apk --release
+```
+
+构建时会自动将 Termux APK 复制到 assets 中。
+
+### Step 4: 用户安装流程
+
+用户安装 Genesis APK 后：
+
+1. 打开应用
+2. 提示"需要安装 Termux" → 点击"安装"
+3. 系统提示"允许安装未知应用" → 允许
+4. Termux 安装完成 → 返回 Genesis
+5. 点击"一键安装 Genesis" → 完成
+
+**详细实现** 请参阅 [Termux 内置方案](./TERMUX_BUNDLED_APK.md)。
+
+### APK 大小估算
+
+| 组件 | 大小 |
+|------|------|
+| Flutter 应用 | ~15 MB |
+| Genesis 源码 | ~1 MB |
+| Termux APK | ~30 MB |
+| Genesis Bundle | ~30-50 MB |
+| **总计** | **~80-100 MB** |
+
 ## 打包前检查清单
 
 - [ ] Java 版本为 17
@@ -200,6 +255,7 @@ Release APK 默认使用 debug 签名。正式发布需要配置签名：
 
 - [Termux 集成指南](./TERMUX_INTEGRATION.md) - Termux 安装和使用
 - [Termux Bundle 部署](./TERMUX_BUNDLE_DEPLOY.md) - Bundle 详细设计文档
+- [Termux 内置方案](./TERMUX_BUNDLED_APK.md) - Termux APK 内置实现细节
 
 ## 自动化构建（CI/CD）
 
