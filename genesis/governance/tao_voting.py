@@ -163,8 +163,6 @@ class TaoVotingSystem:
         self._network_broadcast: Any = None
         # 节点 ID（由 main.py 注入）
         self._node_id: str = ""
-        # 异步锁，保护投票操作的线程安全
-        self._lock: asyncio.Lock = asyncio.Lock()
         # 交易提交回调（由 main.py 注入）
         self._submit_tx: Any = None
 
