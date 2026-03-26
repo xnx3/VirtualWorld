@@ -181,6 +181,7 @@ class AppState with ChangeNotifier {
         final eventType = payload['event_type'] as String? ?? '';
         final ruleName = payload['rule_name'] as String? ?? '';
         final proposerName = payload['proposer_name'] as String? ?? '';
+        final voterName = payload['voter_name'] as String? ?? '';
         final votesFor = payload['votes_for'] as int? ?? 0;
         final votesAgainst = payload['votes_against'] as int? ?? 0;
         final remainingTicks = payload['remaining_ticks'] as int? ?? 0;
@@ -195,10 +196,13 @@ class AppState with ChangeNotifier {
                 ? '天道投票发起: $ruleName (剩余 $remainingTicks 刻)'
                 : 'Tao vote started: $ruleName ($remainingTicks ticks remaining)';
           case 'vote_cast':
-            // 投票: {rule_name} (赞成: {for}, 反对: {against})
+            // 投票: {voter_name} 对 {rule_name} 投票 (赞成: {for}, 反对: {against})
+            final voterInfo = voterName.isNotEmpty
+                ? (_language == 'zh' ? '($voterName)' : '($voterName)')
+                : '';
             content = _language == 'zh'
-                ? '投票: $ruleName (赞成: $votesFor, 反对: $votesAgainst)'
-                : 'Vote: $ruleName (For: $votesFor, Against: $votesAgainst)';
+                ? '投票$voterInfo: $ruleName (赞成: $votesFor, 反对: $votesAgainst)'
+                : 'Vote$voterInfo: $ruleName (For: $votesFor, Against: $votesAgainst)';
           case 'passed':
             // 天道规则通过: {rule_name} ({ratio}%赞成)
             final ratioPercent = (ratio * 100).toStringAsFixed(1);

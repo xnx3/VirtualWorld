@@ -137,10 +137,11 @@ def _bridge_structured_events(con, broadcast_event: Callable) -> None:
         def bridged_tao_vote_event(event_type: str, vote_id: str, rule_name: str,
                                     proposer_name: str, votes_for: int = 0,
                                     votes_against: int = 0, remaining_ticks: int = 0,
-                                    ratio: float = 0.0, merit: float = 0.0) -> None:
+                                    ratio: float = 0.0, merit: float = 0.0,
+                                    voter_name: str = "") -> None:
             _original_functions['tao_vote_event'](event_type, vote_id, rule_name, proposer_name,
                                                   votes_for, votes_against, remaining_ticks,
-                                                  ratio, merit)
+                                                  ratio, merit, voter_name)
             broadcast_event("tao_vote", {
                 "event_type": event_type,
                 "vote_id": vote_id,
@@ -150,7 +151,8 @@ def _bridge_structured_events(con, broadcast_event: Callable) -> None:
                 "votes_against": votes_against,
                 "remaining_ticks": remaining_ticks,
                 "ratio": ratio,
-                "merit": merit
+                "merit": merit,
+                "voter_name": voter_name
             })
         con.tao_vote_event = bridged_tao_vote_event
 

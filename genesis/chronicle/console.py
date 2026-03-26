@@ -206,13 +206,15 @@ def priest_event(event_type: str, name: str) -> None:
 def tao_vote_event(event_type: str, vote_id: str, rule_name: str,
                    proposer_name: str, votes_for: int = 0,
                    votes_against: int = 0, remaining_ticks: int = 0,
-                   ratio: float = 0.0, merit: float = 0.0) -> None:
+                   ratio: float = 0.0, merit: float = 0.0,
+                   voter_name: str = "") -> None:
     """天道投票事件广播"""
     if event_type == "started":
         _write(f"  ⚖️ {C.BCYAN}{C.BOLD}{t('tao_vote_started', rule_name=rule_name)}{C.RESET}")
         _write(f"     {C.DIM}{t('tao_vote_remaining', ticks=remaining_ticks)}{C.RESET}")
     elif event_type == "vote_cast":
-        _write(f"  🗳️ {C.CYAN}{t('tao_vote_cast', vote=t('vote_support'), rule_name=rule_name)}{C.RESET}")
+        voter_info = f" ({voter_name})" if voter_name else ""
+        _write(f"  🗳️ {C.CYAN}{t('tao_vote_cast', vote=t('vote_support'), rule_name=rule_name)}{voter_info}{C.RESET}")
     elif event_type == "passed":
         _write(f"  ✅ {C.BGREEN}{C.BOLD}{t('tao_vote_passed', rule_name=rule_name, ratio=ratio*100)}{C.RESET}")
         _write(f"     {C.GREEN}{t('tao_merge', name=proposer_name, merit=merit)}{C.RESET}")

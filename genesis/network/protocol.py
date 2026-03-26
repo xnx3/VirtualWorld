@@ -193,6 +193,7 @@ class Message:
         remaining_ticks: int = 0,
         ratio: float = 0.0,
         merit: float = 0.0,
+        voter_name: str = "",
     ) -> Message:
         """Broadcast a Tao vote event to the network."""
         return cls(
@@ -207,6 +208,7 @@ class Message:
                 "remaining_ticks": remaining_ticks,
                 "ratio": ratio,
                 "merit": merit,
+                "voter_name": voter_name,
             },
             sender_id=node_id,
         )

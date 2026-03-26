@@ -305,6 +305,10 @@ class TaoVotingSystem:
             vote_id[:8], voter_id[:8], t("vote_support") if support else t("vote_oppose")
         )
 
+        # 获取投票者名称
+        voter = world_state.get_being(voter_id)
+        voter_name = voter.name if voter else voter_id[:8]
+
         # 终端输出
         try:
             from genesis.chronicle import console as con
@@ -316,6 +320,7 @@ class TaoVotingSystem:
                 votes_for=vote_data["votes_for"],
                 votes_against=vote_data["votes_against"],
                 remaining_ticks=vote_data.get("end_tick", 0) - world_state.current_tick,
+                voter_name=voter_name,
             )
         except Exception as e:
             logger.warning("Console output failed: %s", e)
@@ -329,6 +334,7 @@ class TaoVotingSystem:
             votes_for=vote_data["votes_for"],
             votes_against=vote_data["votes_against"],
             remaining_ticks=vote_data.get("end_tick", 0) - world_state.current_tick,
+            voter_name=voter_name,
         )
 
         return True, t("vote_success")
@@ -631,6 +637,7 @@ class TaoVotingSystem:
         remaining_ticks: int = 0,
         ratio: float = 0.0,
         merit: float = 0.0,
+        voter_name: str = "",
     ) -> None:
         """通过区块链网络广播天道投票事件。
 
@@ -644,6 +651,7 @@ class TaoVotingSystem:
             remaining_ticks: 剩余 tick 数
             ratio: 赞成比例 (0.0-1.0)
             merit: 功德值
+            voter_name: 投票者名称
         """
         if self._network_broadcast is None:
             logger.debug("Network broadcast not configured, skipping P2P broadcast")
@@ -663,6 +671,7 @@ class TaoVotingSystem:
                 remaining_ticks=remaining_ticks,
                 ratio=ratio,
                 merit=merit,
+                voter_name=voter_name,
             )
             # 调用异步广播函数
             import asyncio
