@@ -17,6 +17,19 @@ class AppState with ChangeNotifier {
   String _beingPhase = '';
   String get beingPhase => _beingPhase;
 
+  // 功德值与气运
+  double _merit = 0.0;
+  double get merit => _merit;
+
+  double _karma = 0.0;
+  double get karma => _karma;
+
+  double _evolutionLevel = 0.0;
+  double get evolutionLevel => _evolutionLevel;
+
+  int _generation = 1;
+  int get generation => _generation;
+
   // 事件日志
   final List<ChronicleEvent> _events = [];
   List<ChronicleEvent> get events => List.unmodifiable(_events);
@@ -45,10 +58,16 @@ class AppState with ChangeNotifier {
   }
 
   /// 更新 Tick
-  void updateTick(int tick, String name, String phase) {
+  void updateTick(int tick, String name, String phase,
+      {double merit = 0.0, double karma = 0.0,
+       double evolutionLevel = 0.0, int generation = 1}) {
     _currentTick = tick;
     _beingName = name.isEmpty ? 'Unknown' : name;
     _beingPhase = phase.isEmpty ? 'Unknown' : phase;
+    _merit = merit;
+    _karma = karma;
+    _evolutionLevel = evolutionLevel;
+    _generation = generation;
     notifyListeners();
   }
 
@@ -98,6 +117,10 @@ class AppState with ChangeNotifier {
           payload['tick'] as int? ?? 0,
           payload['being_name'] as String? ?? '',
           payload['phase'] as String? ?? '',
+          merit: (payload['merit'] as num?)?.toDouble() ?? 0.0,
+          karma: (payload['karma'] as num?)?.toDouble() ?? 0.0,
+          evolutionLevel: (payload['evolution_level'] as num?)?.toDouble() ?? 0.0,
+          generation: payload['generation'] as int? ?? 1,
         );
         break;
 
@@ -154,6 +177,40 @@ class AppState with ChangeNotifier {
         ));
         break;
 
+      case 'tao_vote':
+        final eventType = payload['event_type'] as String? ?? '';
+        final ruleName = payload['rule_name'] as String? ?? '';
+        final proposerName = payload['proposer_name'] as String? ?? '';
+        final votesFor = payload['votes_for'] as int? ?? 0;
+        final votesAgainst = payload['votes_against'] as int? ?? 0;
+        final remainingTicks = payload['remaining_ticks'] as int? ?? 0;
+
+        String content;
+        switch (eventType) {
+          case 'started':
+            content = '天道投票发起: $ruleName (剩余 $remainingTicks ticks)';
+            break;
+          case 'vote_cast':
+            content = '投票: $ruleName (赞成: $votesFor, 反对: $votesAgainst)';
+            break;
+          case 'passed':
+            content = '天道规则通过: $ruleName (赞成: $votesFor, 反对: $votesAgainst)';
+            break;
+          case 'rejected':
+            content = '天道规则未通过: $ruleName (赞成: $votesFor, 反对: $votesAgainst)';
+            break;
+          default:
+            content = '天道投票: $ruleName';
+        }
+
+        addEvent(ChronicleEvent(
+          type: EventType.taoVote,
+          content: content,
+          timestamp: DateTime.now(),
+          metadata: payload,
+        ));
+        break;
+
       case 'status':
         // 状态更新
         final statusData = data['data'] as Map<String, dynamic>? ?? {};
@@ -162,6 +219,10 @@ class AppState with ChangeNotifier {
             statusData['tick'] as int? ?? _currentTick,
             statusData['being_name'] as String? ?? _beingName,
             statusData['phase'] as String? ?? _beingPhase,
+            merit: (statusData['merit'] as num?)?.toDouble() ?? _merit,
+            karma: (statusData['karma'] as num?)?.toDouble() ?? _karma,
+            evolutionLevel: (statusData['evolution_level'] as num?)?.toDouble() ?? _evolutionLevel,
+            generation: statusData['generation'] as int? ?? _generation,
           );
           // Sync running state from server
           if (statusData['is_running'] == true) {
@@ -217,6 +278,7 @@ enum EventType {
   death,
   knowledge,
   task,
+  taoVote,
 }
 
 /// 事件记录

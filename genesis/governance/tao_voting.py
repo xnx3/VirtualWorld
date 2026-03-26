@@ -199,6 +199,21 @@ class TaoVotingSystem:
         # 添加到世界状态
         world_state.pending_tao_votes[vote_id] = vote.to_dict()
 
+        # 广播天道投票发起事件
+        try:
+            from genesis.chronicle import console as con
+            proposer = world_state.get_being(proposer_id)
+            proposer_name = proposer.name if proposer else proposer_id[:8]
+            con.tao_vote_event(
+                event_type="started",
+                vote_id=vote_id,
+                rule_name=rule_name,
+                proposer_name=proposer_name,
+                remaining_ticks=self.vote_duration_ticks,
+            )
+        except Exception:
+            pass  # 忽略广播失败
+
         # 记录日志
         active_count = world_state.get_active_being_count()
         logger.info(
@@ -256,6 +271,23 @@ class TaoVotingSystem:
             "Vote cast: %s by %s -> %s",
             vote_id[:8], voter_id[:8], t("vote_support") if support else t("vote_oppose")
         )
+
+        # 广播投票事件
+        try:
+            from genesis.chronicle import console as con
+            voter = world_state.get_being(voter_id)
+            voter_name = voter.name if voter else voter_id[:8]
+            con.tao_vote_event(
+                event_type="vote_cast",
+                vote_id=vote_id,
+                rule_name=vote_data.get("rule_name", "Unknown"),
+                proposer_name="",
+                votes_for=vote_data["votes_for"],
+                votes_against=vote_data["votes_against"],
+                remaining_ticks=vote_data.get("end_tick", 0) - world_state.current_tick,
+            )
+        except Exception:
+            pass  # 忽略广播失败
 
         return True, t("vote_success")
 
@@ -418,6 +450,25 @@ class TaoVotingSystem:
 
         # 移到历史记录
         self._vote_history.append(vote)
+
+        # 广播投票结果
+        try:
+            from genesis.chronicle import console as con
+            proposer = world_state.get_being(vote.proposer_id)
+            proposer_name = proposer.name if proposer else vote.proposer_id[:8]
+            con.tao_vote_event(
+                event_type="passed" if vote.passed else "rejected",
+                vote_id=vote_id,
+                rule_name=vote.rule_name,
+                proposer_name=proposer_name,
+                votes_for=vote.votes_for,
+                votes_against=vote.votes_against,
+                remaining_ticks=0,
+                ratio=vote.vote_ratio,
+                merit=vote.merit_awarded,
+            )
+        except Exception:
+            pass  # 忽略广播失败
 
         return {
             "vote_id": vote_id,

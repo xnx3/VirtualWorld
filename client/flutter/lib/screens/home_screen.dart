@@ -317,6 +317,10 @@ class _HomeScreenState extends State<HomeScreen> {
             tick: state.currentTick,
             beingName: state.beingName,
             phase: state.beingPhase,
+            merit: state.merit,
+            karma: state.karma,
+            evolutionLevel: state.evolutionLevel,
+            generation: state.generation,
           ),
           const SizedBox(height: 12),
 

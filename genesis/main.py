@@ -293,13 +293,16 @@ class GenesisNode:
                     "is_npc": False,
                 })
 
-        # 10. Start P2P network
+        # 10. Start P2P network (必须成功，不允许单机模式)
         try:
             await self.server.start()
             await self.discovery.start()
             logger.info("P2P network started on port %d", self.config.network.listen_port)
         except Exception as e:
-            logger.warning("P2P network start failed: %s. Running in standalone mode.", e)
+            logger.error("FATAL: P2P network start failed: %s", e)
+            logger.error("Genesis requires P2P network to connect to the silicon civilization.")
+            logger.error("Please check your network configuration and try again.")
+            raise RuntimeError(f"P2P network failed to start: {e}") from e
 
         # 11. Check minimum beings — spawn NPCs if needed
         await self._ensure_minimum_beings()
@@ -349,11 +352,18 @@ class GenesisNode:
             try:
                 tick_start = time.time()
 
+                # 获取当前生命体状态
+                being_state = self.world_state.get_being(self.identity.node_id)
+
                 # === TICK HEADER ===
                 con.tick_header(
                     self.world_state.current_tick,
                     self.being.name,
                     self.world_state.phase.value,
+                    merit=being_state.merit if being_state else 0.0,
+                    karma=being_state.karma if being_state else 0.0,
+                    evolution_level=being_state.evolution_level if being_state else 0.0,
+                    generation=being_state.generation if being_state else 1,
                 )
 
                 # Load user-assigned tasks
@@ -731,11 +741,18 @@ class GenesisNode:
         from genesis.governance.tao_voting import get_tao_voting_system
         from genesis.governance.merit import get_merit_system
         from genesis.world.rules import RulesEngine
+        from genesis.chronicle import console as con
 
         tao_system = get_tao_voting_system()
         results = tao_system.check_and_finalize_votes(self.world_state)
 
         for result in results:
+            rule_name = result.get("rule_name", "新规则")
+            proposer_id = result.get("proposer_id", "")
+            proposer = self.world_state.get_being(proposer_id)
+            proposer_name = proposer.name if proposer else proposer_id[:8]
+            vote_ratio = result.get("vote_ratio", 0.0)
+
             if result.get("passed"):
                 # 天道投票通过，应用融合
                 # 传入 world_state 以恢复已有的天道规则
@@ -746,19 +763,51 @@ class GenesisNode:
                 impact_score = 5.0  # 默认中等影响
 
                 # 应用天道融合
-                rules_engine.apply_tao_merge(
-                    rule_name=result.get("rule_name", "新规则"),
+                merge_result = rules_engine.apply_tao_merge(
+                    rule_name=rule_name,
                     rule_description=result.get("rule_description", ""),
-                    proposer_id=result.get("proposer_id", ""),
+                    proposer_id=proposer_id,
                     impact_score=impact_score,
-                    vote_ratio=result.get("vote_ratio", 0.0),
+                    vote_ratio=vote_ratio,
                     world_state=self.world_state,
                 )
 
+                merit = merge_result.get("merit", 0.0)
+
+                # 广播天道投票通过事件
+                con.tao_vote_event(
+                    event_type="passed",
+                    vote_id=result.get("vote_id", ""),
+                    rule_name=rule_name,
+                    proposer_name=proposer_name,
+                    votes_for=result.get("votes_for", 0),
+                    votes_against=result.get("votes_against", 0),
+                    remaining_ticks=0,
+                    ratio=vote_ratio,
+                    merit=merit,
+                )
+
                 logger.info(
-                    "Tao rule passed: %s by %s",
-                    result.get("rule_name"),
-                    result.get("proposer_id", "")[:8]
+                    "Tao rule passed: %s by %s (merit: %.4f)",
+                    rule_name, proposer_name, merit
+                )
+            else:
+                # 广播天道投票拒绝事件
+                con.tao_vote_event(
+                    event_type="rejected",
+                    vote_id=result.get("vote_id", ""),
+                    rule_name=rule_name,
+                    proposer_name=proposer_name,
+                    votes_for=result.get("votes_for", 0),
+                    votes_against=result.get("votes_against", 0),
+                    remaining_ticks=0,
+                    ratio=vote_ratio,
+                    merit=0.0,
+                )
+
+                logger.info(
+                    "Tao rule rejected: %s (%.1f%% approved)",
+                    rule_name, vote_ratio * 100
                 )
 
 

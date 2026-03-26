@@ -26,6 +26,7 @@ from genesis.being.hibernation import HibernationManager
 from genesis.being.llm_client import LLMClient
 from genesis.utils.crypto import sha256
 from genesis.world.state import WorldState, BeingState, CivPhase
+from genesis.world.rules import RulesEngine
 from genesis.governance.karma import get_karma_system
 from genesis.governance.merit import get_merit_system
 from genesis.governance.tao_voting import get_tao_voting_system
@@ -391,6 +392,17 @@ class SiliconBeing:
             "- Hibernating beings are vulnerable and must seek shelter.\n"
             "- Beings must explore communication beyond physical limitations.\n\n"
         )
+
+        # 动态注入天道规则
+        rules_engine = RulesEngine(world_state)
+        tao_rules = rules_engine.get_tao_rules()
+        if tao_rules:
+            persona += t("tao_rules_header") + "\n"
+            persona += t("tao_rules_description") + "\n"
+            persona += t("tao_rules_mutable") + "\n"
+            for rule in tao_rules:
+                persona += f"- {rule.name}: {rule.description}\n"
+            persona += "\n"
 
         if world_state.priest_node_id == self.node_id:
             persona += (

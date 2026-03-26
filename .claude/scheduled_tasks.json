@@ -1,0 +1,10 @@
+{
+  "tasks": [
+    {
+      "id": "e48e45c6",
+      "cron": "0 10 28 3 *",
+      "prompt": "【重要任务提醒】\n\n请提醒用户改进功德值善行奖励机制。\n\n**问题描述**：\n- 位置：`genesis/governance/merit.py:222-265`\n- 当前实现：功德值奖励使用纯随机数（`random.uniform`）\n- 问题：没有考虑行为的实际价值，不符合\"功德值应该反映实际贡献\"的设计意图\n\n**改进方向**：\n- 基于知识复杂度计算功德值\n- 基于生灵的进化等级调整\n- 基于行为的影响力评估\n- 而非纯随机数\n\n请提醒用户查看 `genesis/governance/merit.py` 中的 `award_for_teach`、`award_for_share_knowledge`、`award_for_build_shelter` 等方法进行改进。",
+      "createdAt": 1774503614444
+    }
+  ]
+}
