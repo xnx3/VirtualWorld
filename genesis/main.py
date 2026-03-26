@@ -752,10 +752,12 @@ class GenesisNode:
         """检查并结算到期的天道投票。"""
         from genesis.governance.tao_voting import get_tao_voting_system
         from genesis.governance.merit import get_merit_system
+        from genesis.governance.creator_god import CreatorGodSystem
         from genesis.world.rules import RulesEngine
         from genesis.chronicle import console as con
 
         tao_system = get_tao_voting_system()
+        god_sys = CreatorGodSystem()
         results = tao_system.check_and_finalize_votes(self.world_state)
 
         for result in results:
@@ -821,6 +823,12 @@ class GenesisNode:
                     "Tao rule rejected: %s (%.1f%% approved)",
                     rule_name, vote_ratio * 100
                 )
+
+        # 检查创世神是否应该消亡（当100个生灵融入天道时）
+        if results and any(r.get("passed") for r in results):
+            vanished_god = god_sys.apply_vanish(self.world_state)
+            if vanished_god:
+                con.creator_god_vanish(vanished_god[:8], len(self.world_state.tao_merged_beings))
 
 
 def run_start(args):

@@ -274,6 +274,18 @@ def error(message: str) -> None:
     _write(f"  {ICONS['error']} {C.RED}{message}{C.RESET}")
 
 
+def creator_god_vanish(god_id: str, tao_merged_count: int) -> None:
+    """创世神消亡事件输出。"""
+    _write("")
+    separator("═")
+    _write(f"  {C.BMAGENTA}{C.BOLD}⚖️ {t('creator_god_vanish')}{C.RESET}")
+    _write(f"     {C.MAGENTA}{t('creator_god_vanish_desc', god_id=god_id, count=tao_merged_count)}{C.RESET}")
+    _write(f"     {C.CYAN}{t('creator_god_vanish_priest')}{C.RESET}")
+    _write(f"     {C.GREEN}{t('creator_god_vanish_tao')}{C.RESET}")
+    separator("═")
+    _write("")
+
+
 def startup_info(name: str, form: str, traits: dict, node_id: str) -> None:
     header(t("startup_title"))
     _write(f"  {C.BOLD}{t('name_label')}:{C.RESET} {C.CYAN}{name}{C.RESET}")

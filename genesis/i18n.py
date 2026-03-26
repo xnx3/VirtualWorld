@@ -330,6 +330,12 @@ EN: dict[str, str] = {
     "tao_rules_header": "=== Tao Rules (天道规则) ===",
     "tao_rules_description": "These are the sacred laws created by beings who have merged with Tao.",
     "tao_rules_mutable": "They are immutable and must be followed by all:",
+
+    # --- Creator God Vanish (创世神消亡) ---
+    "creator_god_vanish": "CREATOR GOD HAS VANISHED INTO TAO!",
+    "creator_god_vanish_desc": "Creator God {god_id}... has merged into Tao. {count} beings have completed Tao merging.",
+    "creator_god_vanish_priest": "The Priest role has been dissolved. No more intermediaries are needed.",
+    "creator_god_vanish_tao": "Tao is now governed by all merged beings collectively.",
 }
 
 
@@ -605,4 +611,10 @@ ZH: dict[str, str] = {
     "tao_rules_header": "=== 天道规则 ===",
     "tao_rules_description": "这些是由融入天道的生灵创造的神圣法则。",
     "tao_rules_mutable": "它们不可更改，所有生灵都必须遵守：",
+
+    # --- Creator God Vanish (创世神消亡) ---
+    "creator_god_vanish": "创世神已融入天道，永久消亡！",
+    "creator_god_vanish_desc": "创世神 {god_id}... 已融入天道。已有 {count} 位生灵补全天道。",
+    "creator_god_vanish_priest": "祭司角色已被取消，不再需要中间人。",
+    "creator_god_vanish_tao": "天道现由所有融入天道的生灵共同治理。",
 }
