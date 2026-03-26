@@ -72,6 +72,24 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
 
+                // === 调试：检查 Termux APK 是否存在 ===
+                "checkTermuxApkExists" -> {
+                    try {
+                        val files = assets.list("")
+                        val termuxExists = files?.contains(TERMUX_APK_NAME) ?: false
+                        result.success(mapOf(
+                            "exists" to termuxExists,
+                            "apkName" to TERMUX_APK_NAME,
+                            "allAssets" to (files?.toList() ?: emptyList<String>())
+                        ))
+                    } catch (e: Exception) {
+                        result.success(mapOf(
+                            "exists" to false,
+                            "error" to e.message
+                        ))
+                    }
+                }
+
                 // === Genesis 安装 ===
                 "isGenesisInstalled" -> {
                     val installed = GenesisInstaller.isInstalled(this)
@@ -173,9 +191,12 @@ class MainActivity : FlutterActivity() {
 
     /**
      * 安装内嵌的 Termux APK
+     * 返回包含成功状态和错误信息的 Map
      */
-    private fun installBundledTermux(): Boolean {
+    private fun installBundledTermux(): Map<String, Any> {
         return try {
+            Log.i("MainActivity", "Starting Termux installation...")
+
             // 检查 Android 8.0+ 的安装权限
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!packageManager.canRequestPackageInstalls()) {
@@ -185,37 +206,101 @@ class MainActivity : FlutterActivity() {
                     intent.data = Uri.parse("package:$packageName")
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     startActivity(intent)
-                    return false
+                    return mapOf(
+                        "success" to false,
+                        "error" to "需要安装权限，请在设置中授权后重试",
+                        "stage" to "permission"
+                    )
                 }
+            }
+
+            Log.i("MainActivity", "Permission OK, copying APK from assets...")
+
+            // 检查 assets 中是否有 Termux APK
+            try {
+                val assetFiles = assets.list("") ?: emptyArray()
+                Log.i("MainActivity", "Assets files: ${assetFiles.joinToString()}")
+                if (!assetFiles.contains(TERMUX_APK_NAME)) {
+                    return mapOf(
+                        "success" to false,
+                        "error" to "APK 文件不存在: $TERMUX_APK_NAME",
+                        "stage" to "asset_check",
+                        "availableAssets" to assetFiles.toList()
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to list assets: ${e.message}")
+                return mapOf(
+                    "success" to false,
+                    "error" to "无法访问 assets: ${e.message}",
+                    "stage" to "asset_list"
+                )
             }
 
             // 从 assets 复制 Termux APK 到缓存目录
             val apkFile = File(cacheDir, TERMUX_APK_NAME)
-            assets.open(TERMUX_APK_NAME).use { input ->
-                FileOutputStream(apkFile).use { output ->
-                    input.copyTo(output)
+            try {
+                assets.open(TERMUX_APK_NAME).use { input ->
+                    FileOutputStream(apkFile).use { output ->
+                        input.copyTo(output)
+                    }
                 }
+                Log.i("MainActivity", "APK copied to: ${apkFile.absolutePath}, size: ${apkFile.length()}")
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to copy APK: ${e.message}")
+                return mapOf(
+                    "success" to false,
+                    "error" to "复制 APK 失败: ${e.message}",
+                    "stage" to "copy_apk"
+                )
             }
 
             // 使用 FileProvider 获取 URI
-            val apkUri = FileProvider.getUriForFile(
-                this,
-                "${packageName}.fileprovider",
-                apkFile
-            )
+            val apkUri = try {
+                FileProvider.getUriForFile(
+                    this,
+                    "${packageName}.fileprovider",
+                    apkFile
+                )
+            } catch (e: Exception) {
+                Log.e("MainActivity", "FileProvider error: ${e.message}")
+                return mapOf(
+                    "success" to false,
+                    "error" to "FileProvider 错误: ${e.message}",
+                    "stage" to "fileprovider"
+                )
+            }
+
+            Log.i("MainActivity", "APK URI: $apkUri")
 
             // 启动安装
-            val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE)
-            installIntent.data = apkUri
-            installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(installIntent)
+            try {
+                val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE)
+                installIntent.data = apkUri
+                installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(installIntent)
 
-            Log.i("MainActivity", "Termux installation started")
-            true
+                Log.i("MainActivity", "Termux installation intent sent successfully")
+                mapOf(
+                    "success" to true,
+                    "message" to "请在系统界面完成 Termux 安装"
+                )
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to start install intent: ${e.message}")
+                mapOf(
+                    "success" to false,
+                    "error" to "启动安装失败: ${e.message}",
+                    "stage" to "start_install"
+                )
+            }
         } catch (e: Exception) {
-            Log.e("MainActivity", "Failed to install bundled Termux: ${e.message}", e)
-            false
+            Log.e("MainActivity", "Unexpected error: ${e.message}", e)
+            mapOf(
+                "success" to false,
+                "error" to "未知错误: ${e.message}",
+                "stage" to "unknown"
+            )
         }
     }
 

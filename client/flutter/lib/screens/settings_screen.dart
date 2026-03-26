@@ -281,7 +281,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// 安装内嵌的 Termux
   Future<void> _installBundledTermux() async {
     try {
-      // 先检查是否有安装权限
+      // 先检查 Termux APK 是否存在
+      final checkResult = await _channel.invokeMethod('checkTermuxApkExists') as Map;
+      debugPrint('Termux APK check: $checkResult');
+
+      if (checkResult['exists'] != true) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Termux APK 不存在: ${checkResult['apkName']}'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 5),
+            ),
+          );
+        }
+        return;
+      }
+
+      // 检查是否有安装权限
       final canInstall = await _channel.invokeMethod('canInstallPackages') as bool;
       if (!canInstall) {
         // 请求权限
@@ -295,7 +312,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
 
       // 安装内嵌的 Termux
-      final success = await _channel.invokeMethod('installBundledTermux') as bool;
+      final result = await _channel.invokeMethod('installBundledTermux') as Map;
+      final success = result['success'] as bool;
+
       if (success && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('请在系统界面完成 Termux 安装'), backgroundColor: Colors.blue),
@@ -303,15 +322,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
         // 延迟检查安装状态
         Future.delayed(Duration(seconds: 5), () => _checkAllStatus());
       } else if (mounted) {
+        final error = result['error'] ?? '未知错误';
+        final stage = result['stage'] ?? '';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('安装 Termux 失败'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('安装失败 [$stage]: $error'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 5),
+          ),
         );
       }
     } catch (e) {
       debugPrint('Failed to install bundled Termux: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('安装失败: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('安装异常: $e'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 5),
+          ),
         );
       }
     }
