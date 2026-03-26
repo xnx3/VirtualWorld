@@ -723,6 +723,7 @@ class TaoVotingSystem:
                 remaining_ticks=payload.get("remaining_ticks", 0),
                 ratio=payload.get("ratio", 0.0),
                 merit=payload.get("merit", 0.0),
+                voter_name=payload.get("voter_name", ""),
             )
         except Exception as e:
             logger.warning("Failed to output tao vote event to console: %s", e)
