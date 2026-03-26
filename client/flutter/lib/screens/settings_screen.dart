@@ -355,6 +355,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _installGenesis() async {
     if (_isInstalling) return;
 
+    // 先检查存储权限
+    try {
+      final hasPermission = await _channel.invokeMethod('hasStoragePermission') as bool;
+      if (!hasPermission) {
+        // 请求权限
+        await _channel.invokeMethod('requestStoragePermission');
+        // 显示提示
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: Row(
+                children: [
+                  Icon(Icons.folder_open, color: Colors.orange),
+                  SizedBox(width: 8),
+                  Text('需要存储权限'),
+                ],
+              ),
+              content: Text(
+                'Genesis 需要存储权限来安装后端文件。\n\n'
+                '请在设置中授予"允许访问所有文件"权限后，返回此页面重试。',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text('取消'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    // 再次检查权限后继续安装
+                    _doInstallGenesis();
+                  },
+                  child: Text('已授权，继续'),
+                ),
+              ],
+            ),
+          );
+        }
+        return;
+      }
+    } catch (e) {
+      debugPrint('Failed to check storage permission: $e');
+    }
+
+    // 有权限，直接安装
+    _doInstallGenesis();
+  }
+
+  /// 执行 Genesis 安装
+  Future<void> _doInstallGenesis() async {
     setState(() {
       _isInstalling = true;
       _installStage = '准备安装...';
@@ -375,12 +426,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           }
         });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(message),
-            backgroundColor: success ? Colors.green : Colors.red,
-          ),
-        );
+        // 显示结果对话框
+        _showInstallResultDialog(success, message);
       }
     } catch (e) {
       if (mounted) {
@@ -390,6 +437,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
       }
     }
+  }
+
+  /// 显示安装结果对话框
+  void _showInstallResultDialog(bool success, String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              success ? Icons.check_circle : Icons.info,
+              color: success ? Colors.green : Colors.orange,
+            ),
+            SizedBox(width: 8),
+            Text(success ? '安装准备完成' : '安装提示'),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(message),
+              if (success) ...[
+                SizedBox(height: 16),
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.black26,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '在 Termux 中执行以下命令：',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                      ),
+                      SizedBox(height: 8),
+                      SelectableText(
+                        'termux-setup-storage\nbash ~/storage/downloads/Genesis/install.sh',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          color: Colors.cyan,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 12),
+                Text(
+                  '提示：复制上面的命令，然后打开 Termux 粘贴执行',
+                  style: TextStyle(color: Colors.white60, fontSize: 11),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('关闭'),
+          ),
+          if (success)
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.pop(context);
+                _openTermux();
+              },
+              icon: Icon(Icons.terminal),
+              label: Text('打开 Termux'),
+            ),
+        ],
+      ),
+    );
   }
 
   /// 启动服务

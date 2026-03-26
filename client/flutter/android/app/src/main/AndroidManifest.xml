@@ -13,6 +13,8 @@
     <!-- 存储 -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <!-- Android 11+ 存储管理权限 -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <!-- 安装 APK 权限（用于安装内嵌 Termux） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
