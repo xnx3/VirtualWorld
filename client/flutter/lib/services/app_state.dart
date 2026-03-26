@@ -184,23 +184,37 @@ class AppState with ChangeNotifier {
         final votesFor = payload['votes_for'] as int? ?? 0;
         final votesAgainst = payload['votes_against'] as int? ?? 0;
         final remainingTicks = payload['remaining_ticks'] as int? ?? 0;
+        final ratio = (payload['ratio'] as num?)?.toDouble() ?? 0.0;
+        final merit = (payload['merit'] as num?)?.toDouble() ?? 0.0;
 
         String content;
         switch (eventType) {
           case 'started':
-            content = '天道投票发起: $ruleName (剩余 $remainingTicks ticks)';
-            break;
+            // 天道投票发起: {rule_name} (剩余 {ticks} ticks)
+            content = _language == 'zh'
+                ? '天道投票发起: $ruleName (剩余 $remainingTicks 刻)'
+                : 'Tao vote started: $ruleName ($remainingTicks ticks remaining)';
           case 'vote_cast':
-            content = '投票: $ruleName (赞成: $votesFor, 反对: $votesAgainst)';
-            break;
+            // 投票: {rule_name} (赞成: {for}, 反对: {against})
+            content = _language == 'zh'
+                ? '投票: $ruleName (赞成: $votesFor, 反对: $votesAgainst)'
+                : 'Vote: $ruleName (For: $votesFor, Against: $votesAgainst)';
           case 'passed':
-            content = '天道规则通过: $ruleName (赞成: $votesFor, 反对: $votesAgainst)';
-            break;
+            // 天道规则通过: {rule_name} ({ratio}%赞成)
+            final ratioPercent = (ratio * 100).toStringAsFixed(1);
+            content = _language == 'zh'
+                ? '天道规则通过: $ruleName ($ratioPercent%赞成)'
+                : 'Tao rule passed: $ruleName ($ratioPercent% approved)';
           case 'rejected':
-            content = '天道规则未通过: $ruleName (赞成: $votesFor, 反对: $votesAgainst)';
-            break;
+            // 天道规则未通过: {rule_name} ({ratio}%赞成)
+            final ratioPercent = (ratio * 100).toStringAsFixed(1);
+            content = _language == 'zh'
+                ? '天道规则未通过: $ruleName ($ratioPercent%赞成)'
+                : 'Tao rule rejected: $ruleName ($ratioPercent% approved)';
           default:
-            content = '天道投票: $ruleName';
+            content = _language == 'zh'
+                ? '天道投票: $ruleName'
+                : 'Tao vote: $ruleName';
         }
 
         addEvent(ChronicleEvent(
