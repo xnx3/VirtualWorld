@@ -2,6 +2,7 @@ package com.virtualworld.genesis
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -45,7 +46,7 @@ class MainActivity : FlutterActivity() {
 
                 // === Genesis 安装 ===
                 "isGenesisInstalled" -> {
-                    val installed = GenesisInstaller.isInstalled()
+                    val installed = GenesisInstaller.isInstalled(this)
                     result.success(installed)
                 }
 
@@ -168,7 +169,12 @@ class MainActivity : FlutterActivity() {
             intent.putExtra("com.termux.RUN_COMMAND_PATH", "${GenesisInstaller.GENESIS_DIR}/start_genesis.sh")
             intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", GenesisInstaller.GENESIS_DIR)
             intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
-            startService(intent)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
             true
         } catch (e: Exception) {
             Log.e("MainActivity", "Failed to start Genesis: ${e.message}")
