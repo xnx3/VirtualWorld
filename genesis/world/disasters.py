@@ -119,7 +119,7 @@ class DisasterSystem:
 
         Hibernating beings with poor safety status are especially vulnerable.
         Active beings can try to survive based on their resilience trait.
-        Creator God is immune.
+        Creator God and beings merged with Tao (cannot_die=True) are immune.
         """
         killed: list[str] = []
         beings = list(world_state.beings.values())
@@ -129,6 +129,8 @@ class DisasterSystem:
                 continue
             if being.node_id == world_state.creator_god_node_id:
                 continue  # Creator God is immortal
+            if being.cannot_die:
+                continue  # Beings merged with Tao are immortal
 
             # Check if being is in affected area
             if disaster.affected_area != "global" and being.location != disaster.affected_area:
@@ -182,7 +184,7 @@ class DisasterSystem:
         """Apply civilization reset. Returns list of killed node_ids.
 
         The top `survivors_count` beings by evolution_level survive.
-        Creator God always survives.
+        Creator God and beings merged with Tao (cannot_die=True) always survive.
         """
         all_living = [
             b for b in world_state.beings.values()
@@ -196,6 +198,11 @@ class DisasterSystem:
         # Creator God always survives
         if world_state.creator_god_node_id:
             survivors.add(world_state.creator_god_node_id)
+
+        # Beings merged with Tao always survive
+        for being in all_living:
+            if being.cannot_die:
+                survivors.add(being.node_id)
 
         for being in all_living:
             if len(survivors) >= survivors_count:
