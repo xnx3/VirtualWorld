@@ -28,6 +28,10 @@ class TxType(str, Enum):
     DISASTER_EVENT = "DISASTER_EVENT"
     WORLD_RULE = "WORLD_RULE"
     MAP_UPDATE = "MAP_UPDATE"
+    # 天道投票交易类型
+    TAO_VOTE_INITIATE = "TAO_VOTE_INITIATE"   # 发起天道投票
+    TAO_VOTE_CAST = "TAO_VOTE_CAST"           # 投票
+    TAO_VOTE_FINALIZE = "TAO_VOTE_FINALIZE"   # 投票结算
 
 
 @dataclass

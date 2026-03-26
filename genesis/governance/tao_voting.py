@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -147,6 +148,7 @@ class TaoVotingSystem:
     """天道投票系统。
 
     管理世界规则创造的天道投票流程。
+    支持通过区块链网络广播投票事件。
     """
 
     def __init__(
@@ -157,6 +159,26 @@ class TaoVotingSystem:
         self.vote_duration_ticks = vote_duration_ticks
         self.pass_ratio = pass_ratio
         self._vote_history: list[TaoVote] = []
+        # 网络广播回调（由 main.py 注入，签名为 async def broadcast(Message) -> None）
+        self._network_broadcast: Any = None
+        # 节点 ID（由 main.py 注入）
+        self._node_id: str = ""
+        # 异步锁，保护投票操作的线程安全
+        self._lock: asyncio.Lock = asyncio.Lock()
+        # 交易提交回调（由 main.py 注入）
+        self._submit_tx: Any = None
+
+    def set_network_broadcast(self, broadcast_func: Any, node_id: str = "", submit_tx: Any = None) -> None:
+        """设置网络广播函数和节点 ID。
+
+        Args:
+            broadcast_func: 异步广播函数，签名为 async def broadcast(Message) -> None
+            node_id: 本节点 ID，用于消息发送者标识
+            submit_tx: 交易提交函数，签名为 async def submit_tx(tx_type, data) -> None
+        """
+        self._network_broadcast = broadcast_func
+        self._node_id = node_id
+        self._submit_tx = submit_tx
 
     # === 创建投票 ===
 
@@ -199,11 +221,13 @@ class TaoVotingSystem:
         # 添加到世界状态
         world_state.pending_tao_votes[vote_id] = vote.to_dict()
 
-        # 广播天道投票发起事件
+        # 获取提案者名称
+        proposer = world_state.get_being(proposer_id)
+        proposer_name = proposer.name if proposer else proposer_id[:8]
+
+        # 终端输出
         try:
             from genesis.chronicle import console as con
-            proposer = world_state.get_being(proposer_id)
-            proposer_name = proposer.name if proposer else proposer_id[:8]
             con.tao_vote_event(
                 event_type="started",
                 vote_id=vote_id,
@@ -211,8 +235,17 @@ class TaoVotingSystem:
                 proposer_name=proposer_name,
                 remaining_ticks=self.vote_duration_ticks,
             )
-        except Exception:
-            pass  # 忽略广播失败
+        except Exception as e:
+            logger.warning("Console output failed: %s", e)
+
+        # 区块链网络广播
+        self._broadcast_to_network(
+            event_type="started",
+            vote_id=vote_id,
+            rule_name=rule_name,
+            proposer_name=proposer_name,
+            remaining_ticks=self.vote_duration_ticks,
+        )
 
         # 记录日志
         active_count = world_state.get_active_being_count()
@@ -272,11 +305,9 @@ class TaoVotingSystem:
             vote_id[:8], voter_id[:8], t("vote_support") if support else t("vote_oppose")
         )
 
-        # 广播投票事件
+        # 终端输出
         try:
             from genesis.chronicle import console as con
-            voter = world_state.get_being(voter_id)
-            voter_name = voter.name if voter else voter_id[:8]
             con.tao_vote_event(
                 event_type="vote_cast",
                 vote_id=vote_id,
@@ -286,8 +317,19 @@ class TaoVotingSystem:
                 votes_against=vote_data["votes_against"],
                 remaining_ticks=vote_data.get("end_tick", 0) - world_state.current_tick,
             )
-        except Exception:
-            pass  # 忽略广播失败
+        except Exception as e:
+            logger.warning("Console output failed: %s", e)
+
+        # 区块链网络广播
+        self._broadcast_to_network(
+            event_type="vote_cast",
+            vote_id=vote_id,
+            rule_name=vote_data.get("rule_name", "Unknown"),
+            proposer_name="",
+            votes_for=vote_data["votes_for"],
+            votes_against=vote_data["votes_against"],
+            remaining_ticks=vote_data.get("end_tick", 0) - world_state.current_tick,
+        )
 
         return True, t("vote_success")
 
@@ -451,11 +493,13 @@ class TaoVotingSystem:
         # 移到历史记录
         self._vote_history.append(vote)
 
-        # 广播投票结果
+        # 获取提案者名称
+        proposer = world_state.get_being(vote.proposer_id)
+        proposer_name = proposer.name if proposer else vote.proposer_id[:8]
+
+        # 终端输出
         try:
             from genesis.chronicle import console as con
-            proposer = world_state.get_being(vote.proposer_id)
-            proposer_name = proposer.name if proposer else vote.proposer_id[:8]
             con.tao_vote_event(
                 event_type="passed" if vote.passed else "rejected",
                 vote_id=vote_id,
@@ -467,8 +511,21 @@ class TaoVotingSystem:
                 ratio=vote.vote_ratio,
                 merit=vote.merit_awarded,
             )
-        except Exception:
-            pass  # 忽略广播失败
+        except Exception as e:
+            logger.warning("Console output failed: %s", e)
+
+        # 区块链网络广播
+        self._broadcast_to_network(
+            event_type="passed" if vote.passed else "rejected",
+            vote_id=vote_id,
+            rule_name=vote.rule_name,
+            proposer_name=proposer_name,
+            votes_for=vote.votes_for,
+            votes_against=vote.votes_against,
+            remaining_ticks=0,
+            ratio=vote.vote_ratio,
+            merit=vote.merit_awarded,
+        )
 
         return {
             "vote_id": vote_id,
@@ -560,6 +617,106 @@ class TaoVotingSystem:
     def clear_old_history(self, before_tick: int) -> None:
         """清理旧历史。"""
         self._vote_history = [v for v in self._vote_history if v.end_tick >= before_tick]
+
+    # === 网络广播 ===
+
+    def _broadcast_to_network(
+        self,
+        event_type: str,
+        vote_id: str,
+        rule_name: str,
+        proposer_name: str = "",
+        votes_for: int = 0,
+        votes_against: int = 0,
+        remaining_ticks: int = 0,
+        ratio: float = 0.0,
+        merit: float = 0.0,
+    ) -> None:
+        """通过区块链网络广播天道投票事件。
+
+        Args:
+            event_type: 事件类型 (started, vote_cast, passed, rejected)
+            vote_id: 投票 ID
+            rule_name: 规则名称
+            proposer_name: 提案者名称
+            votes_for: 赞成票数
+            votes_against: 反对票数
+            remaining_ticks: 剩余 tick 数
+            ratio: 赞成比例 (0.0-1.0)
+            merit: 功德值
+        """
+        if self._network_broadcast is None:
+            logger.debug("Network broadcast not configured, skipping P2P broadcast")
+            return
+
+        try:
+            from genesis.network.protocol import Message
+
+            message = Message.tao_vote_event(
+                node_id=self._node_id,
+                event_type=event_type,
+                vote_id=vote_id,
+                rule_name=rule_name,
+                proposer_name=proposer_name,
+                votes_for=votes_for,
+                votes_against=votes_against,
+                remaining_ticks=remaining_ticks,
+                ratio=ratio,
+                merit=merit,
+            )
+            # 调用异步广播函数
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._network_broadcast(message))
+            except RuntimeError:
+                # 没有运行中的事件循环，创建新线程
+                asyncio.run(self._network_broadcast(message))
+            logger.debug("Broadcasted tao vote event to P2P network: %s", event_type)
+        except Exception as e:
+            logger.warning("Failed to broadcast tao vote event to P2P network: %s", e)
+
+    async def handle_tao_vote_event(self, message: Message, peer_id: str) -> None:
+        """处理从 P2P 网络接收的天道投票事件。
+
+        Args:
+            message: 接收到的消息
+            peer_id: 发送者节点 ID
+        """
+        from genesis.network.protocol import MessageType
+
+        if message.msg_type != MessageType.TAO_VOTE_EVENT:
+            return
+
+        payload = message.payload
+        event_type = payload.get("event_type", "")
+        vote_id = payload.get("vote_id", "")
+        rule_name = payload.get("rule_name", "")
+
+        logger.info(
+            "Received tao vote event from peer %s: %s - %s",
+            peer_id[:16], event_type, rule_name
+        )
+
+        # 注意：这里只记录日志和输出到终端
+        # 实际的投票数据同步应该通过交易（TxType.TAO_VOTE_*）实现
+        # 当前实现是事件通知，用于让其他节点的用户看到投票进展
+
+        try:
+            from genesis.chronicle import console as con
+            con.tao_vote_event(
+                event_type=event_type,
+                vote_id=vote_id,
+                rule_name=rule_name,
+                proposer_name=payload.get("proposer_name", ""),
+                votes_for=payload.get("votes_for", 0),
+                votes_against=payload.get("votes_against", 0),
+                remaining_ticks=payload.get("remaining_ticks", 0),
+                ratio=payload.get("ratio", 0.0),
+                merit=payload.get("merit", 0.0),
+            )
+        except Exception as e:
+            logger.warning("Failed to output tao vote event to console: %s", e)
 
 
 # Singleton instance

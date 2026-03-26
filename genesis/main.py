@@ -126,6 +126,18 @@ class GenesisNode:
         )
         self.chain_sync = ChainSync(self.server, self.peer_manager)
 
+        # 设置天道投票系统的网络广播
+        from genesis.governance.tao_voting import get_tao_voting_system
+        tao_system = get_tao_voting_system()
+        tao_system.set_network_broadcast(
+            self.server.broadcast_message,
+            self.identity.node_id,
+            self._submit_tx
+        )
+
+        # 注册天道投票消息处理器
+        self.server.on_message(tao_system.handle_tao_vote_event)
+
         # 7. Initialize chronicle logger
         from genesis.chronicle.logger import ChronicleLogger
         self.chronicle = ChronicleLogger(str(self.data_dir / "chronicle"))
