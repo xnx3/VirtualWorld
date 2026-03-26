@@ -267,7 +267,265 @@ task copyTermuxScripts(type: Copy) {
 
 ## 时间线建议
 
-1. **Phase 1**：创建 `build_bundle.sh` + `quick_install.sh` + 修复 `start_genesis.sh`
-2. **Phase 2**：更新 Flutter 端集成（build.gradle + GenesisInstaller.kt）
-3. **Phase 3**：更新文档，在真机上端到端测试
+1. **Phase 1**：创建 `build_bundle.sh` + `quick_install.sh` + 修复 `start_genesis.sh` ✅ **已完成**
+2. **Phase 2**：更新 Flutter 端集成（build.gradle + GenesisInstaller.kt）✅ **已完成**
+3. **Phase 3**：更新文档，在真机上端到端测试 ✅ **文档已更新**
 4. **Phase 4**：（可选）设置 CI 自动构建 bundle
+
+---
+
+## 实现状态
+
+| 阶段 | 任务 | 状态 |
+|------|------|------|
+| Phase 1 | `termux/build_bundle.sh` | ✅ 已完成 |
+| Phase 1 | `termux/quick_install.sh` | ✅ 已完成 |
+| Phase 1 | `termux/start_genesis.sh` 修复 | ✅ 已完成 |
+| Phase 2 | `build.gradle` 更新 | ✅ 已完成 |
+| Phase 2 | `GenesisInstaller.kt` 更新 | ✅ 已完成 |
+| Phase 3 | `TERMUX_INTEGRATION.md` 更新 | ✅ 已完成 |
+| Phase 3 | 真机端到端测试 | ⏳ 待测试 |
+| Phase 4 | CI 自动构建 | ✅ 已完成 |
+
+---
+
+## CI 自动构建
+
+项目使用 GitHub Actions 自动构建 Termux bundle。
+
+### 触发方式
+
+**方式 1：推送标签**
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+**方式 2：手动触发**
+1. 进入 GitHub Actions 页面
+2. 选择 "Build Termux Bundle" 工作流
+3. 点击 "Run workflow"
+4. 可选填写版本号
+
+### 构建流程
+
+1. 在 ARM64 Docker 容器中运行（使用 `termux/termux-docker` 官方镜像）
+2. 安装 Python 和编译依赖（rust, build-essential）
+3. 创建虚拟环境并安装所有依赖
+4. 打包为 `genesis-termux-bundle.tar.gz`
+5. 生成 SHA256 校验文件
+6. 上传为 Artifact（保留 30 天）
+7. 如果是标签触发，自动创建 GitHub Release
+
+### 输出文件
+
+- `genesis-termux-bundle.tar.gz` - Bundle 包
+- `genesis-termux-bundle.tar.gz.sha256` - SHA256 校验
+- `bundle-info.json` - 构建元信息
+
+### CI 工作流文件
+
+| 文件 | 用途 |
+|------|------|
+| `.github/workflows/build-termux-bundle.yml` | 构建 Termux bundle |
+| `.github/workflows/test-scripts.yml` | 测试脚本语法和 Flutter 构建 |
+
+---
+
+## 使用说明
+
+### 构建 Bundle（开发者）
+
+在 ARM64 Termux 环境中执行：
+
+```bash
+cd /path/to/VirtualWorld/termux
+bash build_bundle.sh
+```
+
+输出文件：
+- `~/genesis-termux-bundle.tar.gz` - Bundle 包（约 30-50MB）
+- `~/genesis-termux-bundle.tar.gz.sha256` - SHA256 校验文件
+
+### 分发 Bundle
+
+**方案 A：随 APK 分发**
+
+1. 将 bundle 文件放入 `client/flutter/android/app/src/main/assets/`
+2. 重新构建 APK
+3. Flutter 应用会自动复制 bundle 到共享存储
+
+**方案 B：网络下载**
+
+1. 将 bundle 上传到 GitHub Releases 或其他托管服务
+2. 用户运行：`quick_install.sh --from-url <bundle-url>`
+
+### 用户快速安装
+
+```bash
+# 授予存储权限
+termux-setup-storage
+
+# 快速安装
+bash ~/storage/downloads/Genesis/quick_install.sh
+```
+
+---
+
+## 完整打包流程（开发者指南）
+
+本节详细说明从源码到最终 APK 的完整打包流程，供其他开发者参考。
+
+### 步骤 1：准备 Termux Bundle（可选但推荐）
+
+Bundle 包含预编译的 Python 依赖，可大幅减少用户安装时间。
+
+**在 ARM64 Android 设备上（Termux 环境）：**
+
+```bash
+# 1. 安装 Termux（从 F-Droid）
+# 下载地址：https://f-droid.org/packages/com.termux/
+
+# 2. 在 Termux 中克隆项目
+pkg install git
+git clone https://github.com/xnx3/Genesis.git
+cd Genesis
+
+# 3. 运行构建脚本
+cd termux
+bash build_bundle.sh
+
+# 4. 等待构建完成（约 10-20 分钟）
+# 输出文件位于 ~/ 目录：
+# - genesis-termux-bundle.tar.gz
+# - genesis-termux-bundle.tar.gz.sha256
+
+# 5. 将 bundle 复制到共享存储
+cp ~/genesis-termux-bundle.tar.gz* ~/storage/downloads/
+```
+
+**将 Bundle 嵌入 APK：**
+
+```bash
+# 在开发电脑上
+# 1. 从设备获取 bundle（通过 adb 或其他方式）
+adb pull /sdcard/Download/genesis-termux-bundle.tar.gz client/flutter/android/app/src/main/assets/
+adb pull /sdcard/Download/genesis-termux-bundle.tar.gz.sha256 client/flutter/android/app/src/main/assets/
+
+# 2. 或手动复制到 assets 目录
+cp genesis-termux-bundle.tar.gz client/flutter/android/app/src/main/assets/
+cp genesis-termux-bundle.tar.gz.sha256 client/flutter/android/app/src/main/assets/
+```
+
+### 步骤 2：构建 Flutter APK
+
+**环境要求：**
+- Java 17
+- Flutter SDK 3.24+
+
+```bash
+# 1. 进入 Flutter 项目目录
+cd client/flutter
+
+# 2. 获取依赖
+flutter pub get
+
+# 3. 检查环境
+flutter doctor
+
+# 4. 构建 Release APK
+flutter build apk --release
+
+# 5. APK 输出位置
+# build/app/outputs/flutter-apk/app-release.apk
+```
+
+### 步骤 3：测试 APK
+
+```bash
+# 安装到连接的设备
+flutter install
+
+# 或手动安装
+adb install build/app/outputs/flutter-apk/app-release.apk
+```
+
+### 步骤 4：分发 APK
+
+APK 可通过以下方式分发：
+
+1. **GitHub Releases**：上传到项目的 Releases 页面
+2. **直接分发**：发送 APK 文件给用户
+3. **应用商店**：如需上架商店，需配置签名
+
+### 无 Bundle 的情况
+
+如果不嵌入 bundle，用户仍可使用完整安装：
+
+```bash
+# 在 Termux 中
+termux-setup-storage
+bash ~/storage/downloads/Genesis/install.sh
+```
+
+完整安装需要 10-30 分钟，但不需要额外准备工作。
+
+### 文件依赖关系
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      APK 构建流程                           │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  genesis/                    ──┐                            │
+│  requirements.txt            ──┼──► APK assets (必须)       │
+│  config.yaml.example         ──┤                            │
+│  termux/*.sh                 ──┘                            │
+│                                                             │
+│  genesis-termux-bundle.tar.gz ───► APK assets (可选)        │
+│  genesis-termux-bundle.tar.gz.sha256                        │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│                      安装流程                               │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Flutter App                                                │
+│       │                                                     │
+│       ▼                                                     │
+│  复制 assets 到共享存储 (~/storage/downloads/Genesis/)      │
+│       │                                                     │
+│       ▼                                                     │
+│  用户在 Termux 中执行                                        │
+│       │                                                     │
+│       ├──► quick_install.sh (有 bundle，约1分钟)            │
+│       │         │                                           │
+│       │         ▼                                           │
+│       │    解压 bundle → 完成                                │
+│       │                                                     │
+│       └──► install.sh (无 bundle，约20分钟)                  │
+│                 │                                           │
+│                 ▼                                           │
+│            pip install → 完成                               │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 故障排除
+
+**Bundle 构建失败：**
+- 确保 Termux 是最新版本
+- 确保有足够存储空间（约 500MB）
+- 检查网络连接（需要下载依赖）
+
+**APK 构建失败：**
+- 检查 Java 版本是否为 17
+- 运行 `flutter clean` 后重试
+- 检查 `flutter doctor` 输出
+
+**用户安装失败：**
+- 确认已运行 `termux-setup-storage`
+- 检查存储空间是否充足
+- 尝试使用完整安装 (`install.sh`)
+

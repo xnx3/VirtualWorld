@@ -16,7 +16,64 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 自动安装（推荐）
+## 安装方式对比
+
+| 方式 | 安装时间 | 网络需求 | 适用场景 |
+|------|---------|---------|---------|
+| **快速安装** | ~1 分钟 | 仅需下载 bundle | 推荐，离线可用 |
+| **完整安装** | 10-30 分钟 | 需下载依赖并编译 | 网络好，或无预构建 bundle |
+
+### 快速安装（推荐）
+
+使用预构建的 bundle 包，包含完整的 Python 虚拟环境和所有依赖，解压即用。
+
+**前提条件**：
+- Termux 已安装
+- bundle 文件已准备好（`genesis-termux-bundle.tar.gz`）
+
+**步骤**：
+
+```bash
+# 1. 授予存储权限
+termux-setup-storage
+
+# 2. 运行快速安装脚本
+bash ~/storage/downloads/Genesis/quick_install.sh
+
+# 3. 启动服务
+cd ~/genesis
+./start_genesis.sh
+```
+
+**选项参数**：
+```bash
+# 强制重新安装
+bash ~/storage/downloads/Genesis/quick_install.sh --force
+
+# 从网络下载 bundle
+bash ~/storage/downloads/Genesis/quick_install.sh --from-url https://example.com/genesis-termux-bundle.tar.gz
+
+# 指定 bundle 文件路径
+bash ~/storage/downloads/Genesis/quick_install.sh --bundle /path/to/bundle.tar.gz
+```
+
+### 完整安装（备选）
+
+从源码安装，需要编译依赖包。
+
+```bash
+# 1. 授予存储权限
+termux-setup-storage
+
+# 2. 运行完整安装脚本（需要 10-30 分钟）
+bash ~/storage/downloads/Genesis/install.sh
+
+# 3. 启动服务
+cd ~/genesis
+./start_genesis.sh
+```
+
+## 自动安装（Flutter 应用内）
 
 在 Flutter 应用中，打开 **设置** 界面，按照 3 步流程操作：
 
@@ -27,15 +84,31 @@
 
 ### Step 2: 一键安装 Genesis
 - 点击"一键安装 Genesis"按钮
-- 应用会自动将 Genesis 文件复制到 Termux 目录
-- 等待安装完成（约 10-30 秒）
+- 应用会自动将 Genesis 文件复制到共享存储目录
+- 如果 APK 包含预构建 bundle，会一并复制
 
-### Step 3: 启动服务
-- 点击"启动服务"按钮
+### Step 3: 在 Termux 中完成安装
+- 打开 Termux 应用
+- 运行 `termux-setup-storage` 授予存储权限
+- 根据提示选择快速安装或完整安装：
+  ```bash
+  # 快速安装（推荐，约1分钟）
+  bash ~/storage/downloads/Genesis/quick_install.sh
+
+  # 或完整安装（约20分钟）
+  bash ~/storage/downloads/Genesis/install.sh
+  ```
+
+### Step 4: 启动服务
+- 在 Termux 中运行：
+  ```bash
+  cd ~/genesis
+  ./start_genesis.sh
+  ```
 - 服务将在后台运行
-- 返回主界面，应用会自动连接 `ws://127.0.0.1:19842`
+- 返回 Flutter 应用，会自动连接 `ws://127.0.0.1:19842`
 
-## 手动安装（备选）
+## 手动安装（开发/测试）
 
 如果自动安装失败，可以手动操作：
 
@@ -44,7 +117,7 @@
 从 F-Droid 安装（推荐，Google Play 版本已过时）：
 - Termux: https://f-droid.org/packages/com.termux/
 
-### 2. 在 Termux 中安装 Genesis
+### 2. 获取 Genesis 文件
 
 ```bash
 # 方法 A: 从 Git 克隆
@@ -53,8 +126,10 @@ git clone https://github.com/your-repo/VirtualWorld.git
 cd VirtualWorld/termux
 bash install.sh
 
-# 方法 B: 从 APK assets 复制
-# Genesis 文件位于 /data/data/com.termux/files/home/genesis/
+# 方法 B: 从 Flutter 应用复制
+# Flutter 应用会将文件复制到 ~/storage/downloads/Genesis/
+termux-setup-storage
+bash ~/storage/downloads/Genesis/install.sh
 ```
 
 ### 3. 配置 API 密钥
@@ -88,13 +163,34 @@ cd ~/genesis
 │   ├── being/                      # 生命体模块
 │   ├── world/                      # 世界模块
 │   └── ...
+├── venv/                           # Python 虚拟环境（快速安装）
 ├── data/                           # 数据目录
 │   ├── config.yaml                 # 配置文件（需手动配置 API）
 │   ├── genesis.log                 # 日志文件
 │   └── chronicle/                  # 历史记录
 ├── start_genesis.sh                # 启动脚本
-└── install.sh                      # 安装依赖脚本
+├── install.sh                      # 完整安装脚本
+├── quick_install.sh                # 快速安装脚本
+└── bundle-info.json                # Bundle 信息（快速安装）
 ```
+
+## 构建 Bundle（开发者）
+
+如果需要自己构建预构建 bundle，在 ARM64 Termux 环境中运行：
+
+```bash
+# 进入项目目录
+cd VirtualWorld/termux
+
+# 运行构建脚本
+bash build_bundle.sh
+
+# 输出文件
+# - genesis-termux-bundle.tar.gz (~30-50MB)
+# - genesis-termux-bundle.tar.gz.sha256
+```
+
+**注意**：Bundle 必须在 ARM64 Termux 环境中构建，以确保 `.so` 文件兼容性。
 
 ## 后台运行
 
@@ -121,6 +217,36 @@ nohup ./start_genesis.sh > genesis.log 2>&1 &
 ```
 
 ## 故障排除
+
+### 快速安装失败
+
+**Python 版本不兼容**：
+```bash
+# 检查 Python 版本
+python3 --version
+
+# 查看 bundle 需要的版本
+cat ~/genesis/bundle-info.json
+
+# 如果版本不匹配，使用完整安装
+bash ~/storage/downloads/Genesis/install.sh
+```
+
+**Bundle 校验失败**：
+```bash
+# 手动校验 SHA256
+sha256sum -c genesis-termux-bundle.tar.gz.sha256
+
+# 如果校验失败，重新下载 bundle
+```
+
+**venv 损坏**：
+```bash
+# 删除 venv 并重新安装依赖
+rm -rf ~/genesis/venv
+cd ~/genesis
+pip install -r requirements.txt
+```
 
 ### 服务无法启动
 

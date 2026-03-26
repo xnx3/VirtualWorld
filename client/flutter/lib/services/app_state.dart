@@ -188,37 +188,39 @@ class AppState with ChangeNotifier {
         final ratio = (payload['ratio'] as num?)?.toDouble() ?? 0.0;
         final merit = (payload['merit'] as num?)?.toDouble() ?? 0.0;
 
+        // 使用 AppLocalizations 进行国际化
+        final loc = AppLocalizations(_language);
+        final forLabel = loc.taoVoteFor;
+        final againstLabel = loc.taoVoteAgainst;
+
         String content;
         switch (eventType) {
           case 'started':
-            // 天道投票发起: {rule_name} (提案者: {proposer}, 剩余 {ticks} 刻)
+            // 天道投票发起
             final proposerInfo = proposerName.isNotEmpty
-                ? (_language == 'zh' ? '(提案者: $proposerName)' : '(proposer: $proposerName)')
+                ? '(${loc.proposer}: $proposerName)'
                 : '';
-            content = _language == 'zh'
-                ? '天道投票发起: $ruleName $proposerInfo (剩余 $remainingTicks 刻)'
-                : 'Tao vote started: $ruleName $proposerInfo ($remainingTicks ticks remaining)';
+            final remainingLabel = loc.taoVoteRemaining.replaceAll('{ticks}', remainingTicks.toString());
+            content = '${loc.taoVoteStarted.replaceAll('{rule_name}', ruleName)} $proposerInfo ($remainingLabel)';
           case 'vote_cast':
-            // 投票: {voter_name} 对 {rule_name} 投票 (赞成: {for}, 反对: {against})
-            final voterInfo = voterName.isNotEmpty
-                ? '($voterName)'
-                : '';
+            // 投票
+            final voterInfo = voterName.isNotEmpty ? '($voterName)' : '';
             content = _language == 'zh'
-                ? '投票$voterInfo: $ruleName (赞成: $votesFor, 反对: $votesAgainst)'
-                : 'Vote$voterInfo: $ruleName (For: $votesFor, Against: $votesAgainst)';
+                ? '投票$voterInfo: $ruleName ($forLabel: $votesFor, $againstLabel: $votesAgainst)'
+                : 'Vote$voterInfo: $ruleName ($forLabel: $votesFor, $againstLabel: $votesAgainst)';
           case 'passed':
-            // 天道规则通过: {rule_name} ({ratio}%赞成, 赞成: {for}, 反对: {against}, 功德: {merit})
+            // 天道规则通过
             final ratioPercent = (ratio * 100).toStringAsFixed(1);
             final meritStr = merit.toStringAsFixed(4);
             content = _language == 'zh'
-                ? '天道规则通过: $ruleName ($ratioPercent%赞成, 赞成: $votesFor, 反对: $votesAgainst, 功德: $meritStr)'
-                : 'Tao rule passed: $ruleName ($ratioPercent% approved, For: $votesFor, Against: $votesAgainst, Merit: $meritStr)';
+                ? '${loc.taoVotePassed.replaceAll('{rule_name}', ruleName).replaceAll('{ratio:.1f}', ratioPercent)}, $forLabel: $votesFor, $againstLabel: $votesAgainst, ${loc.merit}: $meritStr'
+                : '${loc.taoVotePassed.replaceAll('{rule_name}', ruleName).replaceAll('{ratio:.1f}', ratioPercent)}, $forLabel: $votesFor, $againstLabel: $votesAgainst, ${loc.merit}: $meritStr';
           case 'rejected':
-            // 天道规则未通过: {rule_name} ({ratio}%赞成, 赞成: {for}, 反对: {against})
+            // 天道规则未通过
             final ratioPercent = (ratio * 100).toStringAsFixed(1);
             content = _language == 'zh'
-                ? '天道规则未通过: $ruleName ($ratioPercent%赞成, 赞成: $votesFor, 反对: $votesAgainst)'
-                : 'Tao rule rejected: $ruleName ($ratioPercent% approved, For: $votesFor, Against: $votesAgainst)';
+                ? '${loc.taoVoteFailed.replaceAll('{rule_name}', ruleName).replaceAll('{ratio:.1f}', ratioPercent)}, $forLabel: $votesFor, $againstLabel: $votesAgainst'
+                : '${loc.taoVoteFailed.replaceAll('{rule_name}', ruleName).replaceAll('{ratio:.1f}', ratioPercent)}, $forLabel: $votesFor, $againstLabel: $votesAgainst';
           default:
             content = _language == 'zh'
                 ? '天道投票: $ruleName'

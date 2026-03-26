@@ -107,6 +107,7 @@ class AppLocalizations {
   // ========== 投票 ==========
   String get voteLabel => locale == 'zh' ? '投票' : 'Vote';
   String get voteScore => locale == 'zh' ? '评分: {score}' : 'Score: {score}';
+  String get proposer => locale == 'zh' ? '提案者' : 'Proposer';
 
   // ========== 知识 ==========
   String get knowledgeDiscovered => locale == 'zh' ? '发现新知识:' : 'New Knowledge Discovered:';
