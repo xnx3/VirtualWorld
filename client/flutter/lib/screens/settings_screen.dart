@@ -278,13 +278,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  /// 打开 Termux 下载页面
-  Future<void> _openTermuxDownload() async {
+  /// 安装内嵌的 Termux
+  Future<void> _installBundledTermux() async {
     try {
-      await _channel.invokeMethod('openTermuxStore');
+      // 先检查是否有安装权限
+      final canInstall = await _channel.invokeMethod('canInstallPackages') as bool;
+      if (!canInstall) {
+        // 请求权限
+        await _channel.invokeMethod('requestInstallPermission');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('请授权后重试'), backgroundColor: Colors.orange),
+          );
+        }
+        return;
+      }
+
+      // 安装内嵌的 Termux
+      final success = await _channel.invokeMethod('installBundledTermux') as bool;
+      if (success && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('请在系统界面完成 Termux 安装'), backgroundColor: Colors.blue),
+        );
+        // 延迟检查安装状态
+        Future.delayed(Duration(seconds: 5), () => _checkAllStatus());
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('安装 Termux 失败'), backgroundColor: Colors.red),
+        );
+      }
     } catch (e) {
-      debugPrint('Failed to open store: $e');
+      debugPrint('Failed to install bundled Termux: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('安装失败: $e'), backgroundColor: Colors.red),
+        );
+      }
     }
+  }
+
+  /// 打开 Termux 下载页面（保留兼容性，但改用内嵌安装）
+  Future<void> _openTermuxDownload() async {
+    await _installBundledTermux();
   }
 
   /// 一键安装 Genesis
@@ -580,8 +615,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 12),
           ElevatedButton.icon(
             onPressed: _openTermuxDownload,
-            icon: const Icon(Icons.download),
-            label: const Text('下载 Termux (F-Droid)'),
+            icon: const Icon(Icons.install_mobile),
+            label: const Text('安装 Termux'),
           ),
         ],
 

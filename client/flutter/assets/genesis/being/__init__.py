@@ -1,0 +1,1 @@
+"""Being (NPC/entity) management."""

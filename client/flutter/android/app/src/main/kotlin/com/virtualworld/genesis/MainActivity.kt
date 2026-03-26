@@ -1,12 +1,18 @@
 package com.virtualworld.genesis
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.Settings
 import android.util.Log
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
+import java.io.FileOutputStream
 
 /**
  * Flutter 主活动
@@ -16,6 +22,8 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val CHANNEL = "com.virtualworld.genesis/termux"
+        private const val TERMUX_APK_NAME = "termux-arm64-v8a.apk"
+        private const val REQUEST_INSTALL_TERMUX = 1001
     }
 
     private var installProgressCallback: MethodChannel? = null
@@ -40,7 +48,27 @@ class MainActivity : FlutterActivity() {
                 }
 
                 "openTermuxStore" -> {
-                    openTermuxStorePage()
+                    // 改为安装内嵌的 Termux APK
+                    val installResult = installBundledTermux()
+                    result.success(installResult)
+                }
+
+                "installBundledTermux" -> {
+                    val installResult = installBundledTermux()
+                    result.success(installResult)
+                }
+
+                "canInstallPackages" -> {
+                    val canInstall = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        packageManager.canRequestPackageInstalls()
+                    } else {
+                        true
+                    }
+                    result.success(canInstall)
+                }
+
+                "requestInstallPermission" -> {
+                    requestInstallPackagesPermission()
                     result.success(true)
                 }
 
@@ -143,20 +171,64 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun openTermuxStorePage() {
-        try {
-            // 优先打开 F-Droid 页面
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://f-droid.org/packages/com.termux/"))
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
+    /**
+     * 安装内嵌的 Termux APK
+     */
+    private fun installBundledTermux(): Boolean {
+        return try {
+            // 检查 Android 8.0+ 的安装权限
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (!packageManager.canRequestPackageInstalls()) {
+                    Log.w("MainActivity", "No permission to install packages")
+                    // 引导用户到设置页面授权
+                    val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                    intent.data = Uri.parse("package:$packageName")
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                    return false
+                }
+            }
+
+            // 从 assets 复制 Termux APK 到缓存目录
+            val apkFile = File(cacheDir, TERMUX_APK_NAME)
+            assets.open(TERMUX_APK_NAME).use { input ->
+                FileOutputStream(apkFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            // 使用 FileProvider 获取 URI
+            val apkUri = FileProvider.getUriForFile(
+                this,
+                "${packageName}.fileprovider",
+                apkFile
+            )
+
+            // 启动安装
+            val installIntent = Intent(Intent.ACTION_INSTALL_PACKAGE)
+            installIntent.data = apkUri
+            installIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(installIntent)
+
+            Log.i("MainActivity", "Termux installation started")
+            true
         } catch (e: Exception) {
-            // 回退到 Google Play
-            try {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.termux"))
+            Log.e("MainActivity", "Failed to install bundled Termux: ${e.message}", e)
+            false
+        }
+    }
+
+    /**
+     * 请求安装未知应用权限
+     */
+    private fun requestInstallPackagesPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (!packageManager.canRequestPackageInstalls()) {
+                val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                intent.data = Uri.parse("package:$packageName")
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(intent)
-            } catch (e2: Exception) {
-                // 无法打开应用商店
             }
         }
     }

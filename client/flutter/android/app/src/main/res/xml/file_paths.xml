@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Cache directory for bundled Termux APK -->
+    <cache-path name="cache" path="." />
+    <!-- Internal files directory -->
+    <files-path name="files" path="." />
+    <!-- External storage -->
+    <external-path name="external" path="." />
+</paths>
