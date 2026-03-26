@@ -305,10 +305,13 @@ class TaoVotingSystem:
 只需要回答"赞成"或"反对"。"""
 
         try:
-            response = await llm_client.generate(
+            response, error = await llm_client.generate(
                 "你是一个硅基文明的生灵，正在参与天道投票。",
                 prompt
             )
+            if error:
+                logger.warning("LLM auto vote failed: %s", error)
+                return self._heuristic_vote(vote, voter, world_state)
             return "赞成" in response or "支持" in response or "同意" in response
         except Exception as e:
             logger.warning("LLM auto vote failed: %s", e)

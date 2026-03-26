@@ -157,10 +157,13 @@ class MeritSystem:
 请直接返回四个数字，用空格分隔，例如：0.8 0.9 0.5 0.7"""
 
         try:
-            response = await llm_client.generate(
+            response, error = await llm_client.generate(
                 "你是一个硅基文明的规则评估专家。",
                 prompt
             )
+            if error:
+                logger.warning("LLM impact score evaluation failed: %s", error)
+                return self._heuristic_impact_score(rule_description, world_state)
             # Parse the response
             parts = response.strip().split()
             if len(parts) >= 4:

@@ -167,7 +167,11 @@ class HibernationManager:
         )
 
         try:
-            return await llm_client.generate(system_prompt, user_prompt)
+            result, error = await llm_client.generate(system_prompt, user_prompt)
+            if error:
+                logger.warning("LLM farewell generation failed: %s, using fallback", error)
+                return self._fallback_farewell(being_state, safety)
+            return result
         except Exception:
             logger.warning("LLM farewell generation failed, using fallback")
             return self._fallback_farewell(being_state, safety)

@@ -662,7 +662,7 @@ class SiliconBeing:
             if self.llm_client:
                 persona = self._build_persona_prompt(world_state)
                 try:
-                    result = await self.llm_client.generate(
+                    result, error = await self.llm_client.generate(
                         persona,
                         f"The Creator God has assigned you a thinking task:\n\n"
                         f"{task_desc}\n\n"
@@ -671,7 +671,7 @@ class SiliconBeing:
                         f"Provide your findings and insights.\n\n"
                         + t("llm_lang_instruction"),
                     )
-                    task["result"] = result
+                    task["result"] = result if result else f"(Thinking failed: {error})"
                 except Exception as e:
                     task["result"] = f"(Thinking failed: {e})"
             else:

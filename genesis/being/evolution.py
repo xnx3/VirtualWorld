@@ -148,7 +148,10 @@ class EvolutionTracker:
         )
 
         try:
-            raw = await llm_client.generate(system_prompt, user_prompt)
+            raw, error = await llm_client.generate(system_prompt, user_prompt)
+            if error:
+                logger.warning("LLM contribution proposal failed: %s, using fallback", error)
+                return self._fallback_proposal(being_state)
             # Try to parse as JSON
             proposal = self._parse_proposal(raw)
         except Exception:
@@ -186,7 +189,10 @@ class EvolutionTracker:
         user_prompt = f"Proposal ({cat}): {desc}"
 
         try:
-            raw = await llm_client.generate(system_prompt, user_prompt)
+            raw, error = await llm_client.generate(system_prompt, user_prompt)
+            if error or not raw:
+                logger.warning("LLM evaluation failed: %s, returning default score", error)
+                return 50
             score = int("".join(c for c in raw.strip() if c.isdigit())[:3])
             return max(0, min(100, score))
         except Exception:
