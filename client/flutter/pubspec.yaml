@@ -18,6 +18,7 @@ dependencies:
 
   # 网络
   web_socket_channel: ^2.4.0
+  http: ^1.1.0
 
   # 本地存储
   shared_preferences: ^2.2.2

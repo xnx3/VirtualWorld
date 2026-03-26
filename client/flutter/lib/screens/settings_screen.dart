@@ -1,13 +1,15 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
 
 import '../services/app_state.dart';
 import '../l10n/app_localizations.dart';
 
-/// 设置界面 - Termux 集成
+/// 设置界面 - Termux 集成 + API 配置
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -31,11 +33,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _installStage = '';
   int _installProgress = 0;
 
+  // API 配置
+  final _baseUrlController = TextEditingController(text: 'https://api.openai.com/v1');
+  final _apiKeyController = TextEditingController();
+  final _modelController = TextEditingController(text: 'gpt-4o-mini');
+  bool _isSaving = false;
+  bool _isTesting = false;
+  bool _apiConfigured = false;
+  bool _obscureApiKey = true;
+
+  // 预设 API 提供商
+  final _presets = [
+    {'name': 'OpenAI', 'baseUrl': 'https://api.openai.com/v1', 'model': 'gpt-4o-mini'},
+    {'name': 'DeepSeek', 'baseUrl': 'https://api.deepseek.com/v1', 'model': 'deepseek-chat'},
+    {'name': 'Claude', 'baseUrl': 'https://api.anthropic.com/v1', 'model': 'claude-3-haiku-20240307'},
+    {'name': '本地 Ollama', 'baseUrl': 'http://localhost:11434/v1', 'model': 'llama3'},
+  ];
+
   @override
   void initState() {
     super.initState();
     _loadSettings();
     _setupProgressListener();
+  }
+
+  @override
+  void dispose() {
+    _baseUrlController.dispose();
+    _apiKeyController.dispose();
+    _modelController.dispose();
+    super.dispose();
   }
 
   void _setupProgressListener() {
@@ -65,6 +92,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // 检查 Termux 状态
     if (Platform.isAndroid) {
       await _checkAllStatus();
+      await _loadAPIConfig();
+    }
+  }
+
+  Future<void> _loadAPIConfig() async {
+    try {
+      final config = await _channel.invokeMethod('readLLMConfig') as Map;
+      if (mounted && config.isNotEmpty) {
+        setState(() {
+          _baseUrlController.text = config['base_url'] ?? 'https://api.openai.com/v1';
+          _apiKeyController.text = config['api_key'] ?? '';
+          _modelController.text = config['model'] ?? 'gpt-4o-mini';
+          _apiConfigured = _apiKeyController.text.isNotEmpty;
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to load API config: $e');
     }
   }
 
@@ -91,6 +135,147 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('language', lang);
     context.read<AppState>().setLanguage(lang);
+  }
+
+  /// 应用预设配置
+  void _applyPreset(String name) {
+    final preset = _presets.firstWhere((p) => p['name'] == name, orElse: () => _presets[0]);
+    setState(() {
+      _baseUrlController.text = preset['baseUrl']!;
+      _modelController.text = preset['model']!;
+    });
+  }
+
+  /// 保存并测试 API 配置
+  Future<void> _saveAndTestConfig() async {
+    if (_apiKeyController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('请输入 API Key'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+
+    setState(() => _isSaving = true);
+
+    try {
+      // 先测试 API
+      final testResult = await _testAPIConnection();
+
+      if (!testResult['success']) {
+        setState(() => _isSaving = false);
+        _showErrorDialog('API 测试失败', testResult['error']);
+        return;
+      }
+
+      // 测试成功，保存配置
+      final saveResult = await _channel.invokeMethod('saveLLMConfig', {
+        'baseUrl': _baseUrlController.text.trim(),
+        'apiKey': _apiKeyController.text.trim(),
+        'model': _modelController.text.trim(),
+      }) as Map;
+
+      setState(() {
+        _isSaving = false;
+        _apiConfigured = true;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✓ API 配置已保存并验证成功'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() => _isSaving = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('保存失败: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  /// 测试 API 连接
+  Future<Map<String, dynamic>> _testAPIConnection() async {
+    setState(() => _isTesting = true);
+
+    try {
+      final baseUrl = _baseUrlController.text.trim();
+      final apiKey = _apiKeyController.text.trim();
+      final model = _modelController.text.trim();
+
+      // 构建请求
+      final uri = Uri.parse('$baseUrl/chat/completions');
+      final response = await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $apiKey',
+        },
+        body: jsonEncode({
+          'model': model,
+          'messages': [
+            {'role': 'user', 'content': 'Say "OK" in one word.'}
+          ],
+          'max_tokens': 10,
+        }),
+      ).timeout(Duration(seconds: 30));
+
+      setState(() => _isTesting = false);
+
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body);
+        // 检查是否有有效响应
+        if (body['choices'] != null && (body['choices'] as List).isNotEmpty) {
+          return {'success': true};
+        } else {
+          return {'success': false, 'error': '响应格式异常: ${response.body}'};
+        }
+      } else {
+        // 解析错误信息
+        String errorMessage = 'HTTP ${response.statusCode}';
+        try {
+          final errorBody = jsonDecode(response.body);
+          if (errorBody['error'] != null) {
+            errorMessage = errorBody['error']['message'] ?? errorBody['error'].toString();
+          }
+        } catch (_) {}
+        return {'success': false, 'error': errorMessage};
+      }
+    } catch (e) {
+      setState(() => _isTesting = false);
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  /// 显示错误对话框
+  void _showErrorDialog(String title, String error) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.error, color: Colors.red),
+            SizedBox(width: 8),
+            Text(title),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: SelectableText(
+            error,
+            style: TextStyle(color: Colors.red[300], fontSize: 12),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('确定'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// 打开 Termux 下载页面
@@ -152,7 +337,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Genesis 服务已启动'), backgroundColor: Colors.green),
         );
-        // 延迟检查确认
         Future.delayed(Duration(seconds: 2), () => _checkAllStatus());
       }
     } catch (e) {
@@ -213,6 +397,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // === LLM API 配置 ===
+          _buildSectionHeader('LLM API 配置'),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: _buildAPIConfigPanel(),
+            ),
+          ),
+          const SizedBox(height: 24),
+
           // === Termux 服务状态 ===
           if (Platform.isAndroid) ...[
             _buildSectionHeader('Termux 服务'),
@@ -280,6 +474,94 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  /// 构建 API 配置面板
+  Widget _buildAPIConfigPanel() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 预设选择
+        Text('快速选择:', style: TextStyle(color: Colors.white60, fontSize: 12)),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          children: _presets.map((p) => ActionChip(
+            label: Text(p['name']!),
+            onPressed: () => _applyPreset(p['name']!),
+          )).toList(),
+        ),
+        const SizedBox(height: 16),
+
+        // Base URL
+        TextField(
+          controller: _baseUrlController,
+          decoration: const InputDecoration(
+            labelText: 'API Base URL',
+            hintText: 'https://api.openai.com/v1',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // API Key
+        TextField(
+          controller: _apiKeyController,
+          obscureText: _obscureApiKey,
+          decoration: InputDecoration(
+            labelText: 'API Key',
+            hintText: 'sk-...',
+            border: OutlineInputBorder(),
+            suffixIcon: IconButton(
+              icon: Icon(_obscureApiKey ? Icons.visibility : Icons.visibility_off),
+              onPressed: () => setState(() => _obscureApiKey = !_obscureApiKey),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Model
+        TextField(
+          controller: _modelController,
+          decoration: const InputDecoration(
+            labelText: 'Model',
+            hintText: 'gpt-4o-mini',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // 状态指示
+        if (_apiConfigured)
+          Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.green, size: 16),
+              SizedBox(width: 4),
+              Text('已配置', style: TextStyle(color: Colors.green, fontSize: 12)),
+            ],
+          ),
+        const SizedBox(height: 12),
+
+        // 保存按钮
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: _isSaving ? null : _saveAndTestConfig,
+            icon: _isSaving || _isTesting
+                ? SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(Icons.save),
+            label: Text(_isTesting ? '测试中...' : '保存并验证'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.deepPurple,
+            ),
+          ),
+        ),
+      ],
     );
   }
 

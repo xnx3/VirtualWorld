@@ -92,6 +92,29 @@ class MainActivity : FlutterActivity() {
                     result.success(running)
                 }
 
+                // === LLM 配置 ===
+                "saveLLMConfig" -> {
+                    val baseUrl = call.argument<String>("baseUrl") ?: ""
+                    val apiKey = call.argument<String>("apiKey") ?: ""
+                    val model = call.argument<String>("model") ?: ""
+
+                    val configResult = GenesisConfig.saveLLMConfig(
+                        context = this,
+                        baseUrl = baseUrl,
+                        apiKey = apiKey,
+                        model = model
+                    )
+                    result.success(mapOf(
+                        "success" to configResult.success,
+                        "message" to configResult.message
+                    ))
+                }
+
+                "readLLMConfig" -> {
+                    val config = GenesisConfig.readLLMConfig(this)
+                    result.success(config)
+                }
+
                 else -> result.notImplemented()
             }
         }
