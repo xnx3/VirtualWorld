@@ -828,13 +828,12 @@ class GenesisNode:
                     rule_name, vote_ratio * 100
                 )
 
-        # 检查创世神是否应该消亡（当100个生灵融入天道时）
-        if results and any(r.get("passed") for r in results):
-            current_god = self.world_state.creator_god_node_id
-            if current_god and god_sys.should_vanish(self.world_state):
-                await self._submit_tx("CREATOR_VANISH", {"god_id": current_god})
-                if self.world_state.creator_god_node_id is None:
-                    con.creator_god_vanish(current_god[:8], len(self.world_state.tao_merged_beings))
+        # 检查创世神是否应该消亡（达到阈值后不依赖当轮是否有投票通过）
+        current_god = self.world_state.creator_god_node_id
+        if current_god and god_sys.should_vanish(self.world_state):
+            await self._submit_tx("CREATOR_VANISH", {"god_id": current_god})
+            if self.world_state.creator_god_node_id is None:
+                con.creator_god_vanish(current_god[:8], len(self.world_state.tao_merged_beings))
 
 
 def run_start(args):
