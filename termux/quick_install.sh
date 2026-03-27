@@ -137,7 +137,12 @@ verify_bundle() {
     local sha256_file="${BUNDLE_PATH}.sha256"
     if [ -f "$sha256_file" ]; then
         echo -e "${YELLOW}  Verifying SHA256 checksum...${NC}"
-        if sha256sum -c "$sha256_file" --quiet 2>/dev/null; then
+        local expected_hash
+        local actual_hash
+        expected_hash="$(awk 'NR==1 {print $1}' "$sha256_file")"
+        actual_hash="$(sha256sum "$BUNDLE_PATH" | awk '{print $1}')"
+
+        if [ -n "$expected_hash" ] && [ "$expected_hash" = "$actual_hash" ]; then
             echo -e "${GREEN}  Checksum verified${NC}"
         else
             echo -e "${RED}Error: Checksum verification failed${NC}"

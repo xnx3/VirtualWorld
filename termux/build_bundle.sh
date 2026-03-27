@@ -230,8 +230,11 @@ create_bundle() {
         venv \
         bundle-info.json
 
-    # 生成 SHA256
-    sha256sum "$OUTPUT_DIR/$BUNDLE_NAME" > "$OUTPUT_DIR/${BUNDLE_NAME}.sha256"
+    # 生成 SHA256（使用文件名而非绝对路径，便于跨目录校验）
+    (
+        cd "$OUTPUT_DIR"
+        sha256sum "$BUNDLE_NAME" > "${BUNDLE_NAME}.sha256"
+    )
 
     # 显示文件大小
     local size
