@@ -146,9 +146,12 @@ object GenesisInstaller {
 
             progressCallback?.invoke("生成安装指令", 80)
 
+            val installScriptPath = "${sharedDir.absolutePath}/install.sh"
+            val quickInstallScriptPath = "${sharedDir.absolutePath}/quick_install.sh"
+
             // Step 6: 生成安装指令文件
             val instructionFile = File(sharedDir, "INSTALL_INSTRUCTIONS.txt")
-            instructionFile.writeText(getInstallInstructions())
+            instructionFile.writeText(getInstallInstructions(sharedDir))
 
             progressCallback?.invoke("安装准备完成", 100)
 
@@ -160,16 +163,16 @@ object GenesisInstaller {
                     "安装文件位置:\n${sharedDir.absolutePath}\n\n" +
                     "【推荐】快速安装（约1分钟）：\n" +
                     "1. termux-setup-storage\n" +
-                    "2. bash ~/storage/downloads/Genesis/quick_install.sh\n\n" +
+                    "2. bash \"$quickInstallScriptPath\"\n\n" +
                     "或者完整安装（约20分钟）：\n" +
-                    "bash ~/storage/downloads/Genesis/install.sh"
+                    "bash \"$installScriptPath\""
             } else {
                 // 无 bundle，使用完整安装
                 "文件已准备就绪！\n\n" +
                     "安装文件位置:\n${sharedDir.absolutePath}\n\n" +
                     "请在 Termux 中执行:\n" +
                     "1. termux-setup-storage\n" +
-                    "2. bash ~/storage/downloads/Genesis/install.sh"
+                    "2. bash \"$installScriptPath\""
             }
 
             return InstallResult(
@@ -212,7 +215,8 @@ object GenesisInstaller {
     /**
      * 获取安装指令
      */
-    private fun getInstallInstructions(): String {
+    private fun getInstallInstructions(sharedDir: File): String {
+        val installScriptPath = "${sharedDir.absolutePath}/install.sh"
         return """
 === Genesis 安装说明 ===
 
@@ -221,18 +225,12 @@ object GenesisInstaller {
 2. 授予存储权限（如果还没授予）：
    termux-setup-storage
 
-3. 进入安装目录：
-   cd ~/storage/downloads/Genesis
+3. 运行安装脚本：
+   bash "$installScriptPath"
 
-4. 运行安装脚本：
-   bash install.sh
-
-5. 安装完成后启动服务：
+4. 安装完成后启动服务：
    cd ~/genesis
    ./start_genesis.sh
-
-或者一键执行：
-   bash ~/storage/downloads/Genesis/install.sh
 
 祝你好运，硅基生命！
 """.trimIndent()

@@ -60,18 +60,24 @@ android {
     }
 }
 
+def repoRootDir = file('../../../../')
+def flutterRootDir = file('../../')
+
 // 复制 Genesis 文件到 assets
 task copyGenesisAssets(type: Copy) {
     description = 'Copy Genesis backend files to Android assets'
-    from '../../../genesis'
+    from "${repoRootDir}/genesis"
     into 'src/main/assets/genesis'
     exclude '**/__pycache__/**'
     exclude '**/*.pyc'
+    doFirst {
+        delete 'src/main/assets/genesis'
+    }
 }
 
 task copyTermuxScripts(type: Copy) {
     description = 'Copy Termux scripts to Android assets'
-    from '../../../termux'
+    from "${repoRootDir}/termux"
     into 'src/main/assets'
     include 'start_genesis.sh'
     include 'install.sh'
@@ -80,13 +86,33 @@ task copyTermuxScripts(type: Copy) {
 
 task copyConfigExample(type: Copy) {
     description = 'Copy config example to Android assets'
-    from '../../../config.yaml.example'
+    from "${repoRootDir}/config.yaml.example"
     into 'src/main/assets'
+}
+
+task copyBundledTermuxApks(type: Copy) {
+    description = 'Copy bundled Termux APKs from Flutter assets to Android native assets'
+    from "${flutterRootDir}/assets"
+    into 'src/main/assets'
+    include 'termux-*.apk'
+}
+
+task copyTermuxBundle(type: Copy) {
+    description = 'Copy prebuilt Genesis Termux bundle to Android assets (if exists)'
+    from "${repoRootDir}/termux"
+    into 'src/main/assets'
+    include 'genesis-termux-bundle.tar.gz'
+    include 'genesis-termux-bundle.tar.gz.sha256'
+    onlyIf {
+        file("${repoRootDir}/termux/genesis-termux-bundle.tar.gz").exists()
+    }
 }
 
 preBuild.dependsOn copyGenesisAssets
 preBuild.dependsOn copyTermuxScripts
 preBuild.dependsOn copyConfigExample
+preBuild.dependsOn copyBundledTermuxApks
+preBuild.dependsOn copyTermuxBundle
 
 flutter {
     source '../..'

@@ -7,10 +7,50 @@ set -e
 
 # 配置
 BUILD_DIR="/tmp/genesis-build"
-OUTPUT_DIR="${HOME}"
 BUNDLE_NAME="genesis-termux-bundle.tar.gz"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+OUTPUT_DIR="${HOME}"
+CLEANUP_MODE="ask"  # ask | yes | no
+
+# 参数解析
+usage() {
+    cat << EOF
+Usage: $0 [OPTIONS]
+
+Options:
+  --output-dir DIR   Output directory for bundle files (default: \$HOME)
+  --cleanup          Always cleanup build directory after build
+  --no-cleanup       Never cleanup build directory after build
+  -h, --help         Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --output-dir)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        --cleanup)
+            CLEANUP_MODE="yes"
+            shift
+            ;;
+        --no-cleanup)
+            CLEANUP_MODE="no"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
 
 # 颜色定义
 RED='\033[0;31m'
@@ -219,6 +259,7 @@ create_bundle() {
     echo -e "${CYAN}[7/7] Creating bundle archive...${NC}"
 
     cd "$BUILD_DIR"
+    mkdir -p "$OUTPUT_DIR"
 
     # 创建 tar.gz
     tar -czf "$OUTPUT_DIR/$BUNDLE_NAME" \
@@ -279,10 +320,16 @@ main() {
     echo ""
 
     # 可选清理
-    read -p "Clean build directory? [Y/n] " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+    if [ "$CLEANUP_MODE" = "yes" ]; then
         cleanup
+    elif [ "$CLEANUP_MODE" = "ask" ]; then
+        read -p "Clean build directory? [Y/n] " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            cleanup
+        fi
+    else
+        echo -e "${YELLOW}Build directory kept: $BUILD_DIR${NC}"
     fi
 }
 
