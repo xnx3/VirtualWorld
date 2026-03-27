@@ -20,6 +20,9 @@ Genesis Android 版本采用 **Flutter + Termux** 架构：
 - APK 本身**不包含** Python 运行环境
 - Python 后端运行在 **Termux** 应用中
 - 用户需要同时安装 Flutter APK 和 Termux
+- APK 可能是两种打包模式：
+  - 预打包模式（内置 bundle，安装快）
+  - 回退模式（不内置 bundle，首次安装较慢）
 
 ## 安装流程
 
@@ -88,4 +91,5 @@ bash ~/storage/downloads/Genesis/install.sh
 
 - [Termux 集成指南](./TERMUX_INTEGRATION.md) - 详细安装说明
 - [Android APK 打包指南](./ANDROID_APK_BUILD.md) - 开发者构建指南
+- [APK 打包实操 Runbook](./APK_BUILD_RUNBOOK.md) - 可直接照抄的打包步骤
 - [Termux Bundle 部署](./TERMUX_BUNDLE_DEPLOY.md) - 快速部署方案

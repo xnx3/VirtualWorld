@@ -166,6 +166,8 @@ class Blockchain:
             "world_rules": {},
             "map": {},
             "contributions": {},
+            "creator_god_node_id": None,
+            "priest_node_id": None,
         }
 
         height = await self.storage.get_chain_height()
@@ -185,6 +187,8 @@ class Blockchain:
         if tx.tx_type == TxType.BEING_JOIN:
             being_id = tx.data.get("being_id", tx.sender)
             state["beings"][being_id] = {"status": "active", "joined_block": block_height}
+            if state.get("creator_god_node_id") is None:
+                state["creator_god_node_id"] = being_id
         elif tx.tx_type == TxType.BEING_HIBERNATE:
             being_id = tx.data.get("being_id", tx.sender)
             if being_id in state["beings"]:
@@ -212,3 +216,12 @@ class Blockchain:
                 "data": tx.data,
                 "block": block_height,
             }
+        elif tx.tx_type == TxType.PRIEST_ELECTION:
+            state["priest_node_id"] = tx.data.get("candidate_id", tx.sender)
+        elif tx.tx_type == TxType.CREATOR_SUCCESSION:
+            challenger = tx.data.get("challenger_id")
+            if challenger:
+                state["creator_god_node_id"] = challenger
+        elif tx.tx_type == TxType.CREATOR_VANISH:
+            state["creator_god_node_id"] = None
+            state["priest_node_id"] = None

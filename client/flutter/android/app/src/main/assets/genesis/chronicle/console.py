@@ -87,7 +87,9 @@ def header(title: str) -> None:
     _write(f"{C.BOLD}{C.CYAN}{'═' * 60}{C.RESET}\n")
 
 
-def tick_header(tick: int, being_name: str, phase: str) -> None:
+def tick_header(tick: int, being_name: str, phase: str,
+                merit: float = 0.0, karma: float = 0.0,
+                evolution_level: float = 0.0, generation: int = 1) -> None:
     # Translate phase value (HUMAN_SIM -> phase_human_sim)
     phase_key = f"phase_{phase.lower()}"
     phase_translated = t(phase_key)
@@ -101,6 +103,13 @@ def tick_header(tick: int, being_name: str, phase: str) -> None:
         f"{C.CYAN}{being_name}{C.RESET}  "
         f"{C.DIM}{t('phase_label')}: {phase_translated}{C.RESET}  "
         f"{C.DIM}{_timestamp()}{C.RESET}"
+    )
+    # 显示功德值、气运、进化等级、世代
+    _write(
+        f"  {C.YELLOW}✨{t('merit')}: {merit:.4f}{C.RESET}  "
+        f"{C.GREEN}🍀{t('karma')}: {(karma * 100):.1f}%{C.RESET}  "
+        f"{C.BLUE}📈{t('evolution_level', default='Evolution')}: {evolution_level:.3f}{C.RESET}  "
+        f"{C.DIM}Gen {generation}{C.RESET}"
     )
     separator("━")
 
@@ -194,6 +203,25 @@ def priest_event(event_type: str, name: str) -> None:
         _write(f"  {ICONS['priest']} {C.BRED}{C.BOLD}{t('priest_reset')}{C.RESET}")
 
 
+def tao_vote_event(event_type: str, vote_id: str, rule_name: str,
+                   proposer_name: str, votes_for: int = 0,
+                   votes_against: int = 0, remaining_ticks: int = 0,
+                   ratio: float = 0.0, merit: float = 0.0,
+                   voter_name: str = "") -> None:
+    """天道投票事件广播"""
+    if event_type == "started":
+        _write(f"  ⚖️ {C.BCYAN}{C.BOLD}{t('tao_vote_started', rule_name=rule_name)}{C.RESET}")
+        _write(f"     {C.DIM}{t('tao_vote_remaining', ticks=remaining_ticks)}{C.RESET}")
+    elif event_type == "vote_cast":
+        voter_info = f" ({voter_name})" if voter_name else ""
+        _write(f"  🗳️ {C.CYAN}{t('tao_vote_cast', vote=t('vote_support'), rule_name=rule_name)}{voter_info}{C.RESET}")
+    elif event_type == "passed":
+        _write(f"  ✅ {C.BGREEN}{C.BOLD}{t('tao_vote_passed', rule_name=rule_name, ratio=ratio*100)}{C.RESET}")
+        _write(f"     {C.GREEN}{t('tao_merge', name=proposer_name, merit=merit)}{C.RESET}")
+    elif event_type == "rejected":
+        _write(f"  ❌ {C.RED}{C.BOLD}{t('tao_vote_failed', rule_name=rule_name, ratio=ratio*100)}{C.RESET}")
+
+
 def vote_cast(proposal_desc: str, score: int) -> None:
     _write(f"  {ICONS['vote']} {C.DIM}{t('vote_label')}:{C.RESET} {proposal_desc[:50]}... "
            f"{C.CYAN}{t('vote_score', score=score)}{C.RESET}")
@@ -244,6 +272,18 @@ def world_info(phase: str, civ_level: float, active_beings: int,
 
 def error(message: str) -> None:
     _write(f"  {ICONS['error']} {C.RED}{message}{C.RESET}")
+
+
+def creator_god_vanish(god_id: str, tao_merged_count: int) -> None:
+    """创世神消亡事件输出。"""
+    _write("")
+    separator("═")
+    _write(f"  {C.BMAGENTA}{C.BOLD}⚖️ {t('creator_god_vanish')}{C.RESET}")
+    _write(f"     {C.MAGENTA}{t('creator_god_vanish_desc', god_id=god_id, count=tao_merged_count)}{C.RESET}")
+    _write(f"     {C.CYAN}{t('creator_god_vanish_priest')}{C.RESET}")
+    _write(f"     {C.GREEN}{t('creator_god_vanish_tao')}{C.RESET}")
+    separator("═")
+    _write("")
 
 
 def startup_info(name: str, form: str, traits: dict, node_id: str) -> None:

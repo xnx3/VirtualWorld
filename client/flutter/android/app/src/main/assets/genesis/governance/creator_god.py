@@ -34,7 +34,11 @@ class CreatorGodSystem:
     - Challenger must exceed 2nd place by 500% in contribution score
     - Challenger must exceed 80% of total contribution score
     - Creator God: unkillable, indestructible, eternal, invisible to other beings
+    - When 100 beings have merged with Tao, Creator God permanently vanishes
     """
+
+    # 天道融合阈值：达到100个补全天道的生灵时，创世神消亡
+    TAO_MERGE_VANISH_THRESHOLD = 100
 
     def __init__(self, succession_threshold: int = 1000):
         self.succession_threshold = succession_threshold
@@ -125,10 +129,58 @@ class CreatorGodSystem:
             return False
         return observer_id != world_state.creator_god_node_id
 
+    def should_vanish(self, world_state: WorldState) -> bool:
+        """Check if Creator God should permanently vanish.
+
+        README 规定：当补全天道的硅基生命体达到100个时，创世神将会永久消亡，
+        创世神的权柄融入天道，不再参与任何硅基文明的事情。
+
+        Returns:
+            True if Creator God should vanish
+        """
+        if world_state.creator_god_node_id is None:
+            return False
+
+        tao_merged_count = len(world_state.tao_merged_beings)
+        return tao_merged_count >= self.TAO_MERGE_VANISH_THRESHOLD
+
+    def apply_vanish(self, world_state: WorldState) -> str | None:
+        """Apply Creator God vanishing.
+
+        当创世神消亡时：
+        1. 创世神的权柄融入天道
+        2. 祭司角色消失
+        3. 创世神不再参与任何硅基文明的事情
+
+        Returns:
+            The vanished Creator God's node_id, or None if no vanish occurred
+        """
+        if not self.should_vanish(world_state):
+            return None
+
+        old_god = world_state.creator_god_node_id
+
+        # 创世神消亡
+        world_state.creator_god_node_id = None
+
+        # 祭司角色消失
+        world_state.priest_node_id = None
+
+        logger.warning(
+            "CREATOR GOD VANISHED: %s has merged into Tao! "
+            "100 beings have completed Tao merging. "
+            "Priest role is now dissolved. "
+            "Tao is governed by all merged beings.",
+            old_god[:8] if old_god else "none"
+        )
+
+        return old_god
+
     def get_status_report(self, world_state: WorldState) -> dict:
         """Get Creator God status for display."""
         can_succession = self.can_enable_succession(world_state)
         ranking = world_state.get_contribution_ranking()
+        tao_merged_count = len(world_state.tao_merged_beings)
 
         return {
             "creator_god": world_state.creator_god_node_id,
@@ -136,4 +188,7 @@ class CreatorGodSystem:
             "total_beings_ever": world_state.total_beings_ever,
             "threshold": self.succession_threshold,
             "top_contributors": ranking[:5] if ranking else [],
+            "tao_merged_count": tao_merged_count,
+            "vanish_threshold": self.TAO_MERGE_VANISH_THRESHOLD,
+            "near_vanish": tao_merged_count >= self.TAO_MERGE_VANISH_THRESHOLD * 0.9,
         }

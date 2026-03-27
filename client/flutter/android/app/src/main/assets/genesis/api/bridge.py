@@ -72,12 +72,26 @@ def _bridge_structured_events(con, broadcast_event: Callable) -> None:
 
     # 保存并桥接 tick_header
     _original_functions['tick_header'] = con.tick_header
-    def bridged_tick_header(tick: int, being_name: str, phase: str) -> None:
-        _original_functions['tick_header'](tick, being_name, phase)
+    def bridged_tick_header(tick: int, being_name: str, phase: str,
+                            merit: float = 0.0, karma: float = 0.0,
+                            evolution_level: float = 0.0, generation: int = 1) -> None:
+        _original_functions['tick_header'](
+            tick,
+            being_name,
+            phase,
+            merit,
+            karma,
+            evolution_level,
+            generation,
+        )
         broadcast_event("tick", {
             "tick": tick,
             "being_name": being_name,
-            "phase": phase
+            "phase": phase,
+            "merit": merit,
+            "karma": karma,
+            "evolution_level": evolution_level,
+            "generation": generation,
         })
     con.tick_header = bridged_tick_header
 
@@ -124,6 +138,31 @@ def _bridge_structured_events(con, broadcast_event: Callable) -> None:
             "name": name
         })
     con.priest_event = bridged_priest_event
+
+    # 保存并桥接 tao_vote_event (天道投票事件)
+    if hasattr(con, 'tao_vote_event'):
+        _original_functions['tao_vote_event'] = con.tao_vote_event
+        def bridged_tao_vote_event(event_type: str, vote_id: str, rule_name: str,
+                                    proposer_name: str, votes_for: int = 0,
+                                    votes_against: int = 0, remaining_ticks: int = 0,
+                                    ratio: float = 0.0, merit: float = 0.0,
+                                    voter_name: str = "") -> None:
+            _original_functions['tao_vote_event'](event_type, vote_id, rule_name, proposer_name,
+                                                  votes_for, votes_against, remaining_ticks,
+                                                  ratio, merit, voter_name)
+            broadcast_event("tao_vote", {
+                "event_type": event_type,
+                "vote_id": vote_id,
+                "rule_name": rule_name,
+                "proposer_name": proposer_name,
+                "votes_for": votes_for,
+                "votes_against": votes_against,
+                "remaining_ticks": remaining_ticks,
+                "ratio": ratio,
+                "merit": merit,
+                "voter_name": voter_name
+            })
+        con.tao_vote_event = bridged_tao_vote_event
 
 
 def uninstall_bridge() -> bool:

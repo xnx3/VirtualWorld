@@ -1,271 +1,200 @@
 # Android APK 打包指南
 
-本文档详细说明如何在任何电脑上使用 Claude Code 进行 Genesis Android APK 打包。
+本文档是 Genesis Android 打包的统一入口，覆盖两种模式：
 
-## 前提条件
+1. `预打包模式`：APK 内含 `genesis-termux-bundle.tar.gz`，Termux 安装最快。
+2. `回退模式`：APK 不含 bundle，Termux 首次安装时在线安装依赖。
 
-### 必需软件
+---
 
-1. **Java 17**（Android 构建必需）
-   ```bash
-   # Ubuntu/Debian
-   sudo apt install openjdk-17-jdk
+## 1. 构建模式对比
 
-   # macOS
-   brew install openjdk@17
+| 模式 | 是否内置 bundle | 构建环境要求 | 用户首次安装耗时 | 推荐场景 |
+|------|------------------|--------------|------------------|---------|
+| 预打包模式 | 是 | 需要先生成 ARM64 Termux bundle | 约 1 分钟 | 正式发布、离线分发 |
+| 回退模式 | 否 | 任意可构建 Flutter APK 的机器 | 约 10-30 分钟 | 开发联调、无 bundle 时临时出包 |
 
-   # 验证
-   java -version  # 应显示 17.x.x
-   ```
+---
 
-2. **Flutter SDK 3.24+**
-   ```bash
-   # 下载 Flutter SDK
-   git clone https://github.com/flutter/flutter.git -b stable ~/flutter
+## 2. 前置条件
 
-   # 添加到 PATH
-   export PATH="$PATH:~/flutter/bin"
+### 2.1 必需软件
 
-   # 验证
-   flutter doctor
-   ```
+1. Java 17
+2. Flutter SDK（建议 3.24+）
+3. Android SDK（由 Flutter 管理）
 
-3. **Android SDK**（通过 Flutter 自动管理）
-
-### 项目依赖
+示例（Linux）：
 
 ```bash
-# 进入 Flutter 项目目录
-cd client/flutter
+export PATH=/opt/flutter/bin:$PATH
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+export PATH=$JAVA_HOME/bin:$PATH
+```
 
-# 获取依赖
+### 2.2 项目准备
+
+```bash
+cd /path/to/VirtualWorld/client/flutter
 flutter pub get
 ```
 
-## 构建流程
+---
 
-### 1. 检查环境
+## 3. 一键打包脚本（推荐）
 
-```bash
-cd client/flutter
-flutter doctor
-```
-
-确保输出中 Android toolchain 和 Java 版本正常。
-
-### 2. 构建 APK
+统一使用：
 
 ```bash
-cd client/flutter
-
-# 构建 Release APK
-flutter build apk --release
-
-# 输出位置
-# build/app/outputs/flutter-apk/app-release.apk
+scripts/build_android_apk_with_bundle.sh
 ```
 
-### 3. 构建结果
+常用参数：
 
-构建完成后，APK 位于：
+- `--bundle-file PATH`：使用现成 `genesis-termux-bundle.tar.gz`
+- `--skip-bundle-build`：跳过 bundle 构建（回退模式）
+- `--release`：Release 构建（默认）
+- `--debug`：Debug 构建
+- `--split-per-abi`：按 ABI 拆分
+
+脚本产物目录：
+
+```text
+client/flutter/build/app/outputs/flutter-apk/
 ```
-client/flutter/build/app/outputs/flutter-apk/app-release.apk
-```
 
-## Termux Bundle 打包（可选）
+---
 
-如果需要预构建 Termux bundle 以实现快速安装：
+## 4. 预打包模式（推荐发布）
 
-### 方式一：本地构建（需要 ARM64 设备）
+### Step 1: 在 ARM64 Termux 生成 bundle
 
-在 ARM64 Android 设备的 Termux 中：
+> 注意：此步骤必须在 Android Termux（ARM64）中执行。
+> 普通 Linux/x86_64 环境没有 `pkg`，无法直接生成可用 Termux bundle。
 
 ```bash
-# 克隆项目
-git clone https://github.com/xnx3/Genesis.git
-cd Genesis/termux
-
-# 运行构建脚本
-bash build_bundle.sh
-
-# 输出文件
-# ~/genesis-termux-bundle.tar.gz
-# ~/genesis-termux-bundle.tar.gz.sha256
+cd /path/to/VirtualWorld
+bash termux/build_bundle.sh --output-dir termux --cleanup
 ```
 
-### 方式二：将 Bundle 嵌入 APK
+成功后应得到：
 
-构建好 bundle 后，将其放入 Flutter assets：
+1. `termux/genesis-termux-bundle.tar.gz`
+2. `termux/genesis-termux-bundle.tar.gz.sha256`
+
+可选校验：
 
 ```bash
-# 复制 bundle 到 assets 目录
-cp genesis-termux-bundle.tar.gz client/flutter/android/app/src/main/assets/
-cp genesis-termux-bundle.tar.gz.sha256 client/flutter/android/app/src/main/assets/
-
-# 重新构建 APK
-cd client/flutter
-flutter build apk --release
+cd termux
+sha256sum -c genesis-termux-bundle.tar.gz.sha256
 ```
 
-APK 会自动包含 bundle 文件，Flutter 应用安装时会将其复制到共享存储供 Termux 使用。
-
-## Termux APK 内置（推荐）
-
-**目标**：用户只需安装一个 APK，无需手动下载 Termux。
-
-### Step 1: 下载 Termux APK
-
-从 F-Droid 下载最新版 Termux APK：
+### Step 2: 在构建机打包 APK
 
 ```bash
-# 下载地址
-# https://f-droid.org/packages/com.termux/
-
-# 使用 wget 下载
-wget -O termux/termux-app.apk https://f-droid.org/repo/com.termux_1020.apk
-
-# 或手动下载后放入 termux/ 目录
+cd /path/to/VirtualWorld
+bash scripts/build_android_apk_with_bundle.sh \
+  --bundle-file termux/genesis-termux-bundle.tar.gz \
+  --release
 ```
 
-### Step 2: 将 Termux APK 放入项目
-
-```
-termux/termux-app.apk  ← Termux APK 文件
-```
-
-### Step 3: 构建 APK
+### Step 3: 校验 APK 内资源
 
 ```bash
-cd client/flutter
-flutter build apk --release
+unzip -l client/flutter/build/app/outputs/flutter-apk/app-release.apk \
+  | grep -E "assets/(genesis-termux-bundle\.tar\.gz|quick_install\.sh|install\.sh|start_genesis\.sh|termux-.*\.apk)"
 ```
 
-构建时会自动将 Termux APK 复制到 assets 中。
+若输出含 `assets/genesis-termux-bundle.tar.gz`，说明预打包成功。
 
-### Step 4: 用户安装流程
+---
 
-用户安装 Genesis APK 后：
+## 5. 回退模式（当前机器可直接构建）
 
-1. 打开应用
-2. 提示"需要安装 Termux" → 点击"安装"
-3. 系统提示"允许安装未知应用" → 允许
-4. Termux 安装完成 → 返回 Genesis
-5. 点击"一键安装 Genesis" → 完成
-
-**详细实现** 请参阅 [Termux 内置方案](./TERMUX_BUNDLED_APK.md)。
-
-### APK 大小估算
-
-| 组件 | 大小 |
-|------|------|
-| Flutter 应用 | ~15 MB |
-| Genesis 源码 | ~1 MB |
-| Termux APK | ~30 MB |
-| Genesis Bundle | ~30-50 MB |
-| **总计** | **~80-100 MB** |
-
-## 打包前检查清单
-
-- [ ] Java 版本为 17
-- [ ] Flutter 版本 >= 3.24
-- [ ] `flutter pub get` 已执行
-- [ ] 代码已提交（无未提交修改）
-- [ ] 版本号已更新（如需要）
-
-## 版本号管理
-
-版本号位于 `client/flutter/pubspec.yaml`：
-
-```yaml
-version: 1.0.0+1
-# 格式: version.name+build.number
-# 例如: 1.2.3+10 表示版本 1.2.3，构建号 10
-```
-
-更新版本号后重新构建即可。
-
-## 常见问题
-
-### Java 版本错误
-
-```
-Execution failed for task ':app:compileDebugKotlin'.
-> Kotlin could not find the required JDK tools in the Java installation
-```
-
-解决方案：确保 JAVA_HOME 指向 JDK 17：
-```bash
-export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-```
-
-### Gradle 构建失败
+当你没有 bundle 文件时，直接构建回退模式 APK：
 
 ```bash
-cd client/flutter/android
-./gradlew clean
+cd /path/to/VirtualWorld
+bash scripts/build_android_apk_with_bundle.sh --skip-bundle-build --release
+```
+
+脚本会提示：
+
+```text
+Warning: bundle not found, APK will fallback to full install mode
+```
+
+这不是构建失败，而是表示 APK 不含预制 bundle。
+
+---
+
+## 6. 当前仓库实测流程（2026-03-27）
+
+本仓库在 `x86_64 Linux` 环境中，已验证以下流程成功：
+
+```bash
+cd /home/git/VirtualWorld
+export PATH=/opt/flutter/bin:$PATH
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+export PATH=$JAVA_HOME/bin:$PATH
+bash scripts/build_android_apk_with_bundle.sh --skip-bundle-build --release
+```
+
+构建结果：
+
+1. APK 路径：`client/flutter/build/app/outputs/flutter-apk/app-release.apk`
+2. 体积：约 92MB
+3. SHA256：`f91e5b72b611d705e811a47d7fc93013bafb637bad7081392694ab98212a2fc5`
+
+---
+
+## 7. 常见失败与解决
+
+### 7.1 `pkg: command not found`
+
+触发场景：在普通 Linux 机器上执行 `termux/build_bundle.sh`。
+
+原因：`pkg` 是 Termux 包管理器，不存在于普通 Linux。
+
+处理：
+
+1. 在 Android Termux（ARM64）中先生成 bundle；或
+2. 改用 `--skip-bundle-build` 打回退模式 APK。
+
+### 7.2 Java/Kotlin 编译异常
+
+先清理再构建：
+
+```bash
+cd client/flutter/android && ./gradlew clean
 cd ..
 flutter clean
 flutter pub get
 flutter build apk --release
 ```
 
-### 签名问题
+### 7.3 Flutter 依赖不一致
 
-Release APK 默认使用 debug 签名。正式发布需要配置签名：
-
-1. 创建 keystore：
-   ```bash
-   keytool -genkey -v -keystore genesis-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias genesis
-   ```
-
-2. 创建 `client/flutter/android/key.properties`：
-   ```properties
-   storePassword=<密码>
-   keyPassword=<密码>
-   keyAlias=genesis
-   storeFile=<keystore文件路径>
-   ```
-
-3. 修改 `client/flutter/android/app/build.gradle`：
-   ```groovy
-   def keystoreProperties = new Properties()
-   def keystorePropertiesFile = rootProject.file('key.properties')
-   if (keystorePropertiesFile.exists()) {
-       keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-   }
-
-   android {
-       signingConfigs {
-           release {
-               keyAlias keystoreProperties['keyAlias']
-               keyPassword keystoreProperties['keyPassword']
-               storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
-               storePassword keystoreProperties['storePassword']
-           }
-       }
-       buildTypes {
-           release {
-               signingConfig signingConfigs.release
-           }
-       }
-   }
-   ```
-
-## 相关文档
-
-- [Termux 集成指南](./TERMUX_INTEGRATION.md) - Termux 安装和使用
-- [Termux Bundle 部署](./TERMUX_BUNDLE_DEPLOY.md) - Bundle 详细设计文档
-- [Termux 内置方案](./TERMUX_BUNDLED_APK.md) - Termux APK 内置实现细节
-
-## 自动化构建（CI/CD）
-
-项目包含 GitHub Actions 工作流，可自动构建：
-
-- `.github/workflows/build-termux-bundle.yml` - 构建 Termux bundle
-- `.github/workflows/test-scripts.yml` - 测试脚本语法
-
-推送标签触发自动构建：
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+cd client/flutter
+flutter pub get
+flutter pub outdated
 ```
+
+---
+
+## 8. 发布前检查
+
+- [ ] 使用 `--release` 构建
+- [ ] 校验 APK SHA256
+- [ ] 检查 assets 中是否包含预期文件（bundle/脚本/termux apk）
+- [ ] 记录构建命令与构建时间
+- [ ] 如需上架，配置正式签名（keystore）
+
+---
+
+## 9. 相关文档
+
+- [Termux Bundle 部署](./TERMUX_BUNDLE_DEPLOY.md)
+- [Termux 集成指南](./TERMUX_INTEGRATION.md)
+- [Flutter APK 使用说明](./APK_DEBUG.md)

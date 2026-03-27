@@ -6,8 +6,6 @@ The private key may optionally be encrypted with a password.
 
 from __future__ import annotations
 
-from __future__ import annotations
-
 import os
 from dataclasses import dataclass
 from pathlib import Path

@@ -32,6 +32,8 @@ class MessageType(str, Enum):
     PEERS = "PEERS"
     PING = "PING"
     PONG = "PONG"
+    # 天道投票事件广播
+    TAO_VOTE_EVENT = "TAO_VOTE_EVENT"
 
 
 # 4-byte unsigned big-endian length prefix.
@@ -175,5 +177,38 @@ class Message:
         return cls(
             msg_type=MessageType.PONG,
             payload={},
+            sender_id=node_id,
+        )
+
+    @classmethod
+    def tao_vote_event(
+        cls,
+        node_id: str,
+        event_type: str,
+        vote_id: str,
+        rule_name: str,
+        proposer_name: str,
+        votes_for: int = 0,
+        votes_against: int = 0,
+        remaining_ticks: int = 0,
+        ratio: float = 0.0,
+        merit: float = 0.0,
+        voter_name: str = "",
+    ) -> Message:
+        """Broadcast a Tao vote event to the network."""
+        return cls(
+            msg_type=MessageType.TAO_VOTE_EVENT,
+            payload={
+                "event_type": event_type,
+                "vote_id": vote_id,
+                "rule_name": rule_name,
+                "proposer_name": proposer_name,
+                "votes_for": votes_for,
+                "votes_against": votes_against,
+                "remaining_ticks": remaining_ticks,
+                "ratio": ratio,
+                "merit": merit,
+                "voter_name": voter_name,
+            },
             sender_id=node_id,
         )

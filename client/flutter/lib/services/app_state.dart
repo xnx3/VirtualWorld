@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import '../l10n/app_localizations.dart';
 
 /// 应用全局状态
 class AppState with ChangeNotifier {

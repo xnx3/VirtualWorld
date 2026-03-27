@@ -337,6 +337,13 @@ class MainActivity : FlutterActivity() {
                     "success" to true,
                     "message" to "请在系统界面完成 Termux 安装"
                 )
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Failed to start install intent: ${e.message}")
+                mapOf(
+                    "success" to false,
+                    "error" to "启动安装失败: ${e.message}",
+                    "stage" to "start_install"
+                )
             }
         } catch (e: Exception) {
             Log.e("MainActivity", "Unexpected error: ${e.message}", e)
