@@ -45,11 +45,14 @@ check_python() {
 check_deps() {
     # 注意: pyyaml 的 import 名称是 yaml，不是 pyyaml
     local deps_import=("openai" "websockets" "aiosqlite" "yaml" "msgpack" "cryptography" "zeroconf")
+    local deps_pip=("openai" "websockets" "aiosqlite" "pyyaml" "msgpack" "cryptography" "zeroconf")
     local missing=()
 
-    for dep in "${deps_import[@]}"; do
-        if ! "$PYTHON" -c "import $dep" 2>/dev/null; then
-            missing+=("$dep")
+    for i in "${!deps_import[@]}"; do
+        local dep_import="${deps_import[$i]}"
+        local dep_pip="${deps_pip[$i]}"
+        if ! "$PYTHON" -c "import $dep_import" 2>/dev/null; then
+            missing+=("$dep_pip")
         fi
     done
 
