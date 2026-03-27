@@ -58,7 +58,7 @@ check_deps() {
 
     if [ ${#missing[@]} -gt 0 ]; then
         echo -e "${YELLOW}Installing missing dependencies: ${missing[*]}${NC}"
-        pip install "${missing[@]}"
+        "$PYTHON" -m pip install "${missing[@]}"
     fi
     echo -e "${GREEN}All dependencies installed${NC}"
 }
