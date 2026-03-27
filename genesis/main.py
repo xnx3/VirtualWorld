@@ -690,6 +690,10 @@ class GenesisNode:
             challenger = data.get("challenger_id")
             if challenger:
                 god_sys.apply_succession(challenger, self.world_state)
+        elif tx_type == "CREATOR_VANISH":
+            from genesis.governance.creator_god import CreatorGodSystem
+            god_sys = CreatorGodSystem()
+            god_sys.apply_vanish(self.world_state)
         elif tx_type == "DISASTER_EVENT":
             self.world_state.apply_disaster(data)
         elif tx_type == "MAP_UPDATE":
@@ -826,9 +830,11 @@ class GenesisNode:
 
         # 检查创世神是否应该消亡（当100个生灵融入天道时）
         if results and any(r.get("passed") for r in results):
-            vanished_god = god_sys.apply_vanish(self.world_state)
-            if vanished_god:
-                con.creator_god_vanish(vanished_god[:8], len(self.world_state.tao_merged_beings))
+            current_god = self.world_state.creator_god_node_id
+            if current_god and god_sys.should_vanish(self.world_state):
+                await self._submit_tx("CREATOR_VANISH", {"god_id": current_god})
+                if self.world_state.creator_god_node_id is None:
+                    con.creator_god_vanish(current_god[:8], len(self.world_state.tao_merged_beings))
 
 
 def run_start(args):
