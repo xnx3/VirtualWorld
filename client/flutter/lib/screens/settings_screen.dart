@@ -418,6 +418,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         final success = result['success'] as bool;
         final message = result['message'] as String;
+        final autoInstallTriggered = result['autoInstallTriggered'] as bool? ?? false;
+        final autoInstallError = result['autoInstallError'] as String?;
+        final manualCommand = result['manualCommand'] as String?;
 
         setState(() {
           _isInstalling = false;
@@ -427,7 +430,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         });
 
         // 显示结果对话框
-        _showInstallResultDialog(success, message);
+        _showInstallResultDialog(
+          success,
+          message,
+          autoInstallTriggered: autoInstallTriggered,
+          autoInstallError: autoInstallError,
+          manualCommand: manualCommand,
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -440,11 +449,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   /// 显示安装结果对话框
-  void _showInstallResultDialog(bool success, String message) {
+  void _showInstallResultDialog(
+    bool success,
+    String message, {
+    bool autoInstallTriggered = false,
+    String? autoInstallError,
+    String? manualCommand,
+  }) {
     final hasQuickInstall = message.contains('quick_install.sh');
-    final installCommand = hasQuickInstall
+    final installCommand = manualCommand ??
+        (hasQuickInstall
         ? 'termux-setup-storage\nbash ~/storage/downloads/Genesis/quick_install.sh'
-        : 'termux-setup-storage\nbash ~/storage/downloads/Genesis/install.sh';
+        : 'termux-setup-storage\nbash ~/storage/downloads/Genesis/install.sh');
 
     showDialog(
       context: context,
@@ -467,6 +483,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Text(message),
               if (success) ...[
                 SizedBox(height: 16),
+                if (autoInstallTriggered)
+                  Container(
+                    padding: EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '已自动触发 Termux 执行安装，请切换到 Termux 查看输出。\n若没有自动开始，再执行下方命令。',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                if (autoInstallError != null && autoInstallError.isNotEmpty) ...[
+                  if (autoInstallTriggered) SizedBox(height: 10),
+                  Container(
+                    padding: EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '自动执行失败：$autoInstallError',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+                SizedBox(height: 12),
                 Container(
                   padding: EdgeInsets.all(12),
                   decoration: BoxDecoration(

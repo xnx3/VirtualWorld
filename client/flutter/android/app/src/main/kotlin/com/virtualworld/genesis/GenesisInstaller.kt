@@ -167,45 +167,74 @@ object GenesisInstaller {
 
             val installScriptPath = "${sharedDir.absolutePath}/install.sh"
             val quickInstallScriptPath = "${sharedDir.absolutePath}/quick_install.sh"
+            val preferredScriptPath = if (hasBundle) quickInstallScriptPath else installScriptPath
 
             // Step 6: 生成安装指令文件
             val instructionFile = File(sharedDir, "INSTALL_INSTRUCTIONS.txt")
             instructionFile.writeText(getInstallInstructions(sharedDir))
 
+            // Step 7: 尝试自动触发 Termux 执行安装
+            val autoInstallResult = tryAutoInstallInTermux(context, preferredScriptPath)
+
             progressCallback?.invoke("安装准备完成", 100)
 
             Log.i(TAG, "Genesis files copied to: ${sharedDir.absolutePath}")
 
-            val installInstructions = if (hasBundle) {
-                // 有 bundle，推荐快速安装
-                "文件已准备就绪！\n\n" +
-                    "安装文件位置:\n${sharedDir.absolutePath}\n\n" +
-                    "【推荐】快速安装（约1分钟）：\n" +
-                    "1. termux-setup-storage\n" +
-                    "2. bash \"$quickInstallScriptPath\"\n\n" +
-                    "或者完整安装（约20分钟）：\n" +
-                    "bash \"$installScriptPath\""
-            } else {
-                // 无 bundle，使用完整安装
-                "文件已准备就绪！\n\n" +
-                    "安装文件位置:\n${sharedDir.absolutePath}\n\n" +
-                    "请在 Termux 中执行:\n" +
-                    "1. termux-setup-storage\n" +
-                    "2. bash \"$installScriptPath\""
-            }
+            val manualCommand = "termux-setup-storage\nbash \"$preferredScriptPath\""
+            val installInstructions = buildInstallMessage(
+                sharedDirPath = sharedDir.absolutePath,
+                hasBundle = hasBundle,
+                installScriptPath = installScriptPath,
+                quickInstallScriptPath = quickInstallScriptPath,
+                autoInstallResult = autoInstallResult,
+            )
 
             // 安装文件已准备就绪，写入已安装标记
             markInstalled(context, true)
 
             return InstallResult(
                 success = true,
-                message = installInstructions
+                message = installInstructions,
+                autoInstallTriggered = autoInstallResult.success,
+                autoInstallError = autoInstallResult.error,
+                manualCommand = manualCommand,
             )
 
         } catch (e: Exception) {
             Log.e(TAG, "Installation failed: ${e.message}", e)
             markInstalled(context, false)
             return InstallResult(success = false, message = "安装失败: ${e.message}")
+        }
+    }
+
+    private fun buildInstallMessage(
+        sharedDirPath: String,
+        hasBundle: Boolean,
+        installScriptPath: String,
+        quickInstallScriptPath: String,
+        autoInstallResult: CommandResult,
+    ): String {
+        val scriptHint = if (hasBundle) {
+            "【推荐】快速安装（约1分钟）：\n" +
+                "1. termux-setup-storage\n" +
+                "2. bash \"$quickInstallScriptPath\"\n\n" +
+                "或者完整安装（约20分钟）：\n" +
+                "bash \"$installScriptPath\""
+        } else {
+            "完整安装（约20分钟）：\n" +
+                "1. termux-setup-storage\n" +
+                "2. bash \"$installScriptPath\""
+        }
+
+        return if (autoInstallResult.success) {
+            "文件已准备就绪并已自动触发 Termux 执行安装命令。\n\n" +
+                "安装文件位置:\n$sharedDirPath\n\n" +
+                "请切换到 Termux 查看安装输出。\n" +
+                "如果未自动开始，请手动执行：\n$scriptHint"
+        } else {
+            "文件已准备就绪，但自动触发 Termux 安装失败：${autoInstallResult.error ?: "未知原因"}\n\n" +
+                "安装文件位置:\n$sharedDirPath\n\n" +
+                "请手动执行：\n$scriptHint"
         }
     }
 
@@ -259,81 +288,37 @@ object GenesisInstaller {
 """.trimIndent()
     }
 
-    /**
-     * 通过 Termux RUN_COMMAND API 执行安装脚本
-     * 执行后通过端口探测验证安装是否成功
-     */
-    private fun tryTermuxInstall(context: Context, scriptPath: String): CommandResult {
+    private fun isTermuxInstalled(context: Context): Boolean {
         return try {
-            val intent = Intent("com.termux.RUN_COMMAND")
-            intent.setClassName("com.termux", "com.termux.app.RunCommandService")
-            intent.putExtra("com.termux.RUN_COMMAND_PATH", scriptPath)
-            intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", context.cacheDir.absolutePath)
-            intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", false)
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
-
-            // 等待安装完成（安装包含 pip install，可能需要较长时间）
-            Thread.sleep(15000)
-
-            // 验证安装：通过 Termux 检查关键文件是否存在
-            val verifyResult = verifyInstallation(context)
-            if (verifyResult) {
-                CommandResult(success = true, error = null)
-            } else {
-                // 文件验证失败，但 intent 发送成功
-                // 可能是安装还在进行中或 Termux 未正确执行
-                Log.w(TAG, "Installation verification failed, files may not exist yet")
-                CommandResult(
-                    success = true,
-                    error = "安装命令已发送，但无法立即验证。请打开 Termux 确认安装是否完成"
-                )
-            }
-
-        } catch (e: SecurityException) {
-            Log.e(TAG, "SecurityException: Need RUN_COMMAND permission", e)
-            CommandResult(
-                success = false,
-                error = "需要 Termux RUN_COMMAND 权限。\n" +
-                        "请先打开 Termux 应用，然后在 Termux 中执行:\n" +
-                        "echo 'allow-external-apps=true' >> ~/.termux/termux.properties\n" +
-                        "然后重启 Termux 后重试"
-            )
+            context.packageManager.getPackageInfo("com.termux", 0)
+            true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to execute Termux command: ${e.message}", e)
-            CommandResult(success = false, error = "执行失败: ${e.message}")
+            false
         }
     }
 
     /**
-     * 通过 Termux RUN_COMMAND 验证安装结果
-     * 检查 ~/genesis/genesis/__init__.py 和 ~/genesis/start_genesis.sh 是否存在
+     * 通过 Termux RUN_COMMAND API 自动触发安装。
+     *
+     * 执行逻辑：
+     * 1. 先调用 termux-setup-storage（若已授权则快速返回）
+     * 2. 再执行 install/quick_install 脚本
      */
-    private fun verifyInstallation(context: Context): Boolean {
+    private fun tryAutoInstallInTermux(context: Context, scriptPath: String): CommandResult {
+        if (!isTermuxInstalled(context)) {
+            return CommandResult(success = false, error = "Termux 未安装")
+        }
+
+        val escapedScriptPath = scriptPath.replace("'", "'\"'\"'")
+        val shellCommand = "termux-setup-storage >/dev/null 2>&1 || true; bash '$escapedScriptPath'"
+
         return try {
-            // 创建验证脚本
-            val verifyScript = """
-                #!/bin/bash
-                MARKER="${'$'}HOME/genesis/.install_verified"
-                if [ -f "${'$'}HOME/genesis/start_genesis.sh" ] && [ -d "${'$'}HOME/genesis/genesis" ]; then
-                    echo "OK" > "${'$'}MARKER"
-                else
-                    rm -f "${'$'}MARKER"
-                fi
-            """.trimIndent()
-
-            val scriptFile = File(context.cacheDir, "verify_install.sh")
-            scriptFile.writeText(verifyScript)
-
             val intent = Intent("com.termux.RUN_COMMAND")
             intent.setClassName("com.termux", "com.termux.app.RunCommandService")
-            intent.putExtra("com.termux.RUN_COMMAND_PATH", scriptFile.absolutePath)
-            intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", context.cacheDir.absolutePath)
-            intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", false)
+            intent.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
+            intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", shellCommand))
+            intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -341,15 +326,16 @@ object GenesisInstaller {
                 context.startService(intent)
             }
 
-            // 等待验证脚本执行
-            Thread.sleep(3000)
-
-            // 无法直接读取 Termux 文件，验证只能是尽力而为
-            // 返回 true 表示验证脚本已发送
-            true
+            CommandResult(success = true, error = null)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SecurityException: Need RUN_COMMAND permission", e)
+            CommandResult(
+                success = false,
+                error = "需要 Termux RUN_COMMAND 权限。请先打开 Termux 并允许外部应用调用后重试"
+            )
         } catch (e: Exception) {
-            Log.w(TAG, "Verification failed: ${e.message}")
-            false
+            Log.e(TAG, "Failed to auto-install via Termux: ${e.message}", e)
+            CommandResult(success = false, error = "执行失败: ${e.message}")
         }
     }
 
@@ -471,7 +457,10 @@ object GenesisInstaller {
  */
 data class InstallResult(
     val success: Boolean,
-    val message: String
+    val message: String,
+    val autoInstallTriggered: Boolean = false,
+    val autoInstallError: String? = null,
+    val manualCommand: String? = null,
 )
 
 /**

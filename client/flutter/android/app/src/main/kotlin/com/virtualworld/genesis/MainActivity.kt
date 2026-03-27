@@ -152,7 +152,10 @@ class MainActivity : FlutterActivity() {
                         runOnUiThread {
                             result.success(mapOf(
                                 "success" to installResult.success,
-                                "message" to installResult.message
+                                "message" to installResult.message,
+                                "autoInstallTriggered" to installResult.autoInstallTriggered,
+                                "autoInstallError" to installResult.autoInstallError,
+                                "manualCommand" to installResult.manualCommand,
                             ))
                         }
                     }.start()
