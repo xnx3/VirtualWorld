@@ -75,7 +75,15 @@ def _bridge_structured_events(con, broadcast_event: Callable) -> None:
     def bridged_tick_header(tick: int, being_name: str, phase: str,
                             merit: float = 0.0, karma: float = 0.0,
                             evolution_level: float = 0.0, generation: int = 1) -> None:
-        _original_functions['tick_header'](tick, being_name, phase)
+        _original_functions['tick_header'](
+            tick,
+            being_name,
+            phase,
+            merit,
+            karma,
+            evolution_level,
+            generation,
+        )
         broadcast_event("tick", {
             "tick": tick,
             "being_name": being_name,

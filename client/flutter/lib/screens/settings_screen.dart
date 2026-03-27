@@ -441,6 +441,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// 显示安装结果对话框
   void _showInstallResultDialog(bool success, String message) {
+    final hasQuickInstall = message.contains('quick_install.sh');
+    final installCommand = hasQuickInstall
+        ? 'termux-setup-storage\nbash ~/storage/downloads/Genesis/quick_install.sh'
+        : 'termux-setup-storage\nbash ~/storage/downloads/Genesis/install.sh';
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -477,7 +482,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       SizedBox(height: 8),
                       SelectableText(
-                        'termux-setup-storage\nbash ~/storage/downloads/Genesis/install.sh',
+                        installCommand,
                         style: TextStyle(
                           fontFamily: 'monospace',
                           color: Colors.cyan,
@@ -780,12 +785,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _genesisInstalled,
           _genesisInstalled ? '已安装' : '未安装',
         ),
-        if (_termuxInstalled && !_genesisInstalled) ...[
-          const SizedBox(height: 12),
-          ElevatedButton.icon(
-            onPressed: _installGenesis,
-            icon: const Icon(Icons.install_mobile),
-            label: const Text('一键安装 Genesis'),
+        const SizedBox(height: 12),
+        ElevatedButton.icon(
+          onPressed: _installGenesis,
+          icon: const Icon(Icons.install_mobile),
+          label: Text(_genesisInstalled ? '重新准备安装文件' : '一键安装 Genesis'),
+        ),
+        if (!_termuxInstalled) ...[
+          const SizedBox(height: 8),
+          const Text(
+            '可先准备安装文件，再完成 Termux 安装。',
+            style: TextStyle(color: Colors.white60, fontSize: 12),
           ),
         ],
 

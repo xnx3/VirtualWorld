@@ -48,22 +48,41 @@ object GenesisInstaller {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val markedInstalled = prefs.getBoolean(KEY_INSTALLED, false)
 
-        if (markedInstalled) {
-            // 如果标记为已安装，但 Termux 未安装，则重置标记
-            val termuxInstalled = try {
-                context.packageManager.getPackageInfo("com.termux", 0)
-                true
-            } catch (e: Exception) {
-                false
-            }
-            if (!termuxInstalled) {
+        // 先检查 Termux 是否安装
+        val termuxInstalled = try {
+            context.packageManager.getPackageInfo("com.termux", 0)
+            true
+        } catch (e: Exception) {
+            false
+        }
+        if (!termuxInstalled) {
+            if (markedInstalled) {
                 Log.w(TAG, "Termux not installed but Genesis marked as installed, resetting")
                 markInstalled(context, false)
-                return false
             }
+            return false
         }
 
-        return markedInstalled
+        // 再检查共享目录中关键安装文件是否存在，避免仅凭缓存误判
+        val sharedDir = getSharedStorageDir(context)
+        val hasInstallScript = sharedDir?.let { File(it, "install.sh").exists() } ?: false
+        val hasGenesisSource = sharedDir?.let { File(it, "genesis").isDirectory } ?: false
+        val hasPreparedFiles = hasInstallScript && hasGenesisSource
+
+        if (!hasPreparedFiles) {
+            if (markedInstalled) {
+                Log.w(TAG, "Install marker exists but shared files missing, resetting")
+                markInstalled(context, false)
+            }
+            return false
+        }
+
+        // 文件齐全但标记丢失时，自动修复标记
+        if (!markedInstalled) {
+            markInstalled(context, true)
+        }
+
+        return true
     }
 
     /**
@@ -175,6 +194,9 @@ object GenesisInstaller {
                     "2. bash \"$installScriptPath\""
             }
 
+            // 安装文件已准备就绪，写入已安装标记
+            markInstalled(context, true)
+
             return InstallResult(
                 success = true,
                 message = installInstructions
@@ -182,6 +204,7 @@ object GenesisInstaller {
 
         } catch (e: Exception) {
             Log.e(TAG, "Installation failed: ${e.message}", e)
+            markInstalled(context, false)
             return InstallResult(success = false, message = "安装失败: ${e.message}")
         }
     }
