@@ -59,6 +59,9 @@ class PriestSystem:
 
     def needs_election(self, world_state: WorldState) -> bool:
         """Check if a priest election is needed."""
+        # 创世神消亡后，祭司角色永久取消，不再进行选举
+        if world_state.creator_god_node_id is None:
+            return False
         if world_state.priest_node_id is None:
             return True
         # Check if current priest is still alive/active
@@ -109,6 +112,8 @@ class PriestSystem:
     def should_trigger_reset(self, world_state: WorldState) -> bool:
         """Check if civilization reset should trigger due to no priest."""
         return (
+            world_state.creator_god_node_id is not None
+            and
             world_state.priest_node_id is None
             and world_state.ticks_without_priest >= self.grace_period
             and world_state.get_active_being_count() > 0
