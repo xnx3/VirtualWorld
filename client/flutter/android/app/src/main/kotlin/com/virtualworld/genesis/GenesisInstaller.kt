@@ -8,6 +8,7 @@ import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.security.MessageDigest
 
 /**
  * Genesis 安装管理器
@@ -27,6 +28,7 @@ object GenesisInstaller {
 
     private const val TAG = "GenesisInstaller"
     private const val BUNDLE_NAME = "genesis-termux-bundle.tar.gz"
+    private const val ASSET_FINGERPRINT_FILE_NAME = "genesis-assets.sha256"
 
     // Termux 内部路径（仅供参考，应用无法直接访问）
     const val TERMUX_HOME = "/data/data/com.termux/files/home"
@@ -35,6 +37,7 @@ object GenesisInstaller {
     const val SHARED_GENESIS_DIR_IN_TERMUX = "\$HOME/storage/downloads/Genesis"
     const val QUICK_INSTALL_SCRIPT_IN_TERMUX = "$SHARED_GENESIS_DIR_IN_TERMUX/quick_install.sh"
     const val FULL_INSTALL_SCRIPT_IN_TERMUX = "$SHARED_GENESIS_DIR_IN_TERMUX/install.sh"
+    const val SHARED_ASSET_FINGERPRINT_IN_TERMUX = "$SHARED_GENESIS_DIR_IN_TERMUX/$ASSET_FINGERPRINT_FILE_NAME"
 
     // 共享存储目录名
     private const val SHARED_DIR_NAME = "Genesis"
@@ -178,6 +181,8 @@ object GenesisInstaller {
 
             // Step 5.5: 复制预构建 bundle（如果存在）
             val hasBundle = copyBundleIfExists(context, sharedDir)
+            val assetFingerprint = writeAssetFingerprintFile(context, sharedDir, hasBundle)
+            Log.i(TAG, "Prepared Genesis asset fingerprint: $assetFingerprint")
 
             progressCallback?.invoke("生成安装指令", 80)
 
@@ -506,6 +511,53 @@ ${commandBlock}
         } catch (e: IOException) {
             Log.i(TAG, "No pre-built bundle found in assets")
             false
+        }
+    }
+
+    private fun writeAssetFingerprintFile(
+        context: Context,
+        targetDir: File,
+        includeBundle: Boolean,
+    ): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        updateDigestWithAssetPath(context, digest, "genesis")
+        updateDigestWithAssetPath(context, digest, "start_genesis.sh")
+        updateDigestWithAssetPath(context, digest, "install.sh")
+        updateDigestWithAssetPath(context, digest, "quick_install.sh")
+        updateDigestWithAssetPath(context, digest, "config.yaml.example")
+        if (includeBundle) {
+            updateDigestWithAssetPath(context, digest, BUNDLE_NAME)
+        }
+
+        val fingerprint = digest.digest().joinToString("") { "%02x".format(it) }
+        File(targetDir, ASSET_FINGERPRINT_FILE_NAME).writeText("$fingerprint\n")
+        return fingerprint
+    }
+
+    private fun updateDigestWithAssetPath(
+        context: Context,
+        digest: MessageDigest,
+        assetPath: String,
+    ) {
+        val children = context.assets.list(assetPath)?.sorted().orEmpty()
+        if (children.isNotEmpty()) {
+            digest.update("dir:$assetPath\n".toByteArray())
+            children.forEach { child ->
+                updateDigestWithAssetPath(context, digest, "$assetPath/$child")
+            }
+            return
+        }
+
+        digest.update("file:$assetPath\n".toByteArray())
+        context.assets.open(assetPath).use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) {
+                    break
+                }
+                digest.update(buffer, 0, read)
+            }
         }
     }
 

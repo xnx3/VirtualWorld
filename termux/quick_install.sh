@@ -8,6 +8,7 @@ set -e
 # 配置
 INSTALL_DIR="${HOME}/genesis"
 BUNDLE_NAME="genesis-termux-bundle.tar.gz"
+ASSET_FINGERPRINT_NAME="genesis-assets.sha256"
 SHARED_STORAGE="${HOME}/storage/downloads/Genesis"
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
@@ -153,6 +154,12 @@ find_bundle() {
             return 0
         fi
     done
+
+    if [ -z "$BUNDLE_URL" ] && [ -z "$BUNDLE_FILE" ] && [ -f "$SCRIPT_DIR/install.sh" ]; then
+        echo -e "${YELLOW}Bundle file not found. Falling back to full installer...${NC}"
+        bash "$SCRIPT_DIR/install.sh"
+        exit $?
+    fi
 
     echo -e "${RED}Error: Bundle file not found${NC}"
     echo -e "${YELLOW}Searched locations:${NC}"
@@ -304,6 +311,11 @@ verify_installation() {
     if [ -f "$INSTALL_DIR/start_genesis.sh" ]; then
         chmod +x "$INSTALL_DIR/start_genesis.sh"
         echo -e "${GREEN}  Start script ready${NC}"
+    fi
+
+    if [ -f "$SCRIPT_DIR/$ASSET_FINGERPRINT_NAME" ]; then
+        cp "$SCRIPT_DIR/$ASSET_FINGERPRINT_NAME" "$INSTALL_DIR/.asset-fingerprint"
+        echo -e "${GREEN}  Asset fingerprint installed${NC}"
     fi
 
     # 检查源码

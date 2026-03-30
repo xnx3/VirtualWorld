@@ -10,6 +10,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
+ASSET_FINGERPRINT_NAME="genesis-assets.sha256"
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
 
@@ -181,6 +182,10 @@ main() {
         if [ ! -f "$INSTALL_DIR/data/config.yaml" ]; then
             cp "$SOURCE_DIR/config.yaml.example" "$INSTALL_DIR/data/config.yaml"
         fi
+    fi
+
+    if [ -f "$SOURCE_DIR/$ASSET_FINGERPRINT_NAME" ]; then
+        cp "$SOURCE_DIR/$ASSET_FINGERPRINT_NAME" "$INSTALL_DIR/.asset-fingerprint"
     fi
 
     # 步骤 6: 安装 Python 依赖
