@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS blocks (
     previous_hash TEXT NOT NULL,
     merkle_root TEXT NOT NULL,
     proposer TEXT NOT NULL,
+    proposer_public_key TEXT NOT NULL DEFAULT '',
     signature TEXT NOT NULL,
     timestamp REAL NOT NULL,
     nonce INTEGER NOT NULL
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     block_height INTEGER REFERENCES blocks(height),
     tx_type TEXT NOT NULL,
     sender TEXT NOT NULL,
+    public_key TEXT NOT NULL DEFAULT '',
     data TEXT NOT NULL,
     signature TEXT NOT NULL,
     timestamp REAL NOT NULL,
@@ -60,6 +62,9 @@ class ChainStorage:
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.executescript(_SCHEMA_SQL)
         await self._db.commit()
+        await self._ensure_column("blocks", "proposer_public_key", "TEXT NOT NULL DEFAULT ''")
+        await self._ensure_column("transactions", "public_key", "TEXT NOT NULL DEFAULT ''")
+        await self._db.commit()
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -72,6 +77,15 @@ class ChainStorage:
             raise RuntimeError("ChainStorage not initialized; call initialize() first")
         return self._db
 
+    async def _ensure_column(self, table: str, column: str, ddl: str) -> None:
+        db = self._ensure_db()
+        cursor = await db.execute(f"PRAGMA table_info({table})")
+        rows = await cursor.fetchall()
+        existing = {str(row[1]) for row in rows}
+        if column in existing:
+            return
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
     # ------------------------------------------------------------------
     # Block persistence
     # ------------------------------------------------------------------
@@ -82,14 +96,15 @@ class ChainStorage:
 
         await db.execute(
             """INSERT OR REPLACE INTO blocks
-               (height, hash, previous_hash, merkle_root, proposer, signature, timestamp, nonce)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (height, hash, previous_hash, merkle_root, proposer, proposer_public_key, signature, timestamp, nonce)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 block.index,
                 block.hash,
                 block.previous_hash,
                 block.merkle_root,
                 block.proposer,
+                block.proposer_public_key,
                 block.signature,
                 block.timestamp,
                 block.nonce,
@@ -99,13 +114,14 @@ class ChainStorage:
         for tx in block.transactions:
             await db.execute(
                 """INSERT OR REPLACE INTO transactions
-                   (tx_hash, block_height, tx_type, sender, data, signature, timestamp, nonce)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (tx_hash, block_height, tx_type, sender, public_key, data, signature, timestamp, nonce)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     tx.tx_hash,
                     block.index,
                     tx.tx_type.value,
                     tx.sender,
+                    tx.public_key,
                     json.dumps(tx.data, sort_keys=True),
                     tx.signature,
                     tx.timestamp,
@@ -117,10 +133,10 @@ class ChainStorage:
 
     async def _block_from_row(self, row: aiosqlite.Row, db: aiosqlite.Connection) -> Block:
         """Reconstruct a Block from a database row, including its transactions."""
-        height, blk_hash, prev_hash, mroot, proposer, sig, ts, nonce = row
+        height, blk_hash, prev_hash, mroot, proposer, proposer_public_key, sig, ts, nonce = row
 
         cursor = await db.execute(
-            "SELECT tx_hash, tx_type, sender, data, signature, timestamp, nonce "
+            "SELECT tx_hash, tx_type, sender, public_key, data, signature, timestamp, nonce "
             "FROM transactions WHERE block_height = ? ORDER BY nonce",
             (height,),
         )
@@ -133,10 +149,11 @@ class ChainStorage:
                     tx_hash=tx_row[0],
                     tx_type=TxType(tx_row[1]),
                     sender=tx_row[2],
-                    data=json.loads(tx_row[3]),
-                    signature=tx_row[4],
-                    timestamp=tx_row[5],
-                    nonce=tx_row[6],
+                    public_key=tx_row[3] or "",
+                    data=json.loads(tx_row[4]),
+                    signature=tx_row[5],
+                    timestamp=tx_row[6],
+                    nonce=tx_row[7],
                 )
             )
 
@@ -146,6 +163,7 @@ class ChainStorage:
             previous_hash=prev_hash,
             merkle_root=mroot,
             proposer=proposer,
+            proposer_public_key=proposer_public_key or "",
             signature=sig,
             transactions=transactions,
             nonce=nonce,
@@ -156,7 +174,7 @@ class ChainStorage:
         """Return the block at the given height, or None."""
         db = self._ensure_db()
         cursor = await db.execute(
-            "SELECT height, hash, previous_hash, merkle_root, proposer, signature, timestamp, nonce "
+            "SELECT height, hash, previous_hash, merkle_root, proposer, proposer_public_key, signature, timestamp, nonce "
             "FROM blocks WHERE height = ?",
             (height,),
         )
@@ -169,7 +187,7 @@ class ChainStorage:
         """Return the block with the given hash, or None."""
         db = self._ensure_db()
         cursor = await db.execute(
-            "SELECT height, hash, previous_hash, merkle_root, proposer, signature, timestamp, nonce "
+            "SELECT height, hash, previous_hash, merkle_root, proposer, proposer_public_key, signature, timestamp, nonce "
             "FROM blocks WHERE hash = ?",
             (hash,),
         )
@@ -182,7 +200,7 @@ class ChainStorage:
         """Return the block at the current chain tip, or None if empty."""
         db = self._ensure_db()
         cursor = await db.execute(
-            "SELECT height, hash, previous_hash, merkle_root, proposer, signature, timestamp, nonce "
+            "SELECT height, hash, previous_hash, merkle_root, proposer, proposer_public_key, signature, timestamp, nonce "
             "FROM blocks ORDER BY height DESC LIMIT 1",
         )
         row = await cursor.fetchone()
@@ -203,7 +221,7 @@ class ChainStorage:
         """Return blocks with height in [start, end] inclusive."""
         db = self._ensure_db()
         cursor = await db.execute(
-            "SELECT height, hash, previous_hash, merkle_root, proposer, signature, timestamp, nonce "
+            "SELECT height, hash, previous_hash, merkle_root, proposer, proposer_public_key, signature, timestamp, nonce "
             "FROM blocks WHERE height >= ? AND height <= ? ORDER BY height",
             (start, end),
         )

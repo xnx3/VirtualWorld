@@ -128,7 +128,6 @@ class Blockchain:
         if not tx.sender:
             logger.warning("Transaction missing sender: %s", tx.tx_hash[:16])
             return False
-        # Verify the transaction signature
         if not tx.verify_signature():
             logger.warning("Transaction signature invalid: %s", tx.tx_hash[:16])
             return False

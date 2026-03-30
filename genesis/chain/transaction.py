@@ -8,7 +8,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from genesis.utils.crypto import sha256, sign, verify, node_id_from_public_key
+from genesis.utils.crypto import (
+    node_id_from_public_key,
+    public_key_from_private_key,
+    sha256,
+    sign,
+    verify,
+)
 
 
 class TxType(str, Enum):
@@ -44,6 +50,7 @@ class Transaction:
     tx_hash: str = ""
     tx_type: TxType = TxType.ACTION
     sender: str = ""
+    public_key: str = ""
     data: dict[str, Any] = field(default_factory=dict)
     signature: str = ""
     timestamp: float = 0.0
@@ -77,21 +84,37 @@ class Transaction:
 
         Sets both ``tx_hash`` and ``signature`` on this instance.
         """
+        self.public_key = public_key_from_private_key(private_key).hex()
         self.tx_hash = self.compute_hash()
         sig_bytes = sign(private_key, self._content_bytes())
         self.signature = sig_bytes.hex()
 
     def verify_signature(self) -> bool:
-        """Verify that the signature matches the sender's public key.
+        """Verify the transaction signature.
 
-        The sender field is a *node ID* (SHA-256 of the public key), so we
-        cannot recover the public key from it alone.  Callers that need full
-        verification must supply the public key externally.  This method
-        checks structural validity: non-empty signature and matching hash.
+        New transactions carry ``public_key`` and are verified
+        cryptographically against ``sender``. Legacy transactions without
+        ``public_key`` fall back to structural hash verification so old chains
+        remain readable.
         """
-        if not self.signature:
+        if not self.signature or not self.tx_hash:
             return False
-        return self.tx_hash == self.compute_hash()
+        if self.tx_hash != self.compute_hash():
+            return False
+
+        if not self.public_key:
+            return True
+
+        try:
+            public_key_bytes = bytes.fromhex(self.public_key)
+            sig_bytes = bytes.fromhex(self.signature)
+        except ValueError:
+            return False
+
+        if node_id_from_public_key(public_key_bytes) != self.sender:
+            return False
+
+        return verify(public_key_bytes, self._content_bytes(), sig_bytes)
 
     def verify_signature_with_key(self, public_key: bytes) -> bool:
         """Verify the Ed25519 signature using the given raw public key."""
@@ -136,6 +159,7 @@ class Transaction:
             "tx_hash": self.tx_hash,
             "tx_type": self.tx_type.value,
             "sender": self.sender,
+            "public_key": self.public_key,
             "data": self.data,
             "signature": self.signature,
             "timestamp": self.timestamp,
@@ -148,6 +172,7 @@ class Transaction:
             tx_hash=data["tx_hash"],
             tx_type=TxType(data["tx_type"]),
             sender=data["sender"],
+            public_key=data.get("public_key", ""),
             data=data["data"],
             signature=data["signature"],
             timestamp=data["timestamp"],

@@ -38,6 +38,15 @@ def generate_keypair() -> tuple[bytes, bytes]:
     return priv_bytes, pub_bytes
 
 
+def public_key_from_private_key(private_key_bytes: bytes) -> bytes:
+    """Derive the raw Ed25519 public key bytes from a raw private key."""
+    private_key = _load_private_key(private_key_bytes)
+    return private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+
+
 def _load_private_key(private_key_bytes: bytes) -> Ed25519PrivateKey:
     return Ed25519PrivateKey.from_private_bytes(private_key_bytes)
 

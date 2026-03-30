@@ -7,7 +7,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from genesis.utils.crypto import sha256, sign, verify, merkle_root, node_id_from_public_key
+from genesis.utils.crypto import (
+    merkle_root,
+    node_id_from_public_key,
+    public_key_from_private_key,
+    sha256,
+    sign,
+    verify,
+)
 from genesis.chain.transaction import Transaction
 
 
@@ -20,6 +27,7 @@ class Block:
     previous_hash: str = ""
     merkle_root: str = ""
     proposer: str = ""
+    proposer_public_key: str = ""
     signature: str = ""
     transactions: list[Transaction] = field(default_factory=list)
     nonce: int = 0
@@ -62,20 +70,37 @@ class Block:
 
         Sets ``signature`` (hex-encoded) and then computes ``hash``.
         """
+        self.proposer_public_key = public_key_from_private_key(private_key).hex()
         sig_bytes = sign(private_key, self.header_bytes())
         self.signature = sig_bytes.hex()
         self.hash = self.compute_hash()
 
     def verify_signature(self) -> bool:
-        """Verify structural integrity: matching hash.
+        """Verify the block signature.
 
-        Full Ed25519 verification requires the proposer's public key, which
-        is not embedded in the block.  Use :meth:`verify_signature_with_key`
-        for cryptographic verification.
+        New blocks carry ``proposer_public_key`` and are verified
+        cryptographically against ``proposer``. Legacy blocks without that
+        field fall back to structural hash verification so older chains remain
+        readable.
         """
         if not self.signature or not self.hash:
             return False
-        return self.hash == self.compute_hash()
+        if self.hash != self.compute_hash():
+            return False
+
+        if not self.proposer_public_key:
+            return True
+
+        try:
+            public_key_bytes = bytes.fromhex(self.proposer_public_key)
+            sig_bytes = bytes.fromhex(self.signature)
+        except ValueError:
+            return False
+
+        if node_id_from_public_key(public_key_bytes) != self.proposer:
+            return False
+
+        return verify(public_key_bytes, self.header_bytes(), sig_bytes)
 
     def verify_signature_with_key(self, public_key: bytes) -> bool:
         """Verify the Ed25519 signature using the given raw public key."""
@@ -104,6 +129,7 @@ class Block:
             previous_hash="0" * 64,
             merkle_root=merkle_root([]),
             proposer=creator_node_id,
+            proposer_public_key="",
             signature="0" * 128,
             transactions=[],
             nonce=0,
@@ -122,6 +148,7 @@ class Block:
             "previous_hash": self.previous_hash,
             "merkle_root": self.merkle_root,
             "proposer": self.proposer,
+            "proposer_public_key": self.proposer_public_key,
             "signature": self.signature,
             "transactions": [tx.to_dict() for tx in self.transactions],
             "nonce": self.nonce,
@@ -136,6 +163,7 @@ class Block:
             previous_hash=data["previous_hash"],
             merkle_root=data["merkle_root"],
             proposer=data["proposer"],
+            proposer_public_key=data.get("proposer_public_key", ""),
             signature=data["signature"],
             transactions=[Transaction.from_dict(tx) for tx in data.get("transactions", [])],
             nonce=data["nonce"],
