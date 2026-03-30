@@ -978,13 +978,22 @@ class GenesisNode:
                 continue
 
             tao_system = get_tao_voting_system()
-            vote = tao_system.initiate_tao_vote(
-                proposer_id=proposal.get("proposer", ""),
-                rule_name=proposal.get("description", "New Tao Rule")[:50],
-                rule_description=proposal.get("description", ""),
-                rule_category=proposal.get("category", "civilization"),
-                world_state=self.world_state,
-            )
+            try:
+                vote = tao_system.initiate_tao_vote(
+                    proposer_id=proposal.get("proposer", ""),
+                    rule_name=proposal.get("description", "New Tao Rule")[:50],
+                    rule_description=proposal.get("description", ""),
+                    rule_category=proposal.get("category", "civilization"),
+                    world_state=self.world_state,
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "Skipping invalid Tao vote proposal %s from %s: %s",
+                    tx_hash[:8],
+                    str(proposal.get("proposer", ""))[:8],
+                    exc,
+                )
+                continue
             await self._submit_tx("TAO_VOTE_INITIATE", {
                 "vote_id": vote.vote_id,
                 "proposer_id": proposal.get("proposer", ""),

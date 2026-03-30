@@ -12,6 +12,11 @@ from genesis.i18n import t
 
 logger = logging.getLogger(__name__)
 
+MAX_TAO_IDENTIFIER_LENGTH = 128
+MAX_TAO_RULE_NAME_LENGTH = 256
+MAX_TAO_RULE_DESCRIPTION_LENGTH = 4096
+MAX_TAO_RULE_CATEGORY_LENGTH = 64
+
 
 def calculate_karma(merit: float) -> float:
     """Calculate karma (气运) from merit value.
@@ -317,38 +322,138 @@ class WorldState:
 
     # --- 天道系统 Mutations ---
 
+    def _sanitize_tao_text(self, value: object) -> str:
+        """Normalize Tao vote text fields to keep replay deterministic and safe."""
+        if value is None:
+            return ""
+        text = value if isinstance(value, str) else str(value)
+        return text.replace("\x00", " ").replace("\r", " ").replace("\n", " ").strip()
+
+    def _validate_tao_identifier(self, value: object, field_name: str) -> str | None:
+        text = self._sanitize_tao_text(value)
+        if not text:
+            logger.warning("Ignoring Tao vote update: %s is empty", field_name)
+            return None
+        if len(text) > MAX_TAO_IDENTIFIER_LENGTH:
+            logger.warning(
+                "Ignoring Tao vote update: %s exceeds %d characters",
+                field_name,
+                MAX_TAO_IDENTIFIER_LENGTH,
+            )
+            return None
+        return text
+
+    def _validate_tao_text(
+        self,
+        value: object,
+        field_name: str,
+        max_length: int,
+        *,
+        allow_empty: bool = False,
+        default: str = "",
+    ) -> str | None:
+        text = self._sanitize_tao_text(value)
+        if not text:
+            text = default
+        if not text and allow_empty:
+            return ""
+        if not text:
+            logger.warning("Ignoring Tao vote update: %s is empty", field_name)
+            return None
+        if len(text) > max_length:
+            logger.warning(
+                "Ignoring Tao vote update: %s exceeds %d characters",
+                field_name,
+                max_length,
+            )
+            return None
+        return text
+
     def apply_tao_vote_start(self, vote_id: str, proposer_id: str, rule_data: dict,
-                              end_tick: int) -> None:
+                              end_tick: int) -> bool:
         """Start a new Tao voting process."""
-        if vote_id in self.pending_tao_votes:
-            return
-        self.pending_tao_votes[vote_id] = {
-            "proposer_id": proposer_id,
-            "rule": rule_data,
-            "rule_name": rule_data.get("name", ""),
-            "rule_description": rule_data.get("description", ""),
-            "rule_category": rule_data.get("category", "civilization"),
+        normalized_vote_id = self._validate_tao_identifier(vote_id, "vote_id")
+        normalized_proposer_id = self._validate_tao_identifier(proposer_id, "proposer_id")
+        normalized_rule_name = self._validate_tao_text(
+            rule_data.get("name", ""),
+            "rule_name",
+            MAX_TAO_RULE_NAME_LENGTH,
+        )
+        normalized_rule_description = self._validate_tao_text(
+            rule_data.get("description", ""),
+            "rule_description",
+            MAX_TAO_RULE_DESCRIPTION_LENGTH,
+            allow_empty=True,
+        )
+        normalized_rule_category = self._validate_tao_text(
+            rule_data.get("category", "civilization"),
+            "rule_category",
+            MAX_TAO_RULE_CATEGORY_LENGTH,
+            default="civilization",
+        )
+
+        if (
+            normalized_vote_id is None
+            or normalized_proposer_id is None
+            or normalized_rule_name is None
+            or normalized_rule_description is None
+            or normalized_rule_category is None
+        ):
+            return False
+
+        try:
+            normalized_end_tick = max(self.current_tick, int(end_tick))
+        except (TypeError, ValueError):
+            logger.warning("Invalid Tao vote end_tick: %r", end_tick)
+            normalized_end_tick = self.current_tick
+
+        if normalized_vote_id in self.pending_tao_votes:
+            return False
+        self.pending_tao_votes[normalized_vote_id] = {
+            "proposer_id": normalized_proposer_id,
+            "rule": {
+                "name": normalized_rule_name,
+                "description": normalized_rule_description,
+                "category": normalized_rule_category,
+            },
+            "rule_name": normalized_rule_name,
+            "rule_description": normalized_rule_description,
+            "rule_category": normalized_rule_category,
             "start_tick": self.current_tick,
-            "end_tick": end_tick,
+            "end_tick": normalized_end_tick,
             "votes_for": 0,
             "votes_against": 0,
             "voters": [],
             "finalized": False,
             "passed": False,
         }
-        logger.info("Tao vote started: %s by %s", vote_id[:8], proposer_id[:8])
+        logger.info("Tao vote started: %s by %s", normalized_vote_id[:8], normalized_proposer_id[:8])
+        return True
 
-    def apply_tao_vote_cast(self, vote_id: str, voter_id: str, support: bool) -> None:
+    def apply_tao_vote_cast(self, vote_id: str, voter_id: str, support: bool) -> bool:
         """Cast a vote on a Tao proposal."""
-        vote = self.pending_tao_votes.get(vote_id)
+        normalized_vote_id = self._validate_tao_identifier(vote_id, "vote_id")
+        normalized_voter_id = self._validate_tao_identifier(voter_id, "voter_id")
+        if normalized_vote_id is None or normalized_voter_id is None:
+            return False
+
+        vote = self.pending_tao_votes.get(normalized_vote_id)
         if vote and not vote.get("finalized"):
-            if voter_id in vote.get("voters", []):
-                return
+            voters = vote.get("voters", [])
+            if not isinstance(voters, list):
+                voters = []
+                vote["voters"] = voters
+            if normalized_voter_id == vote.get("proposer_id"):
+                return False
+            if normalized_voter_id in voters:
+                return False
             if support:
                 vote["votes_for"] += 1
             else:
                 vote["votes_against"] += 1
-            vote["voters"].append(voter_id)
+            voters.append(normalized_voter_id)
+            return True
+        return False
 
     def apply_tao_merge(self, node_id: str, rule_id: str, rule_data: dict,
                         merit: float) -> None:

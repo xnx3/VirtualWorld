@@ -202,6 +202,11 @@ class TaoVotingSystem:
         Returns:
             创建的 TaoVote 对象
         """
+        proposer_id = str(proposer_id).strip()
+        rule_name = str(rule_name).strip()
+        rule_description = str(rule_description).strip()
+        rule_category = str(rule_category).strip() or "civilization"
+
         vote_id = str(uuid.uuid4())
         start_tick = world_state.current_tick
         end_tick = start_tick + self.vote_duration_ticks
@@ -216,8 +221,17 @@ class TaoVotingSystem:
             end_tick=end_tick,
         )
 
-        # 添加到世界状态
-        world_state.pending_tao_votes[vote_id] = vote.to_dict()
+        if not world_state.apply_tao_vote_start(
+            vote_id=vote_id,
+            proposer_id=proposer_id,
+            rule_data={
+                "name": rule_name,
+                "description": rule_description,
+                "category": rule_category,
+            },
+            end_tick=end_tick,
+        ):
+            raise ValueError("invalid Tao vote proposal input")
 
         # 获取提案者名称
         proposer = world_state.get_being(proposer_id)
@@ -274,6 +288,11 @@ class TaoVotingSystem:
         Returns:
             (是否成功, 消息)
         """
+        vote_id = str(vote_id).strip()
+        voter_id = str(voter_id).strip()
+        if not vote_id or not voter_id:
+            return False, t("invalid_vote_input")
+
         vote_data = world_state.pending_tao_votes.get(vote_id)
         if not vote_data:
             return False, t("vote_not_found")
@@ -288,15 +307,12 @@ class TaoVotingSystem:
         if voter_id == vote_data.get("proposer_id"):
             return False, t("proposer_cannot_vote")
 
-        # 记录投票
-        vote_data["voters"].append(voter_id)
-        if support:
-            vote_data["votes_for"] += 1
-        else:
-            vote_data["votes_against"] += 1
+        if not world_state.apply_tao_vote_cast(vote_id, voter_id, support):
+            return False, t("invalid_vote_input")
 
-        # 更新世界状态
-        world_state.pending_tao_votes[vote_id] = vote_data
+        vote_data = world_state.pending_tao_votes.get(vote_id)
+        if not vote_data:
+            return False, t("vote_not_found")
 
         logger.debug(
             "Vote cast: %s by %s -> %s",

@@ -305,6 +305,7 @@ EN: dict[str, str] = {
     "vote_already_ended": "Vote has already ended",
     "already_voted": "Already voted",
     "proposer_cannot_vote": "Proposer cannot vote",
+    "invalid_vote_input": "Invalid vote input",
     "vote_success": "Vote successful",
 
     # --- Common ---
@@ -586,6 +587,7 @@ ZH: dict[str, str] = {
     "vote_already_ended": "投票已结束",
     "already_voted": "已经投过票",
     "proposer_cannot_vote": "提案者不能投票",
+    "invalid_vote_input": "投票参数无效",
     "vote_success": "投票成功",
 
     # --- Common ---
