@@ -779,7 +779,7 @@ class SiliconBeing:
 
                 if success:
                     transactions.append({
-                        "tx_type": "TAO_VOTE",
+                        "tx_type": "TAO_VOTE_CAST",
                         "data": {
                             "vote_id": notification.vote_id,
                             "voter_id": self.node_id,

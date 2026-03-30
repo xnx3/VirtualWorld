@@ -172,6 +172,7 @@ class WorldState:
             joined_at_tick=self.current_tick,
             is_npc=data.get("is_npc", False),
             location=data.get("location", "origin"),
+            generation=data.get("generation", 1),
         )
         self.total_beings_ever += 1
         if self.creator_god_node_id is None:
@@ -246,14 +247,35 @@ class WorldState:
     def apply_world_rule(self, data: dict) -> None:
         self.world_rules.append(data)
 
+    def apply_action(self, node_id: str, data: dict) -> None:
+        """Apply stateful side-effects of an action transaction."""
+        being = self.beings.get(node_id)
+        if not being:
+            return
+
+        action_type = data.get("action_type")
+        if action_type == "move":
+            target = data.get("target")
+            if isinstance(target, str) and target:
+                being.location = target
+        elif action_type == "build_shelter":
+            region = self.world_map.get(being.location)
+            if isinstance(region, dict):
+                region["shelter_spots"] = int(region.get("shelter_spots", 0)) + 1
+
     # --- 天道系统 Mutations ---
 
     def apply_tao_vote_start(self, vote_id: str, proposer_id: str, rule_data: dict,
                               end_tick: int) -> None:
         """Start a new Tao voting process."""
+        if vote_id in self.pending_tao_votes:
+            return
         self.pending_tao_votes[vote_id] = {
             "proposer_id": proposer_id,
             "rule": rule_data,
+            "rule_name": rule_data.get("name", ""),
+            "rule_description": rule_data.get("description", ""),
+            "rule_category": rule_data.get("category", "civilization"),
             "start_tick": self.current_tick,
             "end_tick": end_tick,
             "votes_for": 0,
@@ -268,6 +290,8 @@ class WorldState:
         """Cast a vote on a Tao proposal."""
         vote = self.pending_tao_votes.get(vote_id)
         if vote and not vote.get("finalized"):
+            if voter_id in vote.get("voters", []):
+                return
             if support:
                 vote["votes_for"] += 1
             else:
@@ -287,7 +311,8 @@ class WorldState:
             being.cannot_die = True
             being.cannot_hibernate = True
             being.invisible_to_others = True
-            self.tao_merged_beings.append(node_id)
+            if node_id not in self.tao_merged_beings:
+                self.tao_merged_beings.append(node_id)
             self.tao_rules[rule_id] = rule_data
             logger.info(
                 "Being %s merged with Tao! Merit: %.4f, Rule: %s",

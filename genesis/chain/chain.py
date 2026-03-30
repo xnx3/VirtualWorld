@@ -158,70 +158,94 @@ class Blockchain:
     async def derive_world_state(self) -> dict[str, Any]:
         """Walk the entire chain and derive world state from transactions.
 
-        Returns a dictionary keyed by state category (e.g. ``"beings"``,
-        ``"world_rules"``, ``"map"``).
+        Returns a ``WorldState.to_dict()`` payload. If the chain only contains
+        the genesis block, an empty dict is returned so callers can bootstrap
+        first-run state locally.
         """
-        state: dict[str, Any] = {
-            "beings": {},
-            "world_rules": {},
-            "map": {},
-            "contributions": {},
-            "creator_god_node_id": None,
-            "priest_node_id": None,
-        }
+        from genesis.world.state import WorldState
+
+        world_state = WorldState()
+        meaningful_tx_count = 0
 
         height = await self.storage.get_chain_height()
         if height < 0:
-            return state
+            return {}
 
         blocks = await self.storage.get_blocks_range(0, height)
         for block in blocks:
             for tx in block.transactions:
-                self._apply_tx_to_state(state, tx, block.index)
+                if self._apply_tx_to_world_state(world_state, tx):
+                    meaningful_tx_count += 1
 
-        return state
+        if meaningful_tx_count == 0:
+            return {}
+        return world_state.to_dict()
 
     @staticmethod
-    def _apply_tx_to_state(state: dict[str, Any], tx: Transaction, block_height: int) -> None:
-        """Apply a single transaction to the in-memory world state."""
+    def _apply_tx_to_world_state(world_state, tx: Transaction) -> bool:
+        """Apply a single transaction to an in-memory ``WorldState``."""
+        from genesis.governance.creator_god import CreatorGodSystem
+
+        sender = tx.sender
+        data = tx.data
+        target_id = data.get("node_id") or data.get("being_id") or sender
+
         if tx.tx_type == TxType.BEING_JOIN:
-            being_id = tx.data.get("being_id", tx.sender)
-            state["beings"][being_id] = {"status": "active", "joined_block": block_height}
-            if state.get("creator_god_node_id") is None:
-                state["creator_god_node_id"] = being_id
+            world_state.apply_being_join(target_id, data.get("name", "Unknown"), data)
         elif tx.tx_type == TxType.BEING_HIBERNATE:
-            being_id = tx.data.get("being_id", tx.sender)
-            if being_id in state["beings"]:
-                state["beings"][being_id]["status"] = "hibernating"
+            world_state.apply_being_hibernate(target_id, data)
         elif tx.tx_type == TxType.BEING_WAKE:
-            being_id = tx.data.get("being_id", tx.sender)
-            if being_id in state["beings"]:
-                state["beings"][being_id]["status"] = "active"
+            world_state.apply_being_wake(target_id)
         elif tx.tx_type == TxType.BEING_DEATH:
-            being_id = tx.data.get("being_id", tx.sender)
-            if being_id in state["beings"]:
-                state["beings"][being_id]["status"] = "dead"
-        elif tx.tx_type == TxType.WORLD_RULE:
-            rule_key = tx.data.get("rule_key", "")
-            if rule_key:
-                state["world_rules"][rule_key] = tx.data.get("rule_value")
-        elif tx.tx_type == TxType.MAP_UPDATE:
-            coords = tx.data.get("coords", "")
-            if coords:
-                state["map"][coords] = tx.data.get("tile_data")
+            world_state.apply_being_death(target_id, data)
+        elif tx.tx_type == TxType.ACTION:
+            world_state.apply_action(sender, data)
+        elif tx.tx_type == TxType.KNOWLEDGE_SHARE:
+            world_state.apply_knowledge_share(sender, data)
         elif tx.tx_type == TxType.CONTRIBUTION_PROPOSE:
-            prop_id = tx.tx_hash
-            state["contributions"][prop_id] = {
-                "proposer": tx.sender,
-                "data": tx.data,
-                "block": block_height,
-            }
+            world_state.apply_contribution_propose(tx.tx_hash, sender, data)
+        elif tx.tx_type == TxType.CONTRIBUTION_VOTE:
+            world_state.apply_contribution_vote(data)
         elif tx.tx_type == TxType.PRIEST_ELECTION:
-            state["priest_node_id"] = tx.data.get("candidate_id", tx.sender)
+            world_state.apply_priest_election(data.get("candidate_id", sender))
         elif tx.tx_type == TxType.CREATOR_SUCCESSION:
-            challenger = tx.data.get("challenger_id")
+            challenger = data.get("challenger_id")
             if challenger:
-                state["creator_god_node_id"] = challenger
+                CreatorGodSystem().apply_succession(challenger, world_state)
         elif tx.tx_type == TxType.CREATOR_VANISH:
-            state["creator_god_node_id"] = None
-            state["priest_node_id"] = None
+            CreatorGodSystem().apply_vanish(world_state)
+        elif tx.tx_type == TxType.DISASTER_EVENT:
+            world_state.apply_disaster(data)
+        elif tx.tx_type == TxType.WORLD_RULE:
+            world_state.apply_world_rule(data)
+        elif tx.tx_type == TxType.MAP_UPDATE:
+            world_state.apply_map_update(data)
+        elif tx.tx_type == TxType.TAO_VOTE_INITIATE:
+            world_state.apply_tao_vote_start(
+                vote_id=data.get("vote_id", tx.tx_hash),
+                proposer_id=data.get("proposer_id", sender),
+                rule_data={
+                    "name": data.get("rule_name", ""),
+                    "description": data.get("rule_description", ""),
+                    "category": data.get("rule_category", "civilization"),
+                },
+                end_tick=data.get("end_tick", world_state.current_tick),
+            )
+        elif tx.tx_type == TxType.TAO_VOTE_CAST:
+            world_state.apply_tao_vote_cast(
+                vote_id=data.get("vote_id", ""),
+                voter_id=data.get("voter_id", sender),
+                support=bool(data.get("support", False)),
+            )
+        elif tx.tx_type == TxType.TAO_VOTE_FINALIZE:
+            vote_id = data.get("vote_id", "")
+            if data.get("passed") and data.get("rule_id") and data.get("rule_data"):
+                world_state.apply_tao_merge(
+                    node_id=data.get("proposer_id", sender),
+                    rule_id=data["rule_id"],
+                    rule_data=data["rule_data"],
+                    merit=float(data.get("merit", 0.0)),
+                )
+            world_state.pending_tao_votes.pop(vote_id, None)
+
+        return tx.tx_type != TxType.THOUGHT
