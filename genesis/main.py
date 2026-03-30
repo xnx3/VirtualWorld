@@ -102,6 +102,27 @@ class GenesisNode:
         if self.world_state.total_beings_ever == 0 and snapshot.total_beings_ever > 0:
             self.world_state.total_beings_ever = snapshot.total_beings_ever
 
+    async def _reload_world_state_from_chain(self) -> None:
+        """Rebuild world state from the current local chain tip."""
+        from genesis.world.state import WorldState
+
+        persisted_world_state = self._load_persisted_world_state()
+        state_data = await self.blockchain.derive_world_state()
+        if state_data:
+            self.world_state = WorldState.from_dict(state_data)
+            self._restore_runtime_fields_from_snapshot(persisted_world_state)
+        elif persisted_world_state is not None:
+            self.world_state = persisted_world_state
+        elif self.world_state is None:
+            self.world_state = WorldState()
+
+        if not self.world_state.world_map:
+            from genesis.world.map import WorldMap
+
+            wmap = WorldMap()
+            wmap.generate()
+            self.world_state.world_map = {k: v.to_dict() for k, v in wmap.regions.items()}
+
     async def start(self) -> None:
         """Start the virtual world node."""
         logger.info("=" * 50)
@@ -154,6 +175,11 @@ class GenesisNode:
             node_id=self.identity.node_id,
             private_key=self.identity.private_key,
             port=self.config.network.listen_port,
+            peer_manager=self.peer_manager,
+        )
+        self.server.set_chain_accessors(
+            chain_height_provider=self.blockchain.get_chain_height,
+            blocks_provider=self.blockchain.get_blocks_range,
         )
         self.discovery = PeerDiscovery(
             node_id=self.identity.node_id,
@@ -162,6 +188,8 @@ class GenesisNode:
             bootstrap_nodes=self.config.network.bootstrap_nodes,
         )
         self.chain_sync = ChainSync(self.server, self.peer_manager)
+        self.discovery.on_peer_discovered(self._handle_discovered_peer)
+        self.server.on_message(self._handle_network_message)
 
         # 设置天道投票系统的网络广播
         from genesis.governance.tao_voting import get_tao_voting_system
@@ -179,26 +207,25 @@ class GenesisNode:
         from genesis.chronicle.logger import ChronicleLogger
         self.chronicle = ChronicleLogger(str(self.data_dir / "chronicle"))
 
-        # 8. Derive world state from blockchain
-        from genesis.world.state import WorldState
-        persisted_world_state = self._load_persisted_world_state()
-        state_data = await self.blockchain.derive_world_state()
-        if state_data:
-            self.world_state = WorldState.from_dict(state_data)
-            self._restore_runtime_fields_from_snapshot(persisted_world_state)
-        elif persisted_world_state is not None:
-            self.world_state = persisted_world_state
-        else:
-            self.world_state = WorldState()
+        # 8. Derive world state from the currently known chain tip
+        await self._reload_world_state_from_chain()
 
-        if not self.world_state.world_map:
-            # Generate world map if first time or no valid snapshot exists.
-            from genesis.world.map import WorldMap
-            wmap = WorldMap()
-            wmap.generate()
-            self.world_state.world_map = {k: v.to_dict() for k, v in wmap.regions.items()}
+        # 9. Start P2P network and sync before deciding local being lifecycle
+        try:
+            await self.server.start()
+            await self.discovery.start()
+            await self.discovery.broadcast_presence()
+            await self.discovery.query_bootstrap()
+            if await self.chain_sync.sync_chain(self.blockchain):
+                await self._reload_world_state_from_chain()
+            logger.info("P2P network started on port %d", self.config.network.listen_port)
+        except Exception as e:
+            logger.error("FATAL: P2P network start failed: %s", e)
+            logger.error("Genesis requires P2P network to connect to the silicon civilization.")
+            logger.error("Please check your network configuration and try again.")
+            raise RuntimeError(f"P2P network failed to start: {e}") from e
 
-        # 9. Create or load the being
+        # 10. Create or load the being
         from genesis.being.llm_client import LLMClient
         from genesis.being.agent import SiliconBeing
 
@@ -347,17 +374,6 @@ class GenesisNode:
                     "form": self.being.form, "location": "genesis_plains",
                     "is_npc": False,
                 })
-
-        # 10. Start P2P network (必须成功，不允许单机模式)
-        try:
-            await self.server.start()
-            await self.discovery.start()
-            logger.info("P2P network started on port %d", self.config.network.listen_port)
-        except Exception as e:
-            logger.error("FATAL: P2P network start failed: %s", e)
-            logger.error("Genesis requires P2P network to connect to the silicon civilization.")
-            logger.error("Please check your network configuration and try again.")
-            raise RuntimeError(f"P2P network failed to start: {e}") from e
 
         # 11. Check minimum beings — spawn NPCs if needed
         await self._ensure_minimum_beings()
@@ -570,8 +586,12 @@ class GenesisNode:
                         if pending_txs:
                             block = await self.consensus.create_block(pending_txs)
                             if block:
-                                await self.blockchain.add_block(block)
-                                self.mempool.remove_transactions([t.tx_hash for t in pending_txs])
+                                if await self.blockchain.add_block(block):
+                                    from genesis.network.protocol import Message
+
+                                    await self.server.broadcast_message(
+                                        Message.new_block(self.identity.node_id, block.to_dict())
+                                    )
                 except Exception as e:
                     logger.debug("Block production skipped: %s", e)
 
@@ -725,6 +745,87 @@ class GenesisNode:
                 await self.server.broadcast_message(msg)
             except Exception:
                 pass
+
+    async def _handle_discovered_peer(self, node_id: str, address: str, port: int) -> None:
+        """Connect to newly discovered peers and trigger a sync attempt."""
+        if (
+            self.server is None
+            or self.peer_manager is None
+            or self.chain_sync is None
+            or self.blockchain is None
+        ):
+            return
+
+        if self.identity and node_id == self.identity.node_id:
+            return
+
+        existing = self.peer_manager.get_peer(node_id)
+        if existing and existing.status == "active":
+            self.peer_manager.update_peer(
+                node_id,
+                address=address,
+                port=port,
+                last_seen=time.time(),
+            )
+            return
+
+        connected = await self.server.connect_to_peer(address, port)
+        if not connected:
+            return
+
+        try:
+            if await self.chain_sync.sync_chain(self.blockchain):
+                await self._reload_world_state_from_chain()
+        except Exception as exc:
+            logger.debug("Chain sync after peer discovery failed: %s", exc)
+
+    async def _handle_network_message(self, msg, peer_id: str) -> None:
+        """Dispatch network messages that affect local chain state."""
+        from genesis.network.protocol import MessageType
+
+        if (
+            self.chain_sync is None
+            or self.blockchain is None
+            or self.peer_manager is None
+        ):
+            return
+
+        if msg.msg_type == MessageType.NEW_TX:
+            tx_data = msg.payload.get("tx")
+            if isinstance(tx_data, dict):
+                if await self.chain_sync.handle_new_tx(tx_data, self.blockchain):
+                    tx_type = tx_data.get("tx_type", "")
+                    sender = tx_data.get("sender", peer_id)
+                    tx_payload = tx_data.get("data", {})
+                    if isinstance(tx_type, str) and isinstance(tx_payload, dict):
+                        self._apply_tx_to_state(
+                            tx_type,
+                            sender,
+                            tx_payload,
+                            tx_data.get("tx_hash", ""),
+                        )
+            return
+
+        if msg.msg_type != MessageType.NEW_BLOCK:
+            return
+
+        block_data = msg.payload.get("block")
+        if not isinstance(block_data, dict):
+            return
+
+        block_height = int(block_data.get("index", -1))
+        if block_height >= 0:
+            peer = self.peer_manager.get_peer(peer_id)
+            current_height = peer.chain_height if peer else -1
+            if block_height > current_height:
+                self.peer_manager.update_peer(
+                    peer_id,
+                    chain_height=block_height,
+                    last_seen=time.time(),
+                )
+
+        if await self.chain_sync.handle_new_block(block_data, self.blockchain):
+            await self._reload_world_state_from_chain()
 
     def _apply_tx_to_state(self, tx_type: str, sender: str, data: dict,
                            tx_hash: str = "") -> None:

@@ -151,6 +151,26 @@ class Blockchain:
     async def get_blocks_range(self, start: int, end: int) -> list[Block]:
         return await self.storage.get_blocks_range(start, end)
 
+    async def add_pending_tx(self, tx: Transaction | dict[str, Any]) -> bool:
+        """Validate and add a transaction to the local mempool."""
+        try:
+            candidate = tx if isinstance(tx, Transaction) else Transaction.from_dict(tx)
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning("Rejected malformed pending tx: %s", exc)
+            return False
+
+        if not await self.validate_transaction(candidate):
+            logger.warning("Rejected invalid pending tx %s", candidate.tx_hash[:16])
+            return False
+
+        added = self.mempool.add_transaction(candidate)
+        if not added:
+            logger.debug(
+                "Pending tx %s already exists or mempool rejected it",
+                candidate.tx_hash[:16],
+            )
+        return added
+
     # ------------------------------------------------------------------
     # World state derivation
     # ------------------------------------------------------------------

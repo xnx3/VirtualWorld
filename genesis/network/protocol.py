@@ -110,7 +110,7 @@ class Message:
 
     @classmethod
     def get_blocks(cls, node_id: str, start: int, end: int) -> Message:
-        """Request a range of blocks [start, end)."""
+        """Request a range of blocks [start, end] inclusive."""
         return cls(
             msg_type=MessageType.GET_BLOCKS,
             payload={"start": start, "end": end},

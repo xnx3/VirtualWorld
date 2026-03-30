@@ -69,8 +69,13 @@ class PeerManager:
         or the peer already exists."""
         with self._lock:
             if peer.node_id in self._peers:
-                # Update last_seen on re-discovery.
-                self._peers[peer.node_id].last_seen = time.time()
+                # Refresh metadata on re-discovery or reconnect.
+                existing = self._peers[peer.node_id]
+                existing.address = peer.address
+                existing.port = peer.port
+                existing.last_seen = time.time()
+                existing.status = peer.status
+                existing.chain_height = peer.chain_height
                 return False
             if len(self._peers) >= self._max_peers:
                 logger.warning(

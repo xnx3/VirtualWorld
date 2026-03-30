@@ -6,6 +6,7 @@ import asyncio
 import logging
 from typing import Any
 
+from genesis.chain.block import Block
 from genesis.network.peer import PeerManager
 from genesis.network.protocol import Message, MessageType
 from genesis.network.server import P2PServer
@@ -44,8 +45,8 @@ class ChainSync:
         """Perform a full synchronization against the best peer.
 
         *blockchain* is expected to expose:
-            - ``height`` (int): current chain height
-            - ``add_block(block_dict) -> bool``: validate and append a block
+            - ``get_chain_height() -> int``
+            - ``add_block(block) -> bool``: validate and append a block
 
         Returns True if the chain was advanced, False otherwise.
         """
@@ -54,7 +55,7 @@ class ChainSync:
             logger.info("No peers available for sync")
             return False
 
-        local_height = getattr(blockchain, "height", 0)
+        local_height = await blockchain.get_chain_height()
         remote_height = best_peer.chain_height
 
         if remote_height <= local_height:
@@ -73,10 +74,10 @@ class ChainSync:
         )
 
         advanced = False
-        current = local_height
+        current = local_height + 1
 
-        while current < remote_height:
-            end = min(current + _BATCH_SIZE, remote_height)
+        while current <= remote_height:
+            end = min(current + _BATCH_SIZE - 1, remote_height)
             try:
                 blocks = await self.request_blocks(best_peer.node_id, current, end)
             except (asyncio.TimeoutError, OSError) as exc:
@@ -89,7 +90,7 @@ class ChainSync:
 
             for block_data in blocks:
                 try:
-                    ok = blockchain.add_block(block_data)
+                    ok = await blockchain.add_block(Block.from_dict(block_data))
                 except Exception:
                     logger.exception("Failed to apply block at height %d", current)
                     ok = False
@@ -109,7 +110,7 @@ class ChainSync:
     async def request_blocks(
         self, peer_id: str, start: int, end: int
     ) -> list[dict[str, Any]]:
-        """Request blocks [start, end) from *peer_id*.
+        """Request blocks [start, end] from *peer_id*.
 
         Returns a list of block dicts.  Raises ``asyncio.TimeoutError`` if the
         peer does not respond in time.
@@ -128,17 +129,17 @@ class ChainSync:
 
         return response.payload.get("blocks", [])
 
-    async def handle_new_block(self, block_data: dict[str, Any], blockchain: Any) -> None:
+    async def handle_new_block(self, block_data: dict[str, Any], blockchain: Any) -> bool:
         """Handle a NEW_BLOCK message received from the network.
 
         Validates and appends the block, then re-broadcasts to other peers.
         """
-        block_height = block_data.get("height", -1)
-        local_height = getattr(blockchain, "height", 0)
+        block_height = block_data.get("index", -1)
+        local_height = await blockchain.get_chain_height()
 
         if block_height <= local_height:
             logger.debug("Ignoring already-known block at height %d", block_height)
-            return
+            return False
 
         if block_height > local_height + 1:
             logger.info(
@@ -146,24 +147,25 @@ class ChainSync:
                 block_height,
                 local_height,
             )
-            await self.sync_chain(blockchain)
-            return
+            return await self.sync_chain(blockchain)
 
         try:
-            ok = blockchain.add_block(block_data)
+            ok = await blockchain.add_block(Block.from_dict(block_data))
         except Exception:
             logger.exception("Failed to apply new block %d", block_height)
-            return
+            return False
 
         if ok:
             logger.info("Applied new block at height %d", block_height)
             # Re-broadcast to other peers.
             broadcast = Message.new_block(self._server.node_id, block_data)
             await self._server.broadcast_message(broadcast)
+            return True
         else:
             logger.warning("Rejected new block at height %d", block_height)
+            return False
 
-    async def handle_new_tx(self, tx_data: dict[str, Any], blockchain: Any) -> None:
+    async def handle_new_tx(self, tx_data: dict[str, Any], blockchain: Any) -> bool:
         """Handle a NEW_TX message: validate and add to the mempool.
 
         *blockchain* is expected to expose ``add_pending_tx(tx_dict) -> bool``.
@@ -171,17 +173,19 @@ class ChainSync:
         tx_hash = tx_data.get("tx_hash", "unknown")
 
         try:
-            ok = blockchain.add_pending_tx(tx_data)
+            ok = await blockchain.add_pending_tx(tx_data)
         except Exception:
             logger.exception("Error adding pending tx %s", tx_hash)
-            return
+            return False
 
         if ok:
             logger.debug("Accepted new tx %s", tx_hash)
             broadcast = Message.new_tx(self._server.node_id, tx_data)
             await self._server.broadcast_message(broadcast)
+            return True
         else:
             logger.debug("Rejected tx %s", tx_hash)
+            return False
 
     # ------------------------------------------------------------------
     # Internal: response matching

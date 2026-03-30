@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import struct
 import time
@@ -50,6 +51,8 @@ class P2PServer:
             Callable[[Message, str], Awaitable[None] | None]
         ] = []
         self._running = False
+        self._chain_height_provider: Callable[[], Awaitable[int] | int] | None = None
+        self._blocks_provider: Callable[[int, int], Awaitable[list[Any]] | list[Any]] | None = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -66,6 +69,15 @@ class P2PServer:
     @property
     def peer_manager(self) -> PeerManager:
         return self._peer_manager
+
+    def set_chain_accessors(
+        self,
+        chain_height_provider: Callable[[], Awaitable[int] | int] | None = None,
+        blocks_provider: Callable[[int, int], Awaitable[list[Any]] | list[Any]] | None = None,
+    ) -> None:
+        """Register blockchain accessors used by the P2P protocol."""
+        self._chain_height_provider = chain_height_provider
+        self._blocks_provider = blocks_provider
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -126,7 +138,7 @@ class P2PServer:
         self._security.record_connection(address)
 
         # Send HELLO.
-        chain_height = self._get_chain_height()
+        chain_height = await self._get_chain_height()
         hello = Message.hello(self._node_id, chain_height, self._port)
         try:
             await self._write_message(writer, hello)
@@ -250,7 +262,7 @@ class P2PServer:
         peer_listen_port = hello.payload.get("listen_port", 0)
 
         # Reply with HELLO_ACK.
-        chain_height = self._get_chain_height()
+        chain_height = await self._get_chain_height()
         ack = Message.hello_ack(self._node_id, chain_height)
         try:
             await self._write_message(writer, ack)
@@ -347,6 +359,12 @@ class P2PServer:
             peers_msg = Message.peers(self._node_id, self._peer_manager.to_list())
             await self.send_to_peer(peer_id, peers_msg)
 
+        elif msg.msg_type == MessageType.GET_BLOCKS:
+            start = int(msg.payload.get("start", 0))
+            end = int(msg.payload.get("end", -1))
+            blocks = await self._get_blocks_payload(start, end)
+            await self.send_to_peer(peer_id, Message.blocks(self._node_id, blocks))
+
     # ------------------------------------------------------------------
     # Internal: helpers
     # ------------------------------------------------------------------
@@ -363,10 +381,37 @@ class P2PServer:
         self._peer_manager.update_peer(node_id, status="dead")
         logger.info("Disconnected peer %s", node_id[:16])
 
-    def _get_chain_height(self) -> int:
-        """Return the current chain height.
+    async def _get_chain_height(self) -> int:
+        """Return the current chain height for handshakes."""
+        if self._chain_height_provider is None:
+            return 0
 
-        In a full integration this would query the blockchain object.
-        For now, returns 0.
-        """
-        return 0
+        try:
+            height = self._chain_height_provider()
+            if inspect.isawaitable(height):
+                height = await height
+            return int(height)
+        except Exception:
+            logger.exception("Failed to obtain local chain height")
+            return 0
+
+    async def _get_blocks_payload(self, start: int, end: int) -> list[dict[str, Any]]:
+        """Return serialized blocks for the requested inclusive range."""
+        if self._blocks_provider is None or end < start:
+            return []
+
+        try:
+            blocks = self._blocks_provider(start, end)
+            if inspect.isawaitable(blocks):
+                blocks = await blocks
+        except Exception:
+            logger.exception("Failed to obtain block range %d-%d", start, end)
+            return []
+
+        payload: list[dict[str, Any]] = []
+        for block in blocks or []:
+            if isinstance(block, dict):
+                payload.append(block)
+            elif hasattr(block, "to_dict"):
+                payload.append(block.to_dict())
+        return payload
