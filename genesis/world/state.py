@@ -107,6 +107,7 @@ class WorldState:
     contribution_scores: dict[str, float] = field(default_factory=dict)  # node_id -> score
     pending_proposals: dict[str, dict] = field(default_factory=dict)  # tx_hash -> proposal
     proposal_votes: dict[str, list[dict]] = field(default_factory=dict)  # tx_hash -> votes
+    finalized_proposals: set[str] = field(default_factory=set)  # tx_hash of finalized proposals (for idempotency)
     priest_node_id: str | None = None
     creator_god_node_id: str | None = None
     ticks_without_priest: int = 0
@@ -336,6 +337,11 @@ class WorldState:
         if not proposal_hash:
             return
 
+        # Idempotency check: skip if already finalized
+        if proposal_hash in self.finalized_proposals:
+            logger.debug("Skipping already finalized proposal %s", proposal_hash[:8])
+            return
+
         proposer = (
             data.get("proposer_id")
             or self.pending_proposals.get(proposal_hash, {}).get("proposer")
@@ -350,6 +356,7 @@ class WorldState:
 
         self.pending_proposals.pop(proposal_hash, None)
         self.proposal_votes.pop(proposal_hash, None)
+        self.finalized_proposals.add(proposal_hash)
 
     def apply_priest_election(self, node_id: str) -> None:
         self.priest_node_id = node_id
@@ -610,6 +617,7 @@ class WorldState:
             "contribution_scores": self.contribution_scores,
             "pending_proposals": self.pending_proposals,
             "proposal_votes": self.proposal_votes,
+            "finalized_proposals": list(self.finalized_proposals),
             "priest_node_id": self.priest_node_id,
             "creator_god_node_id": self.creator_god_node_id,
             "ticks_without_priest": self.ticks_without_priest,
@@ -654,4 +662,6 @@ class WorldState:
         ws.tao_rules = data.get("tao_rules", {})
         ws.tao_merged_beings = data.get("tao_merged_beings", [])
         ws.pending_tao_votes = data.get("pending_tao_votes", {})
+        # 已结算提案（幂等性保护）
+        ws.finalized_proposals = set(data.get("finalized_proposals", []))
         return ws
