@@ -1,9 +1,13 @@
+import asyncio
 import unittest
+from struct import unpack
+from unittest.mock import patch
 
 from genesis.chain.block import Block
 from genesis.chain.transaction import Transaction, TxType
+from genesis.network.discovery import PeerDiscovery
 from genesis.network.peer import PeerInfo, PeerManager
-from genesis.network.protocol import Message, MessageType
+from genesis.network.protocol import LENGTH_PREFIX_SIZE, Message, MessageType
 from genesis.network.server import P2PServer
 from genesis.network.sync import ChainSync
 from genesis.node.identity import NodeIdentity
@@ -190,3 +194,64 @@ class BlockchainPendingTxTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(accepted)
         self.assertEqual(blockchain.mempool.size(), 1)
+
+
+class PeerDiscoveryBootstrapTests(unittest.IsolatedAsyncioTestCase):
+    async def test_query_p2p_bootstrap_handshakes_before_requesting_peers(self):
+        discovered = []
+        reader = asyncio.StreamReader()
+        reader.feed_data(Message.hello_ack("bootstrap-node", 7).serialize())
+        reader.feed_data(
+            Message.peers(
+                "bootstrap-node",
+                [{"node_id": "peer-1", "address": "10.0.0.8", "port": 22334}],
+            ).serialize()
+        )
+        reader.feed_eof()
+
+        class FakeWriter:
+            def __init__(self) -> None:
+                self.buffer = bytearray()
+                self.closed = False
+
+            def write(self, data: bytes) -> None:
+                self.buffer.extend(data)
+
+            async def drain(self) -> None:
+                return None
+
+            def close(self) -> None:
+                self.closed = True
+
+            async def wait_closed(self) -> None:
+                return None
+
+        writer = FakeWriter()
+
+        discovery = PeerDiscovery("local-node", listen_port=19841)
+
+        async def on_peer(node_id: str, address: str, port: int) -> None:
+            discovered.append((node_id, address, port))
+
+        discovery.on_peer_discovered(on_peer)
+
+        async def fake_open_connection(host: str, port: int):
+            self.assertEqual((host, port), ("127.0.0.1", 22333))
+            return reader, writer
+
+        with patch("asyncio.open_connection", new=fake_open_connection):
+            await discovery._query_p2p_bootstrap("127.0.0.1:22333")
+
+        written = bytes(writer.buffer)
+        outbound = []
+        offset = 0
+        while offset < len(written):
+            (length,) = unpack("!I", written[offset:offset + LENGTH_PREFIX_SIZE])
+            offset += LENGTH_PREFIX_SIZE
+            outbound.append(Message.deserialize(written[offset:offset + length]))
+            offset += length
+
+        self.assertEqual([message.msg_type for message in outbound], [MessageType.HELLO, MessageType.GET_PEERS])
+        self.assertTrue(writer.closed)
+        self.assertIn(("bootstrap-node", "127.0.0.1", 22333), discovered)
+        self.assertIn(("peer-1", "10.0.0.8", 22334), discovered)

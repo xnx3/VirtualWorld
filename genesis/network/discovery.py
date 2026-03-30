@@ -204,7 +204,7 @@ class PeerDiscovery:
 
     async def _query_p2p_bootstrap(self, addr_str: str) -> None:
         """Query a direct P2P bootstrap node."""
-        from genesis.network.protocol import Message
+        from genesis.network.protocol import Message, MessageType
 
         try:
             host, port_str = addr_str.rsplit(":", 1)
@@ -222,20 +222,43 @@ class PeerDiscovery:
             return
 
         try:
-            msg = Message.get_peers(self._node_id)
-            writer.write(msg.serialize())
+            hello = Message.hello(self._node_id, chain_height=0, listen_port=self._listen_port)
+            writer.write(hello.serialize())
             await writer.drain()
 
             length_data = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
             import struct
             (length,) = struct.unpack("!I", length_data)
             if length > 1_048_576:
-                logger.warning("Bootstrap %s sent oversized response", addr_str)
+                logger.warning("Bootstrap %s sent oversized handshake response", addr_str)
+                return
+            body = await asyncio.wait_for(reader.readexactly(length), timeout=10.0)
+            ack = Message.deserialize(body)
+
+            if ack.msg_type != MessageType.HELLO_ACK:
+                logger.debug(
+                    "Bootstrap %s rejected handshake with response %s",
+                    addr_str,
+                    ack.msg_type,
+                )
+                return
+
+            if ack.sender_id:
+                await self._fire_callbacks(ack.sender_id, host, port)
+
+            msg = Message.get_peers(self._node_id)
+            writer.write(msg.serialize())
+            await writer.drain()
+
+            length_data = await asyncio.wait_for(reader.readexactly(4), timeout=5.0)
+            (length,) = struct.unpack("!I", length_data)
+            if length > 1_048_576:
+                logger.warning("Bootstrap %s sent oversized peer response", addr_str)
                 return
             body = await asyncio.wait_for(reader.readexactly(length), timeout=10.0)
             resp = Message.deserialize(body)
 
-            if resp.msg_type.value == "PEERS":
+            if resp.msg_type == MessageType.PEERS:
                 peers_list = resp.payload.get("peers", [])[:100]  # Max 100 peers
                 for peer_data in peers_list:
                     valid, address, port_p = self._validate_peer_data(peer_data)
