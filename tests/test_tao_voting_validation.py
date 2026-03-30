@@ -164,6 +164,57 @@ class TaoVoteValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(vote_data["votes_for"], 1)
         self.assertEqual(vote_data["voters"], ["peer-1"])
 
+    async def test_blockchain_replay_rejects_hibernating_tao_voter(self):
+        proposer_id = "creator-node"
+        peer_id = "peer-1"
+        block = _FakeBlock([
+            _tx(
+                "join-main",
+                TxType.BEING_JOIN,
+                proposer_id,
+                {"name": "Creator", "location": "genesis_plains"},
+            ),
+            _tx(
+                "join-peer",
+                TxType.BEING_JOIN,
+                peer_id,
+                {"name": "Peer", "location": "signal_tower"},
+            ),
+            _tx(
+                "hibernate-peer",
+                TxType.BEING_HIBERNATE,
+                peer_id,
+                {"location": "signal_tower", "safety_status": "safe"},
+            ),
+            _tx(
+                "vote-start",
+                TxType.TAO_VOTE_INITIATE,
+                proposer_id,
+                {
+                    "vote_id": "vote-1",
+                    "proposer_id": proposer_id,
+                    "rule_name": "Safe Rule",
+                    "rule_description": "Protect shared knowledge.",
+                    "rule_category": "rule",
+                    "end_tick": 8640,
+                },
+            ),
+            _tx(
+                "vote-cast-hibernating",
+                TxType.TAO_VOTE_CAST,
+                peer_id,
+                {"vote_id": "vote-1", "voter_id": peer_id, "support": True},
+            ),
+        ])
+        blockchain = Blockchain(_FakeStorage([block]), Mempool())
+
+        state = await blockchain.derive_world_state()
+        world_state = WorldState.from_dict(state)
+        vote_data = world_state.pending_tao_votes["vote-1"]
+
+        self.assertEqual(vote_data["votes_for"], 0)
+        self.assertEqual(vote_data["voters"], [])
+
 
 class TaoVotingSystemValidationTests(unittest.TestCase):
     def test_cast_vote_rejects_blank_identifier_without_mutating_state(self):
@@ -186,6 +237,39 @@ class TaoVotingSystemValidationTests(unittest.TestCase):
         self.assertEqual(message, "Invalid vote input")
         self.assertEqual(world_state.pending_tao_votes[vote.vote_id]["votes_for"], 0)
         self.assertEqual(world_state.pending_tao_votes[vote.vote_id]["voters"], [])
+
+    def test_finalize_vote_requires_95_percent_of_eligible_active_beings(self):
+        world_state = WorldState()
+        world_state.apply_being_join("creator-node", "Creator", {"location": "genesis_plains"})
+        voter_ids = []
+        for index in range(19):
+            voter_id = f"peer-{index}"
+            voter_ids.append(voter_id)
+            world_state.apply_being_join(
+                voter_id,
+                f"Peer {index}",
+                {"location": "signal_tower"},
+            )
+
+        system = TaoVotingSystem()
+        vote = system.initiate_tao_vote(
+            proposer_id="creator-node",
+            rule_name="Knowledge Covenant",
+            rule_description="Share and preserve knowledge.",
+            rule_category="rule",
+            world_state=world_state,
+        )
+
+        for voter_id in voter_ids[:18]:
+            success, _ = system.cast_vote(vote.vote_id, voter_id, True, world_state)
+            self.assertTrue(success)
+
+        world_state.current_tick = vote.end_tick
+        result = system.finalize_vote(vote.vote_id, world_state)
+
+        self.assertIsNotNone(result)
+        self.assertFalse(result["passed"])
+        self.assertAlmostEqual(result["vote_ratio"], 18 / 19)
 
 
 if __name__ == "__main__":

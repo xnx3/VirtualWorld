@@ -484,27 +484,37 @@ class TaoVotingSystem:
         if not vote_data or vote_data.get("finalized"):
             return None
 
-        vote = TaoVote.from_dict(vote_data)
+        normalized_vote_data = dict(vote_data)
+        normalized_vote_data.setdefault("vote_id", vote_id)
+        vote = TaoVote.from_dict(normalized_vote_data)
         vote.finalized = True
+
+        eligible_voter_count = sum(
+            1
+            for being in world_state.get_active_beings()
+            if being.node_id != vote.proposer_id
+        )
 
         # 计算赞成率
         total = vote.total_votes
-        active_count = world_state.get_active_being_count()
+        approval_ratio = vote.votes_for / max(eligible_voter_count, 1)
+        participation_ratio = total / max(eligible_voter_count, 1)
 
         if total == 0:
             # 没有人投票，提案失败
             vote.passed = False
             logger.info("Tao vote %s failed: no votes", vote_id[:8])
         else:
-            participation = total / max(active_count, 1)
-            vote.passed = vote.vote_ratio >= self.pass_ratio
+            vote.passed = approval_ratio >= self.pass_ratio
 
             logger.info(
-                "Tao vote %s finalized: %s (%.1f%% approved, %d/%d participated)",
+                "Tao vote %s finalized: %s (%.1f%% approved, %.1f%% participated, %d/%d eligible)",
                 vote_id[:8],
                 t("passed") if vote.passed else t("rejected"),
-                vote.vote_ratio * 100,
-                total, active_count
+                approval_ratio * 100,
+                participation_ratio * 100,
+                total,
+                eligible_voter_count,
             )
 
         # 更新世界状态
@@ -528,7 +538,7 @@ class TaoVotingSystem:
                 votes_for=vote.votes_for,
                 votes_against=vote.votes_against,
                 remaining_ticks=0,
-                ratio=vote.vote_ratio,
+                ratio=approval_ratio,
                 merit=vote.merit_awarded,
             )
         except Exception as e:
@@ -543,7 +553,7 @@ class TaoVotingSystem:
             votes_for=vote.votes_for,
             votes_against=vote.votes_against,
             remaining_ticks=0,
-            ratio=vote.vote_ratio,
+            ratio=approval_ratio,
             merit=vote.merit_awarded,
         )
 
@@ -554,7 +564,7 @@ class TaoVotingSystem:
         return {
             "vote_id": vote_id,
             "passed": vote.passed,
-            "vote_ratio": vote.vote_ratio,
+            "vote_ratio": approval_ratio,
             "votes_for": vote.votes_for,
             "votes_against": vote.votes_against,
             "proposer_id": vote.proposer_id,

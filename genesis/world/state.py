@@ -477,6 +477,7 @@ class WorldState:
         if normalized_vote_id in self.pending_tao_votes:
             return False
         self.pending_tao_votes[normalized_vote_id] = {
+            "vote_id": normalized_vote_id,
             "proposer_id": normalized_proposer_id,
             "rule": {
                 "name": normalized_rule_name,
@@ -506,6 +507,10 @@ class WorldState:
 
         vote = self.pending_tao_votes.get(normalized_vote_id)
         if vote and not vote.get("finalized"):
+            being = self.beings.get(normalized_voter_id)
+            if being is None or being.status != "active" or being.merged_with_tao:
+                return False
+
             voters = vote.get("voters", [])
             if not isinstance(voters, list):
                 voters = []
