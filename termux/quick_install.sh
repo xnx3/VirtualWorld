@@ -9,6 +9,8 @@ set -e
 INSTALL_DIR="${HOME}/genesis"
 BUNDLE_NAME="genesis-termux-bundle.tar.gz"
 SHARED_STORAGE="${HOME}/storage/downloads/Genesis"
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -60,6 +62,32 @@ echo "║     One-Click Deployment                 ║"
 echo "╚══════════════════════════════════════════╝"
 echo -e "${NC}"
 
+ensure_storage_access() {
+    if [ -d "${HOME}/storage/downloads" ]; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}Shared storage is not ready yet.${NC}"
+    echo -e "${CYAN}Requesting storage permission from Termux...${NC}"
+    termux-setup-storage >/dev/null 2>&1 || true
+    echo -e "${YELLOW}If Android shows a file access dialog, tap Allow. Waiting for storage...${NC}"
+
+    local waited=0
+    while [ $waited -lt 30 ]; do
+        if [ -d "${HOME}/storage/downloads" ]; then
+            echo -e "${GREEN}  Storage permission granted${NC}"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    echo -e "${RED}Storage permission is still unavailable.${NC}"
+    echo -e "${YELLOW}Please open Termux once, allow file access, then rerun:${NC}"
+    echo -e "  ${CYAN}bash \"$SCRIPT_PATH\"${NC}"
+    exit 1
+}
+
 # 步骤 1: 检查 Python
 check_python() {
     echo -e "${CYAN}[1/5] Checking Python...${NC}"
@@ -100,9 +128,19 @@ find_bundle() {
         return 0
     fi
 
+    # 优先检查脚本所在目录，兼容 bash /storage/.../quick_install.sh
+    if [ -f "$SCRIPT_DIR/$BUNDLE_NAME" ]; then
+        BUNDLE_PATH="$SCRIPT_DIR/$BUNDLE_NAME"
+        echo -e "${GREEN}  Found bundle next to script: $BUNDLE_PATH${NC}"
+        return 0
+    fi
+
+    ensure_storage_access
+
     # 查找本地 bundle
     local search_paths=(
         "$SHARED_STORAGE/$BUNDLE_NAME"
+        "/storage/emulated/0/Download/Genesis/$BUNDLE_NAME"
         "$(pwd)/$BUNDLE_NAME"
         "${HOME}/$BUNDLE_NAME"
         "/sdcard/Download/Genesis/$BUNDLE_NAME"
@@ -123,6 +161,7 @@ find_bundle() {
     done
     echo ""
     echo -e "${CYAN}Options:${NC}"
+    echo -e "  0. In Termux, run ${YELLOW}termux-setup-storage${NC} and tap Allow"
     echo -e "  1. Copy bundle to one of the locations above"
     echo -e "  2. Use ${YELLOW}--from-url <url>${NC} to download"
     echo -e "  3. Use ${YELLOW}--bundle <file>${NC} to specify bundle path"
@@ -136,18 +175,22 @@ verify_bundle() {
     # 检查 SHA256（如果存在）
     local sha256_file="${BUNDLE_PATH}.sha256"
     if [ -f "$sha256_file" ]; then
-        echo -e "${YELLOW}  Verifying SHA256 checksum...${NC}"
-        local expected_hash
-        local actual_hash
-        expected_hash="$(awk 'NR==1 {print $1}' "$sha256_file")"
-        actual_hash="$(sha256sum "$BUNDLE_PATH" | awk '{print $1}')"
+        if command -v sha256sum &>/dev/null; then
+            echo -e "${YELLOW}  Verifying SHA256 checksum...${NC}"
+            local expected_hash
+            local actual_hash
+            expected_hash="$(awk 'NR==1 {print $1}' "$sha256_file")"
+            actual_hash="$(sha256sum "$BUNDLE_PATH" | awk '{print $1}')"
 
-        if [ -n "$expected_hash" ] && [ "$expected_hash" = "$actual_hash" ]; then
-            echo -e "${GREEN}  Checksum verified${NC}"
+            if [ -n "$expected_hash" ] && [ "$expected_hash" = "$actual_hash" ]; then
+                echo -e "${GREEN}  Checksum verified${NC}"
+            else
+                echo -e "${RED}Error: Checksum verification failed${NC}"
+                echo -e "${YELLOW}The bundle may be corrupted. Try downloading again.${NC}"
+                exit 1
+            fi
         else
-            echo -e "${RED}Error: Checksum verification failed${NC}"
-            echo -e "${YELLOW}The bundle may be corrupted. Try downloading again.${NC}"
-            exit 1
+            echo -e "${YELLOW}  sha256sum not found, skipping checksum verification${NC}"
         fi
     else
         echo -e "${YELLOW}  No SHA256 file found, skipping checksum verification${NC}"
@@ -215,6 +258,12 @@ verify_installation() {
         cat "$INSTALL_DIR/bundle-info.json" | head -10
     fi
 
+    if [ -f "$INSTALL_DIR/requirements.txt" ]; then
+        echo -e "${GREEN}  requirements.txt ready for automatic venv repair${NC}"
+    else
+        echo -e "${YELLOW}  requirements.txt not found, automatic venv repair will be limited${NC}"
+    fi
+
     # 检查 venv Python
     local venv_python="$INSTALL_DIR/venv/bin/python3"
     if [ -f "$venv_python" ]; then
@@ -225,7 +274,7 @@ verify_installation() {
 
         if [ "$VENV_PYTHON" != "unknown" ] && [ "$VENV_PYTHON" != "$SYSTEM_PYTHON" ]; then
             echo -e "${YELLOW}Warning: venv Python ($VENV_PYTHON) differs from system Python ($SYSTEM_PYTHON)${NC}"
-            echo -e "${YELLOW}The venv may need to be recreated. Run start_genesis.sh to auto-fix.${NC}"
+            echo -e "${YELLOW}The first start will automatically rebuild the venv if needed.${NC}"
         else
             echo -e "${GREEN}  Python version compatible: $VENV_PYTHON${NC}"
         fi
@@ -243,12 +292,12 @@ verify_installation() {
 
         if [ ${#failed[@]} -gt 0 ]; then
             echo -e "${YELLOW}  Some dependencies not available in venv: ${failed[*]}${NC}"
-            echo -e "${YELLOW}  Will attempt to reinstall on first start${NC}"
+            echo -e "${YELLOW}  start_genesis.sh will automatically repair the venv on first start${NC}"
         else
             echo -e "${GREEN}  All dependencies verified${NC}"
         fi
     else
-        echo -e "${YELLOW}  venv not found, will need pip install${NC}"
+        echo -e "${YELLOW}  venv not found, start_genesis.sh will create one automatically${NC}"
     fi
 
     # 检查启动脚本
@@ -277,10 +326,12 @@ show_complete() {
     echo -e "  1. Edit config (optional):"
     echo -e "     ${YELLOW}nano $INSTALL_DIR/data/config.yaml${NC}"
     echo ""
-    echo -e "  2. Start Genesis service:"
+    echo -e "  2. Start Genesis service manually if needed:"
     echo -e "     ${YELLOW}$INSTALL_DIR/start_genesis.sh${NC}"
     echo ""
-    echo -e "  3. Connect from Flutter app to:"
+    echo -e "  3. If this was launched from the Android app, you can now return to the app and wait for automatic startup."
+    echo ""
+    echo -e "  4. Connect from Flutter app to:"
     echo -e "     ${YELLOW}ws://127.0.0.1:19842${NC}"
     echo ""
 }
