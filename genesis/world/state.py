@@ -555,27 +555,6 @@ class WorldState:
             being.merit = min(10.0, being.merit + merit)
             being.karma = calculate_karma(being.merit)
 
-    def finalize_tao_vote(self, vote_id: str) -> bool | None:
-        """Finalize a Tao vote and return whether it passed."""
-        vote = self.pending_tao_votes.get(vote_id)
-        if not vote or vote.get("finalized"):
-            return None
-
-        vote["finalized"] = True
-        total = vote["votes_for"] + vote["votes_against"]
-        if total == 0:
-            vote["passed"] = False
-            return False
-
-        vote_ratio = vote["votes_for"] / total
-        vote["passed"] = vote_ratio >= 0.95
-        logger.info(
-            "Tao vote %s finalized: %s (%.1f%% approved)",
-            vote_id[:8], t("passed") if vote["passed"] else t("rejected"),
-            vote_ratio * 100
-        )
-        return vote["passed"]
-
     # --- Phase transitions ---
 
     def update_phase(self) -> None:
