@@ -37,8 +37,15 @@ class StatusReporter:
 
         # Try to load world state from saved file
         if world_state is None:
+            snapshot_file = self.data_dir / "world_state.json"
             state_file = self.data_dir / "being_state.json"
-            if state_file.exists():
+            if snapshot_file.exists():
+                try:
+                    data = json.loads(snapshot_file.read_text())
+                    world_state = WorldState.from_dict(data)
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    world_state = None
+            if world_state is None and state_file.exists():
                 try:
                     data = json.loads(state_file.read_text())
                     ws_data = data.get("world_state")

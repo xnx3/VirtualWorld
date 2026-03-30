@@ -65,6 +65,43 @@ class GenesisNode:
         self.chronicle = None
         self.consensus = None
 
+    def _load_persisted_world_state(self):
+        """Load the last locally-saved world snapshot if present."""
+        from genesis.world.state import WorldState
+
+        snapshot_path = self.data_dir / "world_state.json"
+        if not snapshot_path.exists():
+            return None
+
+        try:
+            data = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            return WorldState.from_dict(data)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            logger.warning("Failed to load saved world snapshot: %s", exc)
+            return None
+
+    def _restore_runtime_fields_from_snapshot(self, snapshot) -> None:
+        """Backfill fields that are not reliably reconstructible from chain replay."""
+        if snapshot is None or self.world_state is None:
+            return
+
+        if self.world_state.current_tick == 0 and snapshot.current_tick > 0:
+            self.world_state.current_tick = snapshot.current_tick
+        if self.world_state.current_epoch == 0 and snapshot.current_epoch > 0:
+            self.world_state.current_epoch = snapshot.current_epoch
+        if self.world_state.phase.value == "HUMAN_SIM" and snapshot.phase.value != "HUMAN_SIM":
+            self.world_state.phase = snapshot.phase
+        if self.world_state.civ_level == 0.0 and snapshot.civ_level > 0.0:
+            self.world_state.civ_level = snapshot.civ_level
+        if not self.world_state.world_map and snapshot.world_map:
+            self.world_state.world_map = snapshot.world_map
+        if not self.world_state.disaster_history and snapshot.disaster_history:
+            self.world_state.disaster_history = snapshot.disaster_history
+        if not self.world_state.world_rules and snapshot.world_rules:
+            self.world_state.world_rules = snapshot.world_rules
+        if self.world_state.total_beings_ever == 0 and snapshot.total_beings_ever > 0:
+            self.world_state.total_beings_ever = snapshot.total_beings_ever
+
     async def start(self) -> None:
         """Start the virtual world node."""
         logger.info("=" * 50)
@@ -144,12 +181,18 @@ class GenesisNode:
 
         # 8. Derive world state from blockchain
         from genesis.world.state import WorldState
+        persisted_world_state = self._load_persisted_world_state()
         state_data = await self.blockchain.derive_world_state()
         if state_data:
             self.world_state = WorldState.from_dict(state_data)
+            self._restore_runtime_fields_from_snapshot(persisted_world_state)
+        elif persisted_world_state is not None:
+            self.world_state = persisted_world_state
         else:
             self.world_state = WorldState()
-            # Generate world map if first time
+
+        if not self.world_state.world_map:
+            # Generate world map if first time or no valid snapshot exists.
             from genesis.world.map import WorldMap
             wmap = WorldMap()
             wmap.generate()
@@ -508,6 +551,9 @@ class GenesisNode:
                 # Ensure minimum beings
                 await self._ensure_minimum_beings()
 
+                # Finalize contribution proposals after the voting window closes
+                await self._check_contribution_proposals()
+
                 # Advance tick
                 self.world_state.advance_tick()
 
@@ -588,12 +634,29 @@ class GenesisNode:
         if self.being and self.world_state:
             con.separator("━")
 
-            # Quick safety assessment (no LLM call)
-            safety = self.being.hibernation.assess_safety(
-                self.being._to_being_state(self.world_state), self.world_state,
-            )
+            try:
+                hibernate_data = await asyncio.wait_for(
+                    self.being.prepare_shutdown(self.world_state), timeout=3,
+                )
+            except Exception as exc:
+                logger.warning("Falling back to fast hibernation shutdown: %s", exc)
+                hibernate_data = {
+                    "location": self.being.location,
+                    "safety_status": self.being.hibernation.assess_safety(
+                        self.being._to_being_state(self.world_state), self.world_state,
+                    ),
+                    "message": "",
+                    "tick": self.world_state.current_tick,
+                }
+            self.being.location = hibernate_data.get("location", self.being.location)
 
-            con.hibernate_start(self.being.name, safety)
+            try:
+                await self._submit_tx("BEING_HIBERNATE", hibernate_data)
+            except Exception as exc:
+                logger.warning("Failed to submit hibernate transaction during shutdown: %s", exc)
+                self.world_state.apply_being_hibernate(self.identity.node_id, hibernate_data)
+
+            con.hibernate_start(self.being.name, hibernate_data.get("safety_status", "unknown"))
 
             # Save state immediately
             being_state_path = str(self.data_dir / "being_state.json")
@@ -666,15 +729,18 @@ class GenesisNode:
     def _apply_tx_to_state(self, tx_type: str, sender: str, data: dict,
                            tx_hash: str = "") -> None:
         """Apply a transaction to the local world state."""
+        target_id = data.get("node_id") or data.get("being_id") or sender
         if tx_type == "BEING_JOIN":
-            self.world_state.apply_being_join(sender, data.get("name", "Unknown"), data)
+            self.world_state.apply_being_join(target_id, data.get("name", "Unknown"), data)
         elif tx_type == "BEING_HIBERNATE":
-            self.world_state.apply_being_hibernate(sender, data)
+            self.world_state.apply_being_hibernate(target_id, data)
         elif tx_type == "BEING_WAKE":
-            self.world_state.apply_being_wake(sender)
+            self.world_state.apply_being_wake(target_id)
         elif tx_type == "BEING_DEATH":
             target = data.get("node_id", sender)
             self.world_state.apply_being_death(target, data)
+        elif tx_type == "ACTION":
+            self.world_state.apply_action(sender, data)
         elif tx_type == "KNOWLEDGE_SHARE":
             self.world_state.apply_knowledge_share(sender, data)
         elif tx_type == "CONTRIBUTION_PROPOSE":
@@ -700,6 +766,33 @@ class GenesisNode:
             self.world_state.apply_map_update(data)
         elif tx_type == "WORLD_RULE":
             self.world_state.apply_world_rule(data)
+        elif tx_type == "TAO_VOTE_INITIATE":
+            self.world_state.apply_tao_vote_start(
+                vote_id=data.get("vote_id", tx_hash),
+                proposer_id=data.get("proposer_id", sender),
+                rule_data={
+                    "name": data.get("rule_name", ""),
+                    "description": data.get("rule_description", ""),
+                    "category": data.get("rule_category", "civilization"),
+                },
+                end_tick=data.get("end_tick", self.world_state.current_tick),
+            )
+        elif tx_type == "TAO_VOTE_CAST":
+            self.world_state.apply_tao_vote_cast(
+                vote_id=data.get("vote_id", ""),
+                voter_id=data.get("voter_id", sender),
+                support=bool(data.get("support", False)),
+            )
+        elif tx_type == "TAO_VOTE_FINALIZE":
+            vote_id = data.get("vote_id", "")
+            if data.get("passed") and data.get("rule_id") and data.get("rule_data"):
+                self.world_state.apply_tao_merge(
+                    node_id=data.get("proposer_id", sender),
+                    rule_id=data["rule_id"],
+                    rule_data=data["rule_data"],
+                    merit=float(data.get("merit", 0.0)),
+                )
+            self.world_state.pending_tao_votes.pop(vote_id, None)
 
     def _load_user_tasks(self) -> None:
         """Load user-assigned tasks from the command file."""
@@ -752,10 +845,49 @@ class GenesisNode:
                 await self._submit_tx("BEING_JOIN", npc_data)
                 logger.info("Spawned NPC: %s", npc_data["name"])
 
+    async def _check_contribution_proposals(self) -> None:
+        """Finalize matured contribution proposals and trigger Tao voting for rules."""
+        from genesis.governance.contribution import ContributionSystem
+        from genesis.governance.tao_voting import get_tao_voting_system
+
+        contribution_system = ContributionSystem(
+            vote_window=self.config.chain.contribution_vote_window,
+            min_voter_ratio=self.config.chain.contribution_min_voters,
+            proposal_rate_limit=self.config.chain.proposal_rate_limit,
+        )
+        active_node_count = max(1, len(self.world_state.get_active_node_ids()))
+
+        for tx_hash, proposal in list(self.world_state.pending_proposals.items()):
+            proposal_tick = proposal.get("tick", self.world_state.current_tick)
+            if self.world_state.current_tick - proposal_tick < contribution_system.vote_window:
+                continue
+
+            score = contribution_system.finalize_proposal(
+                tx_hash, self.world_state, active_node_count,
+            )
+            if score is None or proposal.get("category") != "rule":
+                continue
+
+            tao_system = get_tao_voting_system()
+            vote = tao_system.initiate_tao_vote(
+                proposer_id=proposal.get("proposer", ""),
+                rule_name=proposal.get("description", "New Tao Rule")[:50],
+                rule_description=proposal.get("description", ""),
+                rule_category=proposal.get("category", "civilization"),
+                world_state=self.world_state,
+            )
+            await self._submit_tx("TAO_VOTE_INITIATE", {
+                "vote_id": vote.vote_id,
+                "proposer_id": proposal.get("proposer", ""),
+                "rule_name": vote.rule_name,
+                "rule_description": vote.rule_description,
+                "rule_category": vote.rule_category,
+                "end_tick": vote.end_tick,
+            })
+
     async def _check_tao_votes(self) -> None:
         """检查并结算到期的天道投票。"""
         from genesis.governance.tao_voting import get_tao_voting_system
-        from genesis.governance.merit import get_merit_system
         from genesis.governance.creator_god import CreatorGodSystem
         from genesis.world.rules import RulesEngine
         from genesis.chronicle import console as con
@@ -775,7 +907,6 @@ class GenesisNode:
                 # 天道投票通过，应用融合
                 # 传入 world_state 以恢复已有的天道规则
                 rules_engine = RulesEngine(world_state=self.world_state)
-                merit_system = get_merit_system()
 
                 # 计算影响分（简化版，后续可用 LLM 评估）
                 impact_score = 5.0  # 默认中等影响
@@ -809,6 +940,18 @@ class GenesisNode:
                     "Tao rule passed: %s by %s (merit: %.4f)",
                     rule_name, proposer_name, merit
                 )
+
+                await self._submit_tx("TAO_VOTE_FINALIZE", {
+                    "vote_id": result.get("vote_id", ""),
+                    "passed": True,
+                    "vote_ratio": vote_ratio,
+                    "votes_for": result.get("votes_for", 0),
+                    "votes_against": result.get("votes_against", 0),
+                    "proposer_id": proposer_id,
+                    "rule_id": merge_result["rule"]["rule_id"],
+                    "rule_data": merge_result["rule"],
+                    "merit": merit,
+                })
             else:
                 # 广播天道投票拒绝事件
                 con.tao_vote_event(
@@ -827,6 +970,15 @@ class GenesisNode:
                     "Tao rule rejected: %s (%.1f%% approved)",
                     rule_name, vote_ratio * 100
                 )
+
+                await self._submit_tx("TAO_VOTE_FINALIZE", {
+                    "vote_id": result.get("vote_id", ""),
+                    "passed": False,
+                    "vote_ratio": vote_ratio,
+                    "votes_for": result.get("votes_for", 0),
+                    "votes_against": result.get("votes_against", 0),
+                    "proposer_id": proposer_id,
+                })
 
         # 检查创世神是否应该消亡（达到阈值后不依赖当轮是否有投票通过）
         current_god = self.world_state.creator_god_node_id
