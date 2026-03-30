@@ -38,7 +38,7 @@ simulation:
 chain:
   contribution_vote_window: 5      # Blocks to wait for votes
   contribution_min_voters: 0.51    # Minimum voter participation (51%)
-  proposal_rate_limit: 10          # Max 1 proposal per N blocks
+  proposal_rate_limit: 10          # Max 1 proposal per N ticks while an older proposal is still pending
   priest_grace_period: 50          # Ticks without priest before reset
   creator_succession_threshold: 1000  # Min beings for succession
 

@@ -68,7 +68,7 @@ class ContributionSystem:
     - Each node's AI evaluates proposals and votes (0-100)
     - Median score after removing outliers (>2 std dev)
     - Require 51% of active nodes to vote
-    - Max 1 proposal per 10 blocks per node
+    - Max 1 proposal per cooldown window while the previous proposal is still pending
     - Cannot vote on own proposals
     """
 
@@ -78,14 +78,26 @@ class ContributionSystem:
         self.min_voter_ratio = min_voter_ratio
         self.proposal_rate_limit = proposal_rate_limit
 
-    def can_propose(self, node_id: str, current_block: int,
+    def can_propose(self, node_id: str, current_tick: int,
                     world_state: WorldState) -> tuple[bool, str]:
-        """Check if a node can submit a new proposal."""
-        # Check rate limit: max 1 proposal per N blocks
+        """Check if a node can submit a new proposal.
+
+        Cooldown is based on the pending proposal's tick so the limit survives
+        process restarts and chain replay.
+        """
         for tx_hash, proposal in world_state.pending_proposals.items():
-            if (proposal["proposer"] == node_id and
-                    current_block - proposal.get("block", 0) < self.proposal_rate_limit):
-                return False, f"Rate limited: must wait {self.proposal_rate_limit} blocks between proposals"
+            if proposal.get("proposer") != node_id:
+                continue
+
+            try:
+                proposal_tick = int(proposal.get("tick", current_tick))
+            except (TypeError, ValueError):
+                proposal_tick = current_tick
+
+            elapsed = max(0, current_tick - proposal_tick)
+            if elapsed < self.proposal_rate_limit:
+                remaining = self.proposal_rate_limit - elapsed
+                return False, f"Rate limited: must wait {remaining} more ticks before proposing again"
         return True, "OK"
 
     def can_vote(self, voter_id: str, proposal: dict) -> tuple[bool, str]:

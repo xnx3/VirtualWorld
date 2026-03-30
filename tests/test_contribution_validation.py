@@ -3,6 +3,7 @@ import unittest
 from genesis.chain.chain import Blockchain
 from genesis.chain.mempool import Mempool
 from genesis.chain.transaction import Transaction, TxType
+from genesis.governance.contribution import ContributionSystem
 from genesis.world.state import (
     MAX_CONTRIBUTION_DESCRIPTION_LENGTH,
     WorldState,
@@ -189,6 +190,40 @@ class ContributionWorldStateValidationTests(unittest.TestCase):
         )
 
         self.assertEqual(world_state.proposal_votes["proposal-1"], [])
+
+
+class ContributionRateLimitTests(unittest.TestCase):
+    def test_can_propose_blocks_recent_pending_proposal_from_same_node(self):
+        world_state = WorldState()
+        world_state.current_tick = 100
+        world_state.pending_proposals["proposal-1"] = {
+            "proposer": "builder-node",
+            "description": "Build a safe archive",
+            "category": "infrastructure",
+            "tick": 95,
+        }
+
+        system = ContributionSystem(proposal_rate_limit=10)
+        allowed, reason = system.can_propose("builder-node", world_state.current_tick, world_state)
+
+        self.assertFalse(allowed)
+        self.assertIn("5", reason)
+
+    def test_can_propose_allows_after_cooldown_expires(self):
+        world_state = WorldState()
+        world_state.current_tick = 120
+        world_state.pending_proposals["proposal-1"] = {
+            "proposer": "builder-node",
+            "description": "Build a safe archive",
+            "category": "infrastructure",
+            "tick": 95,
+        }
+
+        system = ContributionSystem(proposal_rate_limit=10)
+        allowed, reason = system.can_propose("builder-node", world_state.current_tick, world_state)
+
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "OK")
 
 
 if __name__ == "__main__":

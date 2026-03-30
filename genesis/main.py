@@ -410,12 +410,18 @@ class GenesisNode:
         tick_interval = self.config.simulation.tick_interval
         from genesis.governance.priest import PriestSystem
         from genesis.governance.creator_god import CreatorGodSystem
+        from genesis.governance.contribution import ContributionSystem
         from genesis.world.disasters import DisasterSystem
         from genesis.chronicle import console as con
 
         priest_sys = PriestSystem(grace_period=self.config.chain.priest_grace_period)
         god_sys = CreatorGodSystem(
             succession_threshold=self.config.chain.creator_succession_threshold
+        )
+        contribution_sys = ContributionSystem(
+            vote_window=self.config.chain.contribution_vote_window,
+            min_voter_ratio=self.config.chain.contribution_min_voters,
+            proposal_rate_limit=self.config.chain.proposal_rate_limit,
         )
         disaster_sys = DisasterSystem()
 
@@ -457,6 +463,10 @@ class GenesisNode:
 
                 # === RUN TICK ===
                 transactions = await self.being.run_tick(self.world_state)
+                transactions = self._filter_rate_limited_transactions(
+                    transactions,
+                    contribution_sys,
+                )
 
                 # === CONSOLE: THINK ===
                 if self.being.current_thought:
@@ -609,6 +619,36 @@ class GenesisNode:
                 from genesis.chronicle import console as con2
                 con2.error(f"Loop error: {e}")
                 await asyncio.sleep(5)
+
+    def _filter_rate_limited_transactions(
+        self,
+        transactions: list[dict],
+        contribution_sys: object,
+    ) -> list[dict]:
+        """Drop generated contribution proposals that violate the persisted cooldown."""
+        filtered: list[dict] = []
+
+        for tx in transactions:
+            if tx.get("tx_type") != "CONTRIBUTION_PROPOSE":
+                filtered.append(tx)
+                continue
+
+            can_propose, reason = contribution_sys.can_propose(  # type: ignore[attr-defined]
+                self.identity.node_id,
+                self.world_state.current_tick,
+                self.world_state,
+            )
+            if can_propose:
+                filtered.append(tx)
+                continue
+
+            logger.info(
+                "Skipping contribution proposal from %s: %s",
+                self.identity.node_id[:8],
+                reason,
+            )
+
+        return filtered
 
     async def handle_command(self, cmd_type: str, data: dict) -> dict:
         """Handle API commands from WebSocket clients."""
