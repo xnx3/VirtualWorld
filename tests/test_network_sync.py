@@ -196,15 +196,50 @@ class BlockchainPendingTxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(blockchain.mempool.size(), 1)
 
 
+class ProtocolHandshakeTests(unittest.TestCase):
+    def test_signed_hello_verifies_sender_identity(self):
+        identity = NodeIdentity.generate()
+        hello = Message.hello(
+            identity.node_id,
+            chain_height=3,
+            listen_port=19841,
+            private_key=identity.private_key,
+        )
+
+        self.assertTrue(hello.verify_handshake_identity())
+
+    def test_signed_hello_rejects_sender_mismatch(self):
+        signer = NodeIdentity.generate()
+        claimed = NodeIdentity.generate()
+        hello = Message.hello(
+            claimed.node_id,
+            chain_height=3,
+            listen_port=19841,
+            private_key=signer.private_key,
+        )
+
+        self.assertFalse(hello.verify_handshake_identity())
+
+
 class PeerDiscoveryBootstrapTests(unittest.IsolatedAsyncioTestCase):
     async def test_query_p2p_bootstrap_handshakes_before_requesting_peers(self):
+        local_identity = NodeIdentity.generate()
+        bootstrap_identity = NodeIdentity.generate()
+        remote_peer = NodeIdentity.generate()
         discovered = []
         reader = asyncio.StreamReader()
-        reader.feed_data(Message.hello_ack("bootstrap-node", 7).serialize())
+        reader.feed_data(
+            Message.hello_ack(
+                bootstrap_identity.node_id,
+                7,
+                listen_port=22333,
+                private_key=bootstrap_identity.private_key,
+            ).serialize()
+        )
         reader.feed_data(
             Message.peers(
-                "bootstrap-node",
-                [{"node_id": "peer-1", "address": "10.0.0.8", "port": 22334}],
+                bootstrap_identity.node_id,
+                [{"node_id": remote_peer.node_id, "address": "10.0.0.8", "port": 22334}],
             ).serialize()
         )
         reader.feed_eof()
@@ -228,7 +263,11 @@ class PeerDiscoveryBootstrapTests(unittest.IsolatedAsyncioTestCase):
 
         writer = FakeWriter()
 
-        discovery = PeerDiscovery("local-node", listen_port=19841)
+        discovery = PeerDiscovery(
+            local_identity.node_id,
+            listen_port=19841,
+            private_key=local_identity.private_key,
+        )
 
         async def on_peer(node_id: str, address: str, port: int) -> None:
             discovered.append((node_id, address, port))
@@ -252,6 +291,8 @@ class PeerDiscoveryBootstrapTests(unittest.IsolatedAsyncioTestCase):
             offset += length
 
         self.assertEqual([message.msg_type for message in outbound], [MessageType.HELLO, MessageType.GET_PEERS])
+        self.assertTrue(outbound[0].verify_handshake_identity())
+        self.assertEqual(outbound[0].sender_id, local_identity.node_id)
         self.assertTrue(writer.closed)
-        self.assertIn(("bootstrap-node", "127.0.0.1", 22333), discovered)
-        self.assertIn(("peer-1", "10.0.0.8", 22334), discovered)
+        self.assertIn((bootstrap_identity.node_id, "127.0.0.1", 22333), discovered)
+        self.assertIn((remote_peer.node_id, "10.0.0.8", 22334), discovered)

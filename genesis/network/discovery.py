@@ -55,11 +55,13 @@ class PeerDiscovery:
         self,
         node_id: str,
         listen_port: int,
+        private_key: bytes | None = None,
         discovery_port: int = 19840,
         bootstrap_nodes: list[str] | None = None,
     ) -> None:
         self._node_id = node_id
         self._listen_port = listen_port
+        self._private_key = private_key
         self._discovery_port = discovery_port
         self._bootstrap_nodes: list[str] = bootstrap_nodes or []
 
@@ -222,7 +224,12 @@ class PeerDiscovery:
             return
 
         try:
-            hello = Message.hello(self._node_id, chain_height=0, listen_port=self._listen_port)
+            hello = Message.hello(
+                self._node_id,
+                chain_height=0,
+                listen_port=self._listen_port,
+                private_key=self._private_key,
+            )
             writer.write(hello.serialize())
             await writer.drain()
 
@@ -235,7 +242,7 @@ class PeerDiscovery:
             body = await asyncio.wait_for(reader.readexactly(length), timeout=10.0)
             ack = Message.deserialize(body)
 
-            if ack.msg_type != MessageType.HELLO_ACK:
+            if ack.msg_type != MessageType.HELLO_ACK or not ack.verify_handshake_identity():
                 logger.debug(
                     "Bootstrap %s rejected handshake with response %s",
                     addr_str,
@@ -244,7 +251,11 @@ class PeerDiscovery:
                 return
 
             if ack.sender_id:
-                await self._fire_callbacks(ack.sender_id, host, port)
+                try:
+                    peer_port = int(ack.payload.get("listen_port", port) or port)
+                except (TypeError, ValueError):
+                    peer_port = port
+                await self._fire_callbacks(ack.sender_id, host, peer_port)
 
             msg = Message.get_peers(self._node_id)
             writer.write(msg.serialize())

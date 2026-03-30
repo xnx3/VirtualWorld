@@ -184,6 +184,7 @@ class GenesisNode:
         self.discovery = PeerDiscovery(
             node_id=self.identity.node_id,
             listen_port=self.config.network.listen_port,
+            private_key=self.identity.private_key,
             discovery_port=self.config.network.discovery_port,
             bootstrap_nodes=self.config.network.bootstrap_nodes,
         )

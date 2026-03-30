@@ -139,7 +139,12 @@ class P2PServer:
 
         # Send HELLO.
         chain_height = await self._get_chain_height()
-        hello = Message.hello(self._node_id, chain_height, self._port)
+        hello = Message.hello(
+            self._node_id,
+            chain_height,
+            self._port,
+            private_key=self._private_key,
+        )
         try:
             await self._write_message(writer, hello)
         except OSError as exc:
@@ -155,13 +160,28 @@ class P2PServer:
             writer.close()
             return False
 
-        if ack is None or ack.msg_type != MessageType.HELLO_ACK:
+        if (
+            ack is None
+            or ack.msg_type != MessageType.HELLO_ACK
+            or not ack.verify_handshake_identity()
+        ):
             logger.debug("Invalid handshake response from %s:%d", address, port)
             writer.close()
             return False
 
         peer_id = ack.sender_id
-        peer_chain_height = ack.payload.get("chain_height", 0)
+        if peer_id == self._node_id:
+            logger.debug("Peer %s:%d echoed local node identity", address, port)
+            writer.close()
+            return False
+
+        try:
+            peer_chain_height = int(ack.payload.get("chain_height", 0))
+            peer_listen_port = int(ack.payload.get("listen_port", port) or port)
+        except (TypeError, ValueError):
+            logger.debug("Peer %s:%d sent invalid handshake metadata", address, port)
+            writer.close()
+            return False
 
         # Track the connection.
         self._connections[peer_id] = (reader, writer)
@@ -169,7 +189,7 @@ class P2PServer:
             PeerInfo(
                 node_id=peer_id,
                 address=address,
-                port=port,
+                port=peer_listen_port,
                 last_seen=time.time(),
                 status="active",
                 chain_height=peer_chain_height,
@@ -253,17 +273,34 @@ class P2PServer:
             writer.close()
             return
 
-        if hello is None or hello.msg_type != MessageType.HELLO:
+        if (
+            hello is None
+            or hello.msg_type != MessageType.HELLO
+            or not hello.verify_handshake_identity()
+        ):
             writer.close()
             return
 
         peer_id = hello.sender_id
-        peer_chain_height = hello.payload.get("chain_height", 0)
-        peer_listen_port = hello.payload.get("listen_port", 0)
+        if peer_id == self._node_id:
+            writer.close()
+            return
+
+        try:
+            peer_chain_height = int(hello.payload.get("chain_height", 0))
+            peer_listen_port = int(hello.payload.get("listen_port", 0))
+        except (TypeError, ValueError):
+            writer.close()
+            return
 
         # Reply with HELLO_ACK.
         chain_height = await self._get_chain_height()
-        ack = Message.hello_ack(self._node_id, chain_height)
+        ack = Message.hello_ack(
+            self._node_id,
+            chain_height,
+            listen_port=self._port,
+            private_key=self._private_key,
+        )
         try:
             await self._write_message(writer, ack)
         except OSError:

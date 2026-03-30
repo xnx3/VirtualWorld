@@ -16,6 +16,13 @@ import msgpack
 
 import logging
 
+from genesis.utils.crypto import (
+    node_id_from_public_key,
+    public_key_from_private_key,
+    sign,
+    verify,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,22 +98,113 @@ class Message:
     # ------------------------------------------------------------------
 
     @classmethod
-    def hello(cls, node_id: str, chain_height: int, listen_port: int) -> Message:
+    def _handshake_bytes(
+        cls,
+        msg_type: MessageType,
+        node_id: str,
+        chain_height: int,
+        listen_port: int,
+        timestamp: float,
+    ) -> bytes:
+        return msgpack.packb(
+            {
+                "msg_type": msg_type.value,
+                "sender_id": node_id,
+                "chain_height": int(chain_height),
+                "listen_port": int(listen_port),
+                "timestamp": timestamp,
+            },
+            use_bin_type=True,
+        )
+
+    def verify_handshake_identity(self) -> bool:
+        """Verify that a HELLO/HELLO_ACK sender_id matches its signing key."""
+        if self.msg_type not in {MessageType.HELLO, MessageType.HELLO_ACK}:
+            return False
+
+        public_key_hex = str(self.payload.get("public_key", "")).strip()
+        signature_hex = str(self.payload.get("signature", "")).strip()
+        if not public_key_hex or not signature_hex:
+            return False
+
+        try:
+            public_key = bytes.fromhex(public_key_hex)
+            signature = bytes.fromhex(signature_hex)
+            chain_height = int(self.payload.get("chain_height", 0))
+            listen_port = int(self.payload.get("listen_port", 0))
+        except (TypeError, ValueError):
+            return False
+
+        if node_id_from_public_key(public_key) != self.sender_id:
+            return False
+
+        return verify(
+            public_key,
+            self._handshake_bytes(
+                self.msg_type,
+                self.sender_id,
+                chain_height,
+                listen_port,
+                self.timestamp,
+            ),
+            signature,
+        )
+
+    @classmethod
+    def hello(
+        cls,
+        node_id: str,
+        chain_height: int,
+        listen_port: int,
+        private_key: bytes | None = None,
+    ) -> Message:
         """Create a HELLO handshake message."""
-        return cls(
+        msg = cls(
             msg_type=MessageType.HELLO,
             payload={"chain_height": chain_height, "listen_port": listen_port},
             sender_id=node_id,
         )
+        if private_key is not None:
+            msg.payload["public_key"] = public_key_from_private_key(private_key).hex()
+            msg.payload["signature"] = sign(
+                private_key,
+                cls._handshake_bytes(
+                    MessageType.HELLO,
+                    node_id,
+                    chain_height,
+                    listen_port,
+                    msg.timestamp,
+                ),
+            ).hex()
+        return msg
 
     @classmethod
-    def hello_ack(cls, node_id: str, chain_height: int) -> Message:
+    def hello_ack(
+        cls,
+        node_id: str,
+        chain_height: int,
+        listen_port: int = 0,
+        private_key: bytes | None = None,
+    ) -> Message:
         """Create a HELLO_ACK response."""
-        return cls(
+        msg = cls(
             msg_type=MessageType.HELLO_ACK,
-            payload={"chain_height": chain_height},
+            payload={"chain_height": chain_height, "listen_port": listen_port},
             sender_id=node_id,
         )
+        if private_key is not None:
+            msg.payload["public_key"] = public_key_from_private_key(private_key).hex()
+            msg.payload["signature"] = sign(
+                private_key,
+                cls._handshake_bytes(
+                    MessageType.HELLO_ACK,
+                    node_id,
+                    chain_height,
+                    listen_port,
+                    msg.timestamp,
+                ),
+            ).hex()
+        return msg
 
     @classmethod
     def get_blocks(cls, node_id: str, start: int, end: int) -> Message:
