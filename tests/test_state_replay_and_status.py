@@ -162,6 +162,40 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(proposal_hash, world_state.pending_proposals)
         self.assertNotIn(proposal_hash, world_state.proposal_votes)
 
+    async def test_replay_restores_state_update_progress_fields(self):
+        being_id = "evolver-node"
+        block = _FakeBlock([
+            _tx(
+                "join-main",
+                TxType.BEING_JOIN,
+                being_id,
+                {"name": "Evolver", "location": "genesis_plains"},
+            ),
+            _tx(
+                "state-1",
+                TxType.STATE_UPDATE,
+                being_id,
+                {
+                    "location": "signal_tower",
+                    "evolution_level": 0.42,
+                    "merit": 0.1234567,
+                    "karma": 0.035136,
+                },
+            ),
+        ])
+        blockchain = Blockchain(_FakeStorage([block]), Mempool())
+
+        state = await blockchain.derive_world_state()
+        world_state = WorldState.from_dict(state)
+        being = world_state.get_being(being_id)
+
+        self.assertIsNotNone(being)
+        self.assertEqual(being.location, "signal_tower")
+        self.assertAlmostEqual(being.evolution_level, 0.42)
+        self.assertAlmostEqual(being.merit, 0.1234567)
+        self.assertAlmostEqual(being.karma, 0.035136)
+        self.assertGreater(world_state.civ_level, 0.0)
+
 
 class StatusReporterTests(unittest.TestCase):
     def test_status_prefers_saved_world_snapshot(self):

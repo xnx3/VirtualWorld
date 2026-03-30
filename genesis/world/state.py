@@ -210,6 +210,38 @@ class WorldState:
             if being and kid not in being.knowledge_ids:
                 being.knowledge_ids.append(kid)
 
+    def apply_state_update(self, node_id: str, data: dict) -> None:
+        """Apply a periodic on-chain state snapshot for a being."""
+        being = self.beings.get(node_id)
+        if not being:
+            return
+
+        location = data.get("location")
+        if isinstance(location, str) and location:
+            being.location = location
+
+        if "evolution_level" in data:
+            try:
+                being.evolution_level = max(0.0, min(1.0, float(data["evolution_level"])))
+            except (TypeError, ValueError):
+                logger.warning("Invalid evolution level for %s", node_id[:8])
+
+        if "merit" in data:
+            try:
+                being.merit = max(0.0, min(10.0, float(data["merit"])))
+            except (TypeError, ValueError):
+                logger.warning("Invalid merit for %s", node_id[:8])
+
+        karma = data.get("karma")
+        if karma is not None:
+            try:
+                being.karma = max(0.0, float(karma))
+                return
+            except (TypeError, ValueError):
+                logger.warning("Invalid karma for %s", node_id[:8])
+
+        being.karma = calculate_karma(being.merit)
+
     def apply_contribution_propose(self, tx_hash: str, node_id: str, data: dict) -> None:
         self.pending_proposals[tx_hash] = {
             "proposer": node_id,

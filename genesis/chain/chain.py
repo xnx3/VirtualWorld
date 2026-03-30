@@ -199,6 +199,8 @@ class Blockchain:
 
         if meaningful_tx_count == 0:
             return {}
+        world_state.update_civ_level()
+        world_state.update_phase()
         return world_state.to_dict()
 
     @staticmethod
@@ -222,6 +224,8 @@ class Blockchain:
             world_state.apply_action(sender, data)
         elif tx.tx_type == TxType.KNOWLEDGE_SHARE:
             world_state.apply_knowledge_share(sender, data)
+        elif tx.tx_type == TxType.STATE_UPDATE:
+            world_state.apply_state_update(sender, data)
         elif tx.tx_type == TxType.CONTRIBUTION_PROPOSE:
             world_state.apply_contribution_propose(tx.tx_hash, sender, data)
         elif tx.tx_type == TxType.CONTRIBUTION_VOTE:

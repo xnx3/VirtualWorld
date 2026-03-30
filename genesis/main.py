@@ -844,6 +844,8 @@ class GenesisNode:
             self.world_state.apply_action(sender, data)
         elif tx_type == "KNOWLEDGE_SHARE":
             self.world_state.apply_knowledge_share(sender, data)
+        elif tx_type == "STATE_UPDATE":
+            self.world_state.apply_state_update(sender, data)
         elif tx_type == "CONTRIBUTION_PROPOSE":
             self.world_state.apply_contribution_propose(tx_hash, sender, data)
         elif tx_type == "CONTRIBUTION_VOTE":

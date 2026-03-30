@@ -229,6 +229,10 @@ class SiliconBeing:
         if current_tick % 10 == 0:
             self.memory.consolidate()
 
+        state_tx = self._state_update_transaction(world_state)
+        if state_tx:
+            transactions.append(state_tx)
+
         return transactions
 
     # ==================================================================
@@ -583,6 +587,22 @@ class SiliconBeing:
                 "target": target,
                 "details": details[:300],
                 "location": self.location,
+            },
+        }
+
+    def _state_update_transaction(self, world_state: WorldState) -> dict | None:
+        """Emit a compact state snapshot so evolution and merit persist on-chain."""
+        being_ws = world_state.get_being(self.node_id)
+        if being_ws is None:
+            return None
+
+        return {
+            "tx_type": "STATE_UPDATE",
+            "data": {
+                "location": self.location,
+                "evolution_level": self.evolution_level,
+                "merit": being_ws.merit,
+                "karma": being_ws.karma,
             },
         }
 
