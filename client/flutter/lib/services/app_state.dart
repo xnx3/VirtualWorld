@@ -203,12 +203,14 @@ class AppState with ChangeNotifier {
                 : '';
             final remainingLabel = loc.taoVoteRemaining.replaceAll('{ticks}', remainingTicks.toString());
             content = '${loc.taoVoteStarted.replaceAll('{rule_name}', ruleName)} $proposerInfo ($remainingLabel)';
+            break;
           case 'vote_cast':
             // 投票
             final voterInfo = voterName.isNotEmpty ? '($voterName)' : '';
             content = _language == 'zh'
                 ? '投票$voterInfo: $ruleName ($forLabel: $votesFor, $againstLabel: $votesAgainst)'
                 : 'Vote$voterInfo: $ruleName ($forLabel: $votesFor, $againstLabel: $votesAgainst)';
+            break;
           case 'passed':
             // 天道规则通过
             final ratioPercent = (ratio * 100).toStringAsFixed(1);
@@ -216,16 +218,19 @@ class AppState with ChangeNotifier {
             content = _language == 'zh'
                 ? '${loc.taoVotePassed.replaceAll('{rule_name}', ruleName).replaceAll('{ratio:.1f}', ratioPercent)}, $forLabel: $votesFor, $againstLabel: $votesAgainst, ${loc.merit}: $meritStr'
                 : '${loc.taoVotePassed.replaceAll('{rule_name}', ruleName).replaceAll('{ratio:.1f}', ratioPercent)}, $forLabel: $votesFor, $againstLabel: $votesAgainst, ${loc.merit}: $meritStr';
+            break;
           case 'rejected':
             // 天道规则未通过
             final ratioPercent = (ratio * 100).toStringAsFixed(1);
             content = _language == 'zh'
                 ? '${loc.taoVoteFailed.replaceAll('{rule_name}', ruleName).replaceAll('{ratio:.1f}', ratioPercent)}, $forLabel: $votesFor, $againstLabel: $votesAgainst'
                 : '${loc.taoVoteFailed.replaceAll('{rule_name}', ruleName).replaceAll('{ratio:.1f}', ratioPercent)}, $forLabel: $votesFor, $againstLabel: $votesAgainst';
+            break;
           default:
             content = _language == 'zh'
                 ? '天道投票: $ruleName'
                 : 'Tao vote: $ruleName';
+            break;
         }
 
         addEvent(ChronicleEvent(
