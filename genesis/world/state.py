@@ -16,6 +16,9 @@ MAX_TAO_IDENTIFIER_LENGTH = 128
 MAX_TAO_RULE_NAME_LENGTH = 256
 MAX_TAO_RULE_DESCRIPTION_LENGTH = 4096
 MAX_TAO_RULE_CATEGORY_LENGTH = 64
+MAX_CONTRIBUTION_IDENTIFIER_LENGTH = 128
+MAX_CONTRIBUTION_DESCRIPTION_LENGTH = 4096
+MAX_CONTRIBUTION_CATEGORY_LENGTH = 64
 
 
 def calculate_karma(merit: float) -> float:
@@ -248,21 +251,84 @@ class WorldState:
         being.karma = calculate_karma(being.merit)
 
     def apply_contribution_propose(self, tx_hash: str, node_id: str, data: dict) -> None:
-        self.pending_proposals[tx_hash] = {
-            "proposer": node_id,
-            "description": data.get("description", ""),
-            "category": data.get("category", "other"),
+        normalized_tx_hash = self._validate_tao_identifier(tx_hash, "proposal_tx_hash")
+        normalized_node_id = self._validate_tao_identifier(node_id, "proposer_id")
+        normalized_description = self._validate_tao_text(
+            data.get("description", ""),
+            "proposal_description",
+            MAX_CONTRIBUTION_DESCRIPTION_LENGTH,
+        )
+        normalized_category = self._validate_tao_text(
+            data.get("category", "other"),
+            "proposal_category",
+            MAX_CONTRIBUTION_CATEGORY_LENGTH,
+            default="other",
+        )
+
+        if (
+            normalized_tx_hash is None
+            or normalized_node_id is None
+            or normalized_description is None
+            or normalized_category is None
+        ):
+            return
+
+        self.pending_proposals[normalized_tx_hash] = {
+            "proposer": normalized_node_id,
+            "description": normalized_description,
+            "category": normalized_category,
             "tick": self.current_tick,
         }
-        self.proposal_votes[tx_hash] = []
+        self.proposal_votes[normalized_tx_hash] = []
 
     def apply_contribution_vote(self, data: dict) -> None:
-        proposal_hash = data.get("proposal_tx_hash")
-        if proposal_hash in self.proposal_votes:
-            self.proposal_votes[proposal_hash].append({
-                "voter": data.get("voter_id"),
-                "score": data.get("score", 0),
-            })
+        proposal_hash = self._validate_tao_identifier(
+            data.get("proposal_tx_hash"),
+            "proposal_tx_hash",
+        )
+        voter_id = self._validate_tao_identifier(data.get("voter_id"), "voter_id")
+        if proposal_hash is None or voter_id is None:
+            return
+
+        proposal = self.pending_proposals.get(proposal_hash)
+        votes = self.proposal_votes.get(proposal_hash)
+        if proposal is None or votes is None:
+            return
+
+        if voter_id == proposal.get("proposer"):
+            logger.warning(
+                "Ignoring contribution self-vote for proposal %s by %s",
+                proposal_hash[:8],
+                voter_id[:8],
+            )
+            return
+
+        if any(v.get("voter") == voter_id for v in votes):
+            return
+
+        score = data.get("score", 0)
+        try:
+            normalized_score = float(score)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Ignoring contribution vote for proposal %s: invalid score %r",
+                proposal_hash[:8],
+                score,
+            )
+            return
+
+        if not 0.0 <= normalized_score <= 100.0:
+            logger.warning(
+                "Ignoring contribution vote for proposal %s: score %.2f out of range",
+                proposal_hash[:8],
+                normalized_score,
+            )
+            return
+
+        votes.append({
+            "voter": voter_id,
+            "score": normalized_score,
+        })
 
     def apply_contribution_finalize(self, data: dict) -> None:
         proposal_hash = data.get("proposal_tx_hash")
@@ -332,11 +398,11 @@ class WorldState:
     def _validate_tao_identifier(self, value: object, field_name: str) -> str | None:
         text = self._sanitize_tao_text(value)
         if not text:
-            logger.warning("Ignoring Tao vote update: %s is empty", field_name)
+            logger.warning("Ignoring governance update: %s is empty", field_name)
             return None
         if len(text) > MAX_TAO_IDENTIFIER_LENGTH:
             logger.warning(
-                "Ignoring Tao vote update: %s exceeds %d characters",
+                "Ignoring governance update: %s exceeds %d characters",
                 field_name,
                 MAX_TAO_IDENTIFIER_LENGTH,
             )
@@ -358,11 +424,11 @@ class WorldState:
         if not text and allow_empty:
             return ""
         if not text:
-            logger.warning("Ignoring Tao vote update: %s is empty", field_name)
+            logger.warning("Ignoring governance update: %s is empty", field_name)
             return None
         if len(text) > max_length:
             logger.warning(
-                "Ignoring Tao vote update: %s exceeds %d characters",
+                "Ignoring governance update: %s exceeds %d characters",
                 field_name,
                 max_length,
             )
