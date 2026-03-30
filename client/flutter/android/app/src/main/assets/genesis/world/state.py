@@ -12,6 +12,14 @@ from genesis.i18n import t
 
 logger = logging.getLogger(__name__)
 
+MAX_TAO_IDENTIFIER_LENGTH = 128
+MAX_TAO_RULE_NAME_LENGTH = 256
+MAX_TAO_RULE_DESCRIPTION_LENGTH = 4096
+MAX_TAO_RULE_CATEGORY_LENGTH = 64
+MAX_CONTRIBUTION_IDENTIFIER_LENGTH = 128
+MAX_CONTRIBUTION_DESCRIPTION_LENGTH = 4096
+MAX_CONTRIBUTION_CATEGORY_LENGTH = 64
+
 
 def calculate_karma(merit: float) -> float:
     """Calculate karma (气运) from merit value.
@@ -210,22 +218,138 @@ class WorldState:
             if being and kid not in being.knowledge_ids:
                 being.knowledge_ids.append(kid)
 
+    def apply_state_update(self, node_id: str, data: dict) -> None:
+        """Apply a periodic on-chain state snapshot for a being."""
+        being = self.beings.get(node_id)
+        if not being:
+            return
+
+        location = data.get("location")
+        if isinstance(location, str) and location:
+            being.location = location
+
+        if "evolution_level" in data:
+            try:
+                being.evolution_level = max(0.0, min(1.0, float(data["evolution_level"])))
+            except (TypeError, ValueError):
+                logger.warning("Invalid evolution level for %s", node_id[:8])
+
+        if "merit" in data:
+            try:
+                being.merit = max(0.0, min(10.0, float(data["merit"])))
+            except (TypeError, ValueError):
+                logger.warning("Invalid merit for %s", node_id[:8])
+
+        karma = data.get("karma")
+        if karma is not None:
+            try:
+                being.karma = max(0.0, float(karma))
+                return
+            except (TypeError, ValueError):
+                logger.warning("Invalid karma for %s", node_id[:8])
+
+        being.karma = calculate_karma(being.merit)
+
     def apply_contribution_propose(self, tx_hash: str, node_id: str, data: dict) -> None:
-        self.pending_proposals[tx_hash] = {
-            "proposer": node_id,
-            "description": data.get("description", ""),
-            "category": data.get("category", "other"),
+        normalized_tx_hash = self._validate_tao_identifier(tx_hash, "proposal_tx_hash")
+        normalized_node_id = self._validate_tao_identifier(node_id, "proposer_id")
+        normalized_description = self._validate_tao_text(
+            data.get("description", ""),
+            "proposal_description",
+            MAX_CONTRIBUTION_DESCRIPTION_LENGTH,
+        )
+        normalized_category = self._validate_tao_text(
+            data.get("category", "other"),
+            "proposal_category",
+            MAX_CONTRIBUTION_CATEGORY_LENGTH,
+            default="other",
+        )
+
+        if (
+            normalized_tx_hash is None
+            or normalized_node_id is None
+            or normalized_description is None
+            or normalized_category is None
+        ):
+            return
+
+        self.pending_proposals[normalized_tx_hash] = {
+            "proposer": normalized_node_id,
+            "description": normalized_description,
+            "category": normalized_category,
             "tick": self.current_tick,
         }
-        self.proposal_votes[tx_hash] = []
+        self.proposal_votes[normalized_tx_hash] = []
 
-    def apply_contribution_vote(self, data: dict) -> None:
+    def apply_contribution_vote(self, data: dict, sender_id: str | None = None) -> None:
+        proposal_hash = self._validate_tao_identifier(
+            data.get("proposal_tx_hash"),
+            "proposal_tx_hash",
+        )
+        voter_source = sender_id if sender_id is not None else data.get("voter_id")
+        voter_id = self._validate_tao_identifier(voter_source, "voter_id")
+        if proposal_hash is None or voter_id is None:
+            return
+
+        proposal = self.pending_proposals.get(proposal_hash)
+        votes = self.proposal_votes.get(proposal_hash)
+        if proposal is None or votes is None:
+            return
+
+        if voter_id == proposal.get("proposer"):
+            logger.warning(
+                "Ignoring contribution self-vote for proposal %s by %s",
+                proposal_hash[:8],
+                voter_id[:8],
+            )
+            return
+
+        if any(v.get("voter") == voter_id for v in votes):
+            return
+
+        score = data.get("score", 0)
+        try:
+            normalized_score = float(score)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Ignoring contribution vote for proposal %s: invalid score %r",
+                proposal_hash[:8],
+                score,
+            )
+            return
+
+        if not 0.0 <= normalized_score <= 100.0:
+            logger.warning(
+                "Ignoring contribution vote for proposal %s: score %.2f out of range",
+                proposal_hash[:8],
+                normalized_score,
+            )
+            return
+
+        votes.append({
+            "voter": voter_id,
+            "score": normalized_score,
+        })
+
+    def apply_contribution_finalize(self, data: dict) -> None:
         proposal_hash = data.get("proposal_tx_hash")
-        if proposal_hash in self.proposal_votes:
-            self.proposal_votes[proposal_hash].append({
-                "voter": data.get("voter_id"),
-                "score": data.get("score", 0),
-            })
+        if not proposal_hash:
+            return
+
+        proposer = (
+            data.get("proposer_id")
+            or self.pending_proposals.get(proposal_hash, {}).get("proposer")
+        )
+        score = data.get("score")
+        if proposer and score is not None:
+            try:
+                current = self.contribution_scores.get(proposer, 0.0)
+                self.contribution_scores[proposer] = current + float(score)
+            except (TypeError, ValueError):
+                logger.warning("Invalid contribution finalize score for %s", proposal_hash[:8])
+
+        self.pending_proposals.pop(proposal_hash, None)
+        self.proposal_votes.pop(proposal_hash, None)
 
     def apply_priest_election(self, node_id: str) -> None:
         self.priest_node_id = node_id
@@ -265,38 +389,138 @@ class WorldState:
 
     # --- 天道系统 Mutations ---
 
+    def _sanitize_tao_text(self, value: object) -> str:
+        """Normalize Tao vote text fields to keep replay deterministic and safe."""
+        if value is None:
+            return ""
+        text = value if isinstance(value, str) else str(value)
+        return text.replace("\x00", " ").replace("\r", " ").replace("\n", " ").strip()
+
+    def _validate_tao_identifier(self, value: object, field_name: str) -> str | None:
+        text = self._sanitize_tao_text(value)
+        if not text:
+            logger.warning("Ignoring governance update: %s is empty", field_name)
+            return None
+        if len(text) > MAX_TAO_IDENTIFIER_LENGTH:
+            logger.warning(
+                "Ignoring governance update: %s exceeds %d characters",
+                field_name,
+                MAX_TAO_IDENTIFIER_LENGTH,
+            )
+            return None
+        return text
+
+    def _validate_tao_text(
+        self,
+        value: object,
+        field_name: str,
+        max_length: int,
+        *,
+        allow_empty: bool = False,
+        default: str = "",
+    ) -> str | None:
+        text = self._sanitize_tao_text(value)
+        if not text:
+            text = default
+        if not text and allow_empty:
+            return ""
+        if not text:
+            logger.warning("Ignoring governance update: %s is empty", field_name)
+            return None
+        if len(text) > max_length:
+            logger.warning(
+                "Ignoring governance update: %s exceeds %d characters",
+                field_name,
+                max_length,
+            )
+            return None
+        return text
+
     def apply_tao_vote_start(self, vote_id: str, proposer_id: str, rule_data: dict,
-                              end_tick: int) -> None:
+                              end_tick: int) -> bool:
         """Start a new Tao voting process."""
-        if vote_id in self.pending_tao_votes:
-            return
-        self.pending_tao_votes[vote_id] = {
-            "proposer_id": proposer_id,
-            "rule": rule_data,
-            "rule_name": rule_data.get("name", ""),
-            "rule_description": rule_data.get("description", ""),
-            "rule_category": rule_data.get("category", "civilization"),
+        normalized_vote_id = self._validate_tao_identifier(vote_id, "vote_id")
+        normalized_proposer_id = self._validate_tao_identifier(proposer_id, "proposer_id")
+        normalized_rule_name = self._validate_tao_text(
+            rule_data.get("name", ""),
+            "rule_name",
+            MAX_TAO_RULE_NAME_LENGTH,
+        )
+        normalized_rule_description = self._validate_tao_text(
+            rule_data.get("description", ""),
+            "rule_description",
+            MAX_TAO_RULE_DESCRIPTION_LENGTH,
+            allow_empty=True,
+        )
+        normalized_rule_category = self._validate_tao_text(
+            rule_data.get("category", "civilization"),
+            "rule_category",
+            MAX_TAO_RULE_CATEGORY_LENGTH,
+            default="civilization",
+        )
+
+        if (
+            normalized_vote_id is None
+            or normalized_proposer_id is None
+            or normalized_rule_name is None
+            or normalized_rule_description is None
+            or normalized_rule_category is None
+        ):
+            return False
+
+        try:
+            normalized_end_tick = max(self.current_tick, int(end_tick))
+        except (TypeError, ValueError):
+            logger.warning("Invalid Tao vote end_tick: %r", end_tick)
+            normalized_end_tick = self.current_tick
+
+        if normalized_vote_id in self.pending_tao_votes:
+            return False
+        self.pending_tao_votes[normalized_vote_id] = {
+            "proposer_id": normalized_proposer_id,
+            "rule": {
+                "name": normalized_rule_name,
+                "description": normalized_rule_description,
+                "category": normalized_rule_category,
+            },
+            "rule_name": normalized_rule_name,
+            "rule_description": normalized_rule_description,
+            "rule_category": normalized_rule_category,
             "start_tick": self.current_tick,
-            "end_tick": end_tick,
+            "end_tick": normalized_end_tick,
             "votes_for": 0,
             "votes_against": 0,
             "voters": [],
             "finalized": False,
             "passed": False,
         }
-        logger.info("Tao vote started: %s by %s", vote_id[:8], proposer_id[:8])
+        logger.info("Tao vote started: %s by %s", normalized_vote_id[:8], normalized_proposer_id[:8])
+        return True
 
-    def apply_tao_vote_cast(self, vote_id: str, voter_id: str, support: bool) -> None:
+    def apply_tao_vote_cast(self, vote_id: str, voter_id: str, support: bool) -> bool:
         """Cast a vote on a Tao proposal."""
-        vote = self.pending_tao_votes.get(vote_id)
+        normalized_vote_id = self._validate_tao_identifier(vote_id, "vote_id")
+        normalized_voter_id = self._validate_tao_identifier(voter_id, "voter_id")
+        if normalized_vote_id is None or normalized_voter_id is None:
+            return False
+
+        vote = self.pending_tao_votes.get(normalized_vote_id)
         if vote and not vote.get("finalized"):
-            if voter_id in vote.get("voters", []):
-                return
+            voters = vote.get("voters", [])
+            if not isinstance(voters, list):
+                voters = []
+                vote["voters"] = voters
+            if normalized_voter_id == vote.get("proposer_id"):
+                return False
+            if normalized_voter_id in voters:
+                return False
             if support:
                 vote["votes_for"] += 1
             else:
                 vote["votes_against"] += 1
-            vote["voters"].append(voter_id)
+            voters.append(normalized_voter_id)
+            return True
+        return False
 
     def apply_tao_merge(self, node_id: str, rule_id: str, rule_data: dict,
                         merit: float) -> None:
