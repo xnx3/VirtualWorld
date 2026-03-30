@@ -139,16 +139,23 @@ class MainActivity : FlutterActivity() {
                     result.success(installed)
                 }
 
+                "hasBundledRuntime" -> {
+                    result.success(GenesisInstaller.hasBundledRuntime(this))
+                }
+
                 "installGenesis" -> {
                     Thread {
-                        val installResult = GenesisInstaller.install(context = this) { stage, progress ->
-                            runOnUiThread {
-                                channel.invokeMethod("installProgress", mapOf(
-                                    "stage" to stage,
-                                    "progress" to progress
-                                ))
-                            }
-                        }
+                        val installResult = GenesisInstaller.install(
+                            context = this,
+                            progressCallback = { stage, progress ->
+                                runOnUiThread {
+                                    channel.invokeMethod("installProgress", mapOf(
+                                        "stage" to stage,
+                                        "progress" to progress
+                                    ))
+                                }
+                            },
+                        )
                         runOnUiThread {
                             result.success(mapOf(
                                 "success" to installResult.success,
@@ -156,7 +163,17 @@ class MainActivity : FlutterActivity() {
                                 "autoInstallTriggered" to installResult.autoInstallTriggered,
                                 "autoInstallError" to installResult.autoInstallError,
                                 "manualCommand" to installResult.manualCommand,
+                                "hasBundledRuntime" to installResult.hasBundledRuntime,
                             ))
+                        }
+                    }.start()
+                }
+
+                "runGenesisOneTap" -> {
+                    Thread {
+                        val runResult = runGenesisOneTap(channel)
+                        runOnUiThread {
+                            result.success(runResult)
                         }
                     }.start()
                 }
@@ -396,13 +413,146 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun startGenesisService(): Boolean {
+    private fun reportInstallProgress(
+        channel: MethodChannel,
+        stage: String,
+        progress: Int,
+    ) {
+        runOnUiThread {
+            channel.invokeMethod("installProgress", mapOf(
+                "stage" to stage,
+                "progress" to progress,
+            ))
+        }
+    }
+
+    private fun runGenesisOneTap(channel: MethodChannel): Map<String, Any?> {
         return try {
-            // 使用 RUN_COMMAND intent 启动 Genesis
+            if (!isPackageInstalled("com.termux")) {
+                mapOf(
+                    "success" to false,
+                    "running" to false,
+                    "requiresTermux" to true,
+                    "message" to "需要先安装内嵌的 Termux。完成系统安装后，回到应用再点一次“一键安装并启动 Genesis”。",
+                )
+            } else if (!GenesisInstaller.hasStoragePermission(this)) {
+                mapOf(
+                    "success" to false,
+                    "running" to false,
+                    "requiresStoragePermission" to true,
+                    "message" to "需要先授予存储权限，应用才能自动完成 Genesis 的安装与启动。",
+                )
+            } else {
+                reportInstallProgress(channel, "准备运行环境", 5)
+
+                val installResult = GenesisInstaller.install(
+                    context = this,
+                    progressCallback = { stage, progress ->
+                        reportInstallProgress(channel, stage, progress)
+                    },
+                    autoRunInTermux = false,
+                )
+
+                if (!installResult.success) {
+                    mapOf(
+                        "success" to false,
+                        "running" to false,
+                        "message" to installResult.message,
+                        "requiresStoragePermission" to installResult.message.contains("存储权限"),
+                    )
+                } else if (isGenesisRunning()) {
+                    mapOf(
+                        "success" to true,
+                        "running" to true,
+                        "bundledRuntime" to installResult.hasBundledRuntime,
+                        "message" to "Genesis 已在本机运行中。",
+                    )
+                } else {
+                    reportInstallProgress(channel, "启动 Genesis", 92)
+                    val startResult = startGenesisServiceInternal(installIfMissing = true)
+                    if (!startResult.success) {
+                        mapOf(
+                            "success" to false,
+                            "running" to false,
+                            "bundledRuntime" to installResult.hasBundledRuntime,
+                            "message" to (startResult.error ?: "无法下发 Genesis 启动命令。"),
+                        )
+                    } else {
+                        reportInstallProgress(channel, "等待服务就绪", 97)
+                        val waitSeconds = if (installResult.hasBundledRuntime) 75 else 20
+                        repeat(waitSeconds) {
+                            if (isGenesisRunning()) {
+                                return mapOf(
+                                    "success" to true,
+                                    "running" to true,
+                                    "bundledRuntime" to installResult.hasBundledRuntime,
+                                    "message" to "Genesis 已自动安装并启动，本地 API 已就绪。",
+                                )
+                            }
+                            Thread.sleep(1000)
+                        }
+
+                        val slowStartMessage = if (installResult.hasBundledRuntime) {
+                            "已下发自动安装和启动命令。Genesis 仍在后台初始化，首次启动通常需要约 1 分钟，请稍候自动连接。"
+                        } else {
+                            "已下发自动安装和启动命令，但当前 APK 未内置预构建 Python 运行时，首次启动会明显更慢。"
+                        }
+
+                        mapOf(
+                            "success" to true,
+                            "running" to false,
+                            "bundledRuntime" to installResult.hasBundledRuntime,
+                            "message" to slowStartMessage,
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to run Genesis one tap: ${e.message}", e)
+            mapOf(
+                "success" to false,
+                "running" to false,
+                "message" to "一键运行失败: ${e.message}",
+            )
+        }
+    }
+
+    private fun startGenesisService(): Boolean {
+        return startGenesisServiceInternal(installIfMissing = true).success
+    }
+
+    private fun startGenesisServiceInternal(installIfMissing: Boolean): CommandResult {
+        val shellCommand = buildString {
+            appendLine("set -e")
+            appendLine("termux-setup-storage >/dev/null 2>&1 || true")
+            appendLine("start_script=\"\$HOME/genesis/start_genesis.sh\"")
+            appendLine("quick_script=\"${GenesisInstaller.QUICK_INSTALL_SCRIPT_IN_TERMUX}\"")
+            appendLine("full_script=\"${GenesisInstaller.FULL_INSTALL_SCRIPT_IN_TERMUX}\"")
+            if (installIfMissing) {
+                appendLine("if [ ! -x \"\$start_script\" ]; then")
+                appendLine("  if [ -r \"\$quick_script\" ]; then")
+                appendLine("    bash \"\$quick_script\"")
+                appendLine("  elif [ -r \"\$full_script\" ]; then")
+                appendLine("    bash \"\$full_script\"")
+                appendLine("  else")
+                appendLine("    echo \"Genesis install script not found in shared storage\"")
+                appendLine("    exit 1")
+                appendLine("  fi")
+                appendLine("fi")
+            }
+            appendLine("cd \"\$HOME/genesis\"")
+            appendLine("exec ./start_genesis.sh")
+        }
+        return runTermuxBashCommand(shellCommand)
+    }
+
+    private fun runTermuxBashCommand(shellCommand: String): CommandResult {
+        return try {
             val intent = Intent("com.termux.RUN_COMMAND")
             intent.setClassName("com.termux", "com.termux.app.RunCommandService")
-            intent.putExtra("com.termux.RUN_COMMAND_PATH", "${GenesisInstaller.GENESIS_DIR}/start_genesis.sh")
-            intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", GenesisInstaller.GENESIS_DIR)
+            intent.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
+            intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", shellCommand))
+            intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", GenesisInstaller.TERMUX_HOME)
             intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -410,10 +560,16 @@ class MainActivity : FlutterActivity() {
             } else {
                 startService(intent)
             }
-            true
+            CommandResult(success = true, error = null)
+        } catch (e: SecurityException) {
+            Log.e("MainActivity", "Need Termux RUN_COMMAND permission", e)
+            CommandResult(
+                success = false,
+                error = "需要 Termux RUN_COMMAND 权限。请先打开一次 Termux，并允许外部应用调用后重试。",
+            )
         } catch (e: Exception) {
-            Log.e("MainActivity", "Failed to start Genesis: ${e.message}")
-            false
+            Log.e("MainActivity", "Failed to execute Termux command: ${e.message}", e)
+            CommandResult(success = false, error = "执行失败: ${e.message}")
         }
     }
 
@@ -422,24 +578,7 @@ class MainActivity : FlutterActivity() {
      * 通过 Termux RUN_COMMAND 执行 kill，确保能看到 Termux 进程
      */
     private fun stopGenesisService(): Boolean {
-        return try {
-            val intent = Intent("com.termux.RUN_COMMAND")
-            intent.setClassName("com.termux", "com.termux.app.RunCommandService")
-            intent.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
-            intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-c", "pkill -f 'genesis.main' 2>/dev/null; exit 0"))
-            intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", GenesisInstaller.GENESIS_DIR)
-            intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
-            true
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Failed to stop Genesis: ${e.message}")
-            false
-        }
+        return runTermuxBashCommand("pkill -f 'genesis.main' 2>/dev/null; exit 0").success
     }
 
     /**

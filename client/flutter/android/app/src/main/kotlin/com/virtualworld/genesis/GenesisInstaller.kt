@@ -26,11 +26,15 @@ import java.io.IOException
 object GenesisInstaller {
 
     private const val TAG = "GenesisInstaller"
+    private const val BUNDLE_NAME = "genesis-termux-bundle.tar.gz"
 
     // Termux 内部路径（仅供参考，应用无法直接访问）
     const val TERMUX_HOME = "/data/data/com.termux/files/home"
     const val GENESIS_DIR = "$TERMUX_HOME/genesis"
     const val DATA_DIR = "$GENESIS_DIR/data"
+    const val SHARED_GENESIS_DIR_IN_TERMUX = "\$HOME/storage/downloads/Genesis"
+    const val QUICK_INSTALL_SCRIPT_IN_TERMUX = "$SHARED_GENESIS_DIR_IN_TERMUX/quick_install.sh"
+    const val FULL_INSTALL_SCRIPT_IN_TERMUX = "$SHARED_GENESIS_DIR_IN_TERMUX/install.sh"
 
     // 共享存储目录名
     private const val SHARED_DIR_NAME = "Genesis"
@@ -110,12 +114,24 @@ object GenesisInstaller {
     }
 
     /**
+     * 当前 APK 是否已内置预构建 Python 运行时 bundle
+     */
+    fun hasBundledRuntime(context: Context): Boolean {
+        return try {
+            context.assets.open(BUNDLE_NAME).use { true }
+        } catch (e: IOException) {
+            false
+        }
+    }
+
+    /**
      * 安装 Genesis
      * 将文件复制到共享存储，并返回安装指令
      */
     fun install(
         context: Context,
-        progressCallback: ((String, Int) -> Unit)? = null
+        progressCallback: ((String, Int) -> Unit)? = null,
+        autoRunInTermux: Boolean = true,
     ): InstallResult {
         try {
             progressCallback?.invoke("准备安装", 5)
@@ -171,10 +187,14 @@ object GenesisInstaller {
 
             // Step 6: 生成安装指令文件
             val instructionFile = File(sharedDir, "INSTALL_INSTRUCTIONS.txt")
-            instructionFile.writeText(getInstallInstructions(sharedDir))
+            instructionFile.writeText(getInstallInstructions(sharedDir, hasBundle))
 
             // Step 7: 尝试自动触发 Termux 执行安装
-            val autoInstallResult = tryAutoInstallInTermux(context, preferredScriptPath)
+            val autoInstallResult = if (autoRunInTermux) {
+                tryAutoInstallInTermux(context, preferredScriptPath)
+            } else {
+                CommandResult(success = false, error = null)
+            }
 
             progressCallback?.invoke("安装准备完成", 100)
 
@@ -187,6 +207,7 @@ object GenesisInstaller {
                 installScriptPath = installScriptPath,
                 quickInstallScriptPath = quickInstallScriptPath,
                 autoInstallResult = autoInstallResult,
+                autoRunAttempted = autoRunInTermux,
             )
 
             // 安装文件已准备就绪，写入已安装标记
@@ -195,9 +216,10 @@ object GenesisInstaller {
             return InstallResult(
                 success = true,
                 message = installInstructions,
-                autoInstallTriggered = autoInstallResult.success,
+                autoInstallTriggered = autoRunInTermux && autoInstallResult.success,
                 autoInstallError = autoInstallResult.error,
                 manualCommand = manualCommand,
+                hasBundledRuntime = hasBundle,
             )
 
         } catch (e: Exception) {
@@ -213,26 +235,37 @@ object GenesisInstaller {
         installScriptPath: String,
         quickInstallScriptPath: String,
         autoInstallResult: CommandResult,
+        autoRunAttempted: Boolean,
     ): String {
         val scriptHint = if (hasBundle) {
             "【推荐】快速安装（约1分钟）：\n" +
-                "1. termux-setup-storage\n" +
-                "2. bash \"$quickInstallScriptPath\"\n\n" +
+                "1. 如果 Termux 首次弹出文件访问权限，请点“允许”\n" +
+                "2. termux-setup-storage\n" +
+                "3. bash \"$quickInstallScriptPath\"\n\n" +
                 "或者完整安装（约20分钟）：\n" +
                 "bash \"$installScriptPath\""
         } else {
             "完整安装（约20分钟）：\n" +
-                "1. termux-setup-storage\n" +
-                "2. bash \"$installScriptPath\""
+                "1. 如果 Termux 首次弹出文件访问权限，请点“允许”\n" +
+                "2. termux-setup-storage\n" +
+                "3. bash \"$installScriptPath\""
         }
 
-        return if (autoInstallResult.success) {
-            "文件已准备就绪并已自动触发 Termux 执行安装命令。\n\n" +
+        return if (!autoRunAttempted) {
+            "安装文件已准备就绪。\n\n" +
+                "应用接下来可以直接在后台调用 Termux 完成安装并启动。\n" +
+                "如果后台启动失败，再手动执行：\n$scriptHint"
+        } else if (autoInstallResult.success) {
+            "安装文件已准备就绪，并已尝试自动触发 Termux 执行安装命令。\n\n" +
+                "注意：这一步只是把安装文件准备好，真正安装会在 Termux 内完成。\n" +
+                "第一次安装如果看到文件访问权限弹窗，请点“允许”。\n\n" +
                 "安装文件位置:\n$sharedDirPath\n\n" +
                 "请切换到 Termux 查看安装输出。\n" +
                 "如果未自动开始，请手动执行：\n$scriptHint"
         } else {
-            "文件已准备就绪，但自动触发 Termux 安装失败：${autoInstallResult.error ?: "未知原因"}\n\n" +
+            "安装文件已准备就绪，但自动触发 Termux 安装失败：${autoInstallResult.error ?: "未知原因"}\n\n" +
+                "注意：这一步只是把安装文件准备好，真正安装仍需在 Termux 内完成。\n" +
+                "第一次安装如果看到文件访问权限弹窗，请点“允许”。\n\n" +
                 "安装文件位置:\n$sharedDirPath\n\n" +
                 "请手动执行：\n$scriptHint"
         }
@@ -267,22 +300,43 @@ object GenesisInstaller {
     /**
      * 获取安装指令
      */
-    private fun getInstallInstructions(sharedDir: File): String {
+    private fun getInstallInstructions(sharedDir: File, hasBundle: Boolean): String {
         val installScriptPath = "${sharedDir.absolutePath}/install.sh"
-        return """
-=== Genesis 安装说明 ===
+        val quickInstallScriptPath = "${sharedDir.absolutePath}/quick_install.sh"
+        val commandBlock = if (hasBundle) {
+            """
+2. 首次如果弹出文件访问权限，点“允许”
 
-1. 打开 Termux 应用
-
-2. 授予存储权限（如果还没授予）：
+3. 执行快速安装：
    termux-setup-storage
+   bash "$quickInstallScriptPath"
+
+4. 如果快速安装不可用，再执行完整安装：
+   bash "$installScriptPath"
+
+5. 安装完成后启动服务：
+   cd ~/genesis
+   ./start_genesis.sh
+""".trimIndent()
+        } else {
+            """
+2. 首次如果弹出文件访问权限，点“允许”
 
 3. 运行安装脚本：
+   termux-setup-storage
    bash "$installScriptPath"
 
 4. 安装完成后启动服务：
    cd ~/genesis
    ./start_genesis.sh
+""".trimIndent()
+        }
+        return """
+=== Genesis 安装说明 ===
+
+1. 打开 Termux 应用
+
+${commandBlock}
 
 祝你好运，硅基生命！
 """.trimIndent()
@@ -309,8 +363,21 @@ object GenesisInstaller {
             return CommandResult(success = false, error = "Termux 未安装")
         }
 
-        val escapedScriptPath = scriptPath.replace("'", "'\"'\"'")
-        val shellCommand = "termux-setup-storage >/dev/null 2>&1 || true; bash '$escapedScriptPath'"
+        val quotedScriptPath = quoteForShell(scriptPath)
+        val shellCommand = """
+            termux-setup-storage >/dev/null 2>&1 || true
+            target=$quotedScriptPath
+            waited=0
+            while [ ! -r "${'$'}target" ] && [ ${'$'}waited -lt 30 ]; do
+                sleep 1
+                waited=${'$'}((waited + 1))
+            done
+            if [ ! -r "${'$'}target" ]; then
+                echo "Storage permission is not ready for ${'$'}target"
+                exit 1
+            fi
+            bash "${'$'}target"
+        """.trimIndent()
 
         return try {
             val intent = Intent("com.termux.RUN_COMMAND")
@@ -337,6 +404,10 @@ object GenesisInstaller {
             Log.e(TAG, "Failed to auto-install via Termux: ${e.message}", e)
             CommandResult(success = false, error = "执行失败: ${e.message}")
         }
+    }
+
+    private fun quoteForShell(value: String): String {
+        return "'${value.replace("'", "'\"'\"'")}'"
     }
 
     /**
@@ -405,7 +476,7 @@ object GenesisInstaller {
      * @return true 如果 bundle 复制成功
      */
     private fun copyBundleIfExists(context: Context, targetDir: File): Boolean {
-        val bundleName = "genesis-termux-bundle.tar.gz"
+        val bundleName = BUNDLE_NAME
         val sha256Name = "genesis-termux-bundle.tar.gz.sha256"
 
         return try {
@@ -461,6 +532,7 @@ data class InstallResult(
     val autoInstallTriggered: Boolean = false,
     val autoInstallError: String? = null,
     val manualCommand: String? = null,
+    val hasBundledRuntime: Boolean = false,
 )
 
 /**

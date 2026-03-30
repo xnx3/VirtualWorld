@@ -32,9 +32,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isInstalling = false;
   String _installStage = '';
   int _installProgress = 0;
+  bool _hasBundledRuntime = false;
 
   // API 配置
-  final _baseUrlController = TextEditingController(text: 'https://api.openai.com/v1');
+  final _baseUrlController =
+      TextEditingController(text: 'https://api.openai.com/v1');
   final _apiKeyController = TextEditingController();
   final _modelController = TextEditingController(text: 'gpt-4o-mini');
   bool _isSaving = false;
@@ -44,10 +46,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // 预设 API 提供商
   final _presets = [
-    {'name': 'OpenAI', 'baseUrl': 'https://api.openai.com/v1', 'model': 'gpt-4o-mini'},
-    {'name': 'DeepSeek', 'baseUrl': 'https://api.deepseek.com/v1', 'model': 'deepseek-chat'},
-    {'name': 'Claude', 'baseUrl': 'https://api.anthropic.com/v1', 'model': 'claude-3-haiku-20240307'},
-    {'name': '本地 Ollama', 'baseUrl': 'http://localhost:11434/v1', 'model': 'llama3'},
+    {
+      'name': 'OpenAI',
+      'baseUrl': 'https://api.openai.com/v1',
+      'model': 'gpt-4o-mini'
+    },
+    {
+      'name': 'DeepSeek',
+      'baseUrl': 'https://api.deepseek.com/v1',
+      'model': 'deepseek-chat'
+    },
+    {
+      'name': 'Claude',
+      'baseUrl': 'https://api.anthropic.com/v1',
+      'model': 'claude-3-haiku-20240307'
+    },
+    {
+      'name': '本地 Ollama',
+      'baseUrl': 'http://localhost:11434/v1',
+      'model': 'llama3'
+    },
   ];
 
   @override
@@ -101,7 +119,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final config = await _channel.invokeMethod('readLLMConfig') as Map;
       if (mounted && config.isNotEmpty) {
         setState(() {
-          _baseUrlController.text = config['base_url'] ?? 'https://api.openai.com/v1';
+          _baseUrlController.text =
+              config['base_url'] ?? 'https://api.openai.com/v1';
           _apiKeyController.text = config['api_key'] ?? '';
           _modelController.text = config['model'] ?? 'gpt-4o-mini';
           _apiConfigured = _apiKeyController.text.isNotEmpty;
@@ -115,14 +134,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _checkAllStatus() async {
     try {
       final termuxOk = await _channel.invokeMethod('checkTermux') as bool;
-      final genesisOk = await _channel.invokeMethod('isGenesisInstalled') as bool;
-      final running = await _channel.invokeMethod('checkServiceRunning') as bool;
+      final genesisOk =
+          await _channel.invokeMethod('isGenesisInstalled') as bool;
+      final running =
+          await _channel.invokeMethod('checkServiceRunning') as bool;
+      final bundledRuntime =
+          await _channel.invokeMethod('hasBundledRuntime') as bool;
 
       if (mounted) {
         setState(() {
           _termuxInstalled = termuxOk;
           _genesisInstalled = genesisOk;
           _genesisRunning = running;
+          _hasBundledRuntime = bundledRuntime;
         });
       }
     } catch (e) {
@@ -131,15 +155,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _updateLanguage(String lang) async {
+    final appState = context.read<AppState>();
     setState(() => _selectedLanguage = lang);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('language', lang);
-    context.read<AppState>().setLanguage(lang);
+    if (!mounted) return;
+    appState.setLanguage(lang);
   }
 
   /// 应用预设配置
   void _applyPreset(String name) {
-    final preset = _presets.firstWhere((p) => p['name'] == name, orElse: () => _presets[0]);
+    final preset = _presets.firstWhere((p) => p['name'] == name,
+        orElse: () => _presets[0]);
     setState(() {
       _baseUrlController.text = preset['baseUrl']!;
       _modelController.text = preset['model']!;
@@ -173,6 +200,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'apiKey': _apiKeyController.text.trim(),
         'model': _modelController.text.trim(),
       }) as Map;
+
+      final saved = saveResult['success'] as bool? ?? false;
+      final saveMessage = saveResult['message'] as String? ?? '保存失败';
+      if (!saved) {
+        setState(() => _isSaving = false);
+        _showErrorDialog('保存失败', saveMessage);
+        return;
+      }
 
       setState(() {
         _isSaving = false;
@@ -208,20 +243,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       // 构建请求
       final uri = Uri.parse('$baseUrl/chat/completions');
-      final response = await http.post(
-        uri,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $apiKey',
-        },
-        body: jsonEncode({
-          'model': model,
-          'messages': [
-            {'role': 'user', 'content': 'Say "OK" in one word.'}
-          ],
-          'max_tokens': 10,
-        }),
-      ).timeout(Duration(seconds: 30));
+      final response = await http
+          .post(
+            uri,
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $apiKey',
+            },
+            body: jsonEncode({
+              'model': model,
+              'messages': [
+                {'role': 'user', 'content': 'Say "OK" in one word.'}
+              ],
+              'max_tokens': 10,
+            }),
+          )
+          .timeout(Duration(seconds: 30));
 
       setState(() => _isTesting = false);
 
@@ -239,7 +276,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         try {
           final errorBody = jsonDecode(response.body);
           if (errorBody['error'] != null) {
-            errorMessage = errorBody['error']['message'] ?? errorBody['error'].toString();
+            errorMessage =
+                errorBody['error']['message'] ?? errorBody['error'].toString();
           }
         } catch (_) {}
         return {'success': false, 'error': errorMessage};
@@ -282,7 +320,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _installBundledTermux() async {
     try {
       // 先检查 Termux APK 是否存在
-      final checkResult = await _channel.invokeMethod('checkTermuxApkExists') as Map;
+      final checkResult =
+          await _channel.invokeMethod('checkTermuxApkExists') as Map;
       debugPrint('Termux APK check: $checkResult');
 
       if (checkResult['exists'] != true) {
@@ -299,7 +338,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
 
       // 检查是否有安装权限
-      final canInstall = await _channel.invokeMethod('canInstallPackages') as bool;
+      final canInstall =
+          await _channel.invokeMethod('canInstallPackages') as bool;
       if (!canInstall) {
         // 请求权限
         await _channel.invokeMethod('requestInstallPermission');
@@ -317,7 +357,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       if (success && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('请在系统界面完成 Termux 安装'), backgroundColor: Colors.blue),
+          SnackBar(
+              content: Text('请在系统界面完成 Termux 安装，安装后回到这里点击“一键安装并启动 Genesis”'),
+              backgroundColor: Colors.blue),
         );
         // 延迟检查安装状态
         Future.delayed(Duration(seconds: 5), () => _checkAllStatus());
@@ -357,7 +399,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     // 先检查存储权限
     try {
-      final hasPermission = await _channel.invokeMethod('hasStoragePermission') as bool;
+      final hasPermission =
+          await _channel.invokeMethod('hasStoragePermission') as bool;
       if (!hasPermission) {
         // 请求权限
         await _channel.invokeMethod('requestStoragePermission');
@@ -418,15 +461,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (mounted) {
         final success = result['success'] as bool;
         final message = result['message'] as String;
-        final autoInstallTriggered = result['autoInstallTriggered'] as bool? ?? false;
+        final autoInstallTriggered =
+            result['autoInstallTriggered'] as bool? ?? false;
         final autoInstallError = result['autoInstallError'] as String?;
         final manualCommand = result['manualCommand'] as String?;
+        final hasBundledRuntime =
+            result['hasBundledRuntime'] as bool? ?? _hasBundledRuntime;
 
         setState(() {
           _isInstalling = false;
           if (success) {
             _genesisInstalled = true;
           }
+          _hasBundledRuntime = hasBundledRuntime;
         });
 
         // 显示结果对话框
@@ -459,8 +506,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final hasQuickInstall = message.contains('quick_install.sh');
     final installCommand = manualCommand ??
         (hasQuickInstall
-        ? 'termux-setup-storage\nbash ~/storage/downloads/Genesis/quick_install.sh'
-        : 'termux-setup-storage\nbash ~/storage/downloads/Genesis/install.sh');
+            ? 'termux-setup-storage\nbash ~/storage/downloads/Genesis/quick_install.sh'
+            : 'termux-setup-storage\nbash ~/storage/downloads/Genesis/install.sh');
 
     showDialog(
       context: context,
@@ -472,7 +519,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               color: success ? Colors.green : Colors.orange,
             ),
             SizedBox(width: 8),
-            Text(success ? '安装准备完成' : '安装提示'),
+            Text(success ? '安装文件已准备' : '安装提示'),
           ],
         ),
         content: SingleChildScrollView(
@@ -491,11 +538,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
-                      '已自动触发 Termux 执行安装，请切换到 Termux 查看输出。\n若没有自动开始，再执行下方命令。',
+                      '已尝试自动触发 Termux 执行安装，请切换到 Termux 查看输出。\n第一次安装如果弹出文件访问权限，请点允许；若没有自动开始，再执行下方命令。',
                       style: TextStyle(fontSize: 12),
                     ),
                   ),
-                if (autoInstallError != null && autoInstallError.isNotEmpty) ...[
+                if (autoInstallError != null &&
+                    autoInstallError.isNotEmpty) ...[
                   if (autoInstallTriggered) SizedBox(height: 10),
                   Container(
                     padding: EdgeInsets.all(10),
@@ -505,6 +553,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     child: Text(
                       '自动执行失败：$autoInstallError',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+                if (autoInstallError != null &&
+                    autoInstallError.contains('RUN_COMMAND')) ...[
+                  SizedBox(height: 10),
+                  Container(
+                    padding: EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '如果是首次使用 Termux，请先打开一次 Termux，并在设置里允许外部应用调用后再回来重试。',
                       style: TextStyle(fontSize: 12),
                     ),
                   ),
@@ -521,7 +584,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       Text(
                         '在 Termux 中执行以下命令：',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 12),
                       ),
                       SizedBox(height: 8),
                       SelectableText(
@@ -535,9 +599,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                 ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      await Clipboard.setData(
+                          ClipboardData(text: installCommand));
+                      if (!mounted) return;
+                      messenger.showSnackBar(
+                        SnackBar(
+                          content: Text('安装命令已复制'),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                    },
+                    icon: Icon(Icons.copy, size: 16),
+                    label: Text('复制命令'),
+                  ),
+                ),
                 SizedBox(height: 12),
                 Text(
-                  '提示：复制上面的命令，然后打开 Termux 粘贴执行',
+                  '提示：这一步只是准备安装文件。真正安装仍在 Termux 内完成；第一次请允许文件访问权限。',
                   style: TextStyle(color: Colors.white60, fontSize: 11),
                 ),
               ],
@@ -563,23 +646,81 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  /// 启动服务
-  Future<void> _startService() async {
+  /// 一键安装并启动
+  Future<void> _runGenesisOneTap() async {
+    if (_isInstalling) return;
+
+    if (!_termuxInstalled) {
+      await _installBundledTermux();
+      return;
+    }
+
+    setState(() {
+      _isInstalling = true;
+      _installStage = '准备一键启动...';
+      _installProgress = 0;
+    });
+
     try {
-      final success = await _channel.invokeMethod('startGenesis') as bool;
-      if (success && mounted) {
-        setState(() => _genesisRunning = true);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Genesis 服务已启动'), backgroundColor: Colors.green),
-        );
-        Future.delayed(Duration(seconds: 2), () => _checkAllStatus());
+      final result = await _channel.invokeMethod('runGenesisOneTap') as Map;
+      if (!mounted) return;
+
+      final success = result['success'] as bool? ?? false;
+      final running = result['running'] as bool? ?? false;
+      final message = result['message'] as String? ?? '操作已完成';
+      final bundledRuntime =
+          result['bundledRuntime'] as bool? ?? _hasBundledRuntime;
+
+      setState(() {
+        _isInstalling = false;
+        _hasBundledRuntime = bundledRuntime;
+        if (success) {
+          _genesisInstalled = true;
+        }
+        if (running) {
+          _genesisRunning = true;
+        }
+      });
+
+      if (!success) {
+        if (result['requiresStoragePermission'] == true) {
+          await _channel.invokeMethod('requestStoragePermission');
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(message),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 5),
+            ),
+          );
+        }
+        return;
       }
-    } catch (e) {
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('启动失败: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text(message),
+            backgroundColor: running ? Colors.green : Colors.blue,
+            duration: Duration(seconds: running ? 4 : 6),
+          ),
         );
       }
+
+      Future.delayed(
+        Duration(seconds: running ? 2 : 10),
+        () => _checkAllStatus(),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isInstalling = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('一键运行失败: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -692,11 +833,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   Text(
                     loc?.appName ?? 'Genesis',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 18),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    loc?.appDesc ?? 'A world entirely inhabited by silicon-based life forms.',
+                    loc?.appDesc ??
+                        'A world entirely inhabited by silicon-based life forms.',
                     style: const TextStyle(color: Colors.white60),
                   ),
                   const SizedBox(height: 16),
@@ -722,10 +865,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
-          children: _presets.map((p) => ActionChip(
-            label: Text(p['name']!),
-            onPressed: () => _applyPreset(p['name']!),
-          )).toList(),
+          children: _presets
+              .map((p) => ActionChip(
+                    label: Text(p['name']!),
+                    onPressed: () => _applyPreset(p['name']!),
+                  ))
+              .toList(),
         ),
         const SizedBox(height: 16),
 
@@ -749,7 +894,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             hintText: 'sk-...',
             border: OutlineInputBorder(),
             suffixIcon: IconButton(
-              icon: Icon(_obscureApiKey ? Icons.visibility : Icons.visibility_off),
+              icon: Icon(
+                  _obscureApiKey ? Icons.visibility : Icons.visibility_off),
               onPressed: () => setState(() => _obscureApiKey = !_obscureApiKey),
             ),
           ),
@@ -805,6 +951,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: _hasBundledRuntime
+                ? Colors.green.withOpacity(0.12)
+                : Colors.orange.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: _hasBundledRuntime
+                  ? Colors.green.withOpacity(0.35)
+                  : Colors.orange.withOpacity(0.35),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _hasBundledRuntime
+                    ? '当前 APK 已内置预构建 Python 运行环境'
+                    : '当前 APK 未内置预构建 Python 运行环境',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: _hasBundledRuntime ? Colors.green : Colors.orange,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _hasBundledRuntime
+                    ? '点击下方主按钮后，应用会自动准备文件、调用 Termux 安装并启动 Genesis。'
+                    : '点击下方主按钮仍可自动安装并启动，但首次启动会更慢。建议打包时带上 bundle。 ',
+                style: const TextStyle(fontSize: 12, color: Colors.white70),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: _genesisRunning ? _checkAllStatus : _runGenesisOneTap,
+            icon: Icon(_genesisRunning ? Icons.cloud_done : Icons.rocket_launch),
+            label: Text(_genesisRunning ? 'Genesis 已运行，刷新状态' : '一键安装并启动 Genesis'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _genesisRunning ? Colors.blueGrey : Colors.green,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          '默认流程会自动完成：准备安装文件 -> 调用 Termux 执行安装 -> 启动本地服务。手动打开 Termux 只作为排障备用。',
+          style: TextStyle(color: Colors.white60, fontSize: 12),
+        ),
+        const Divider(height: 24),
+
         // Step 1: Termux 安装状态
         _buildStatusRow(
           'Step 1: Termux',
@@ -824,20 +1026,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
         // Step 2: Genesis 安装状态
         _buildStatusRow(
-          'Step 2: Genesis',
+          'Step 2: 安装文件',
           _genesisInstalled,
-          _genesisInstalled ? '已安装' : '未安装',
+          _genesisInstalled ? '已准备' : '未准备',
         ),
         const SizedBox(height: 12),
         ElevatedButton.icon(
           onPressed: _installGenesis,
           icon: const Icon(Icons.install_mobile),
-          label: Text(_genesisInstalled ? '重新准备安装文件' : '一键安装 Genesis'),
+          label: Text(_genesisInstalled ? '仅重新准备安装文件（排障）' : '仅准备 Genesis 安装文件（排障）'),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          '这里只用于排障。正常情况下直接点击上面的“一键安装并启动 Genesis”即可。',
+          style: TextStyle(color: Colors.white60, fontSize: 12),
         ),
         if (!_termuxInstalled) ...[
           const SizedBox(height: 8),
           const Text(
-            '可先准备安装文件，再完成 Termux 安装。',
+            '也可以先准备安装文件，再完成 Termux 安装。',
             style: TextStyle(color: Colors.white60, fontSize: 12),
           ),
         ],
@@ -856,10 +1063,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: !_genesisRunning ? _startService : null,
+                  onPressed: !_genesisRunning ? _runGenesisOneTap : null,
                   icon: const Icon(Icons.play_arrow),
-                  label: const Text('启动服务'),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                  label: const Text('自动安装并启动'),
+                  style:
+                      ElevatedButton.styleFrom(backgroundColor: Colors.green),
                 ),
               ),
               const SizedBox(width: 8),
@@ -878,6 +1086,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onPressed: _openTermux,
             icon: const Icon(Icons.terminal),
             label: const Text('打开 Termux'),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            '如果启动失败，通常是因为 Termux 里的安装脚本还没完成。',
+            style: TextStyle(color: Colors.white60, fontSize: 12),
           ),
         ],
       ],
@@ -912,7 +1125,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
+          child:
+              Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
         ),
         Text(
           status,
