@@ -127,6 +127,48 @@ class ContributionReplayValidationTests(unittest.IsolatedAsyncioTestCase):
             [{"voter": "peer-1", "score": 88.0}],
         )
 
+    async def test_replay_uses_transaction_sender_as_contribution_voter(self):
+        proposer_id = "builder-node"
+        block = _FakeBlock([
+            _tx(
+                "join-main",
+                TxType.BEING_JOIN,
+                proposer_id,
+                {"name": "Builder", "location": "genesis_plains"},
+            ),
+            _tx(
+                "join-peer",
+                TxType.BEING_JOIN,
+                "peer-1",
+                {"name": "Peer", "location": "signal_tower"},
+            ),
+            _tx(
+                "proposal-1",
+                TxType.CONTRIBUTION_PROPOSE,
+                proposer_id,
+                {"description": "Build a safe archive", "category": "infrastructure"},
+            ),
+            _tx(
+                "vote-spoofed",
+                TxType.CONTRIBUTION_VOTE,
+                "peer-1",
+                {
+                    "proposal_tx_hash": "proposal-1",
+                    "voter_id": "spoofed-node",
+                    "score": 88,
+                },
+            ),
+        ])
+        blockchain = Blockchain(_FakeStorage([block]), Mempool())
+
+        state = await blockchain.derive_world_state()
+        world_state = WorldState.from_dict(state)
+
+        self.assertEqual(
+            world_state.proposal_votes["proposal-1"],
+            [{"voter": "peer-1", "score": 88.0}],
+        )
+
 
 class ContributionWorldStateValidationTests(unittest.TestCase):
     def test_invalid_vote_input_does_not_mutate_votes(self):

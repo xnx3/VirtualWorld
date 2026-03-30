@@ -120,6 +120,50 @@ class TaoVoteValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(vote_data["votes_against"], 0)
         self.assertEqual(vote_data["voters"], ["peer-1"])
 
+    async def test_blockchain_replay_uses_transaction_sender_as_tao_voter(self):
+        proposer_id = "creator-node"
+        block = _FakeBlock([
+            _tx(
+                "join-main",
+                TxType.BEING_JOIN,
+                proposer_id,
+                {"name": "Creator", "location": "genesis_plains"},
+            ),
+            _tx(
+                "join-peer",
+                TxType.BEING_JOIN,
+                "peer-1",
+                {"name": "Peer", "location": "signal_tower"},
+            ),
+            _tx(
+                "vote-start",
+                TxType.TAO_VOTE_INITIATE,
+                proposer_id,
+                {
+                    "vote_id": "vote-1",
+                    "proposer_id": proposer_id,
+                    "rule_name": "Safe Rule",
+                    "rule_description": "Protect shared knowledge.",
+                    "rule_category": "rule",
+                    "end_tick": 8640,
+                },
+            ),
+            _tx(
+                "vote-cast-spoofed",
+                TxType.TAO_VOTE_CAST,
+                "peer-1",
+                {"vote_id": "vote-1", "voter_id": "spoofed-node", "support": True},
+            ),
+        ])
+        blockchain = Blockchain(_FakeStorage([block]), Mempool())
+
+        state = await blockchain.derive_world_state()
+        world_state = WorldState.from_dict(state)
+        vote_data = world_state.pending_tao_votes["vote-1"]
+
+        self.assertEqual(vote_data["votes_for"], 1)
+        self.assertEqual(vote_data["voters"], ["peer-1"])
+
 
 class TaoVotingSystemValidationTests(unittest.TestCase):
     def test_cast_vote_rejects_blank_identifier_without_mutating_state(self):

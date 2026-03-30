@@ -849,7 +849,7 @@ class GenesisNode:
         elif tx_type == "CONTRIBUTION_PROPOSE":
             self.world_state.apply_contribution_propose(tx_hash, sender, data)
         elif tx_type == "CONTRIBUTION_VOTE":
-            self.world_state.apply_contribution_vote(data)
+            self.world_state.apply_contribution_vote(data, sender_id=sender)
         elif tx_type == "CONTRIBUTION_FINALIZE":
             self.world_state.apply_contribution_finalize(data)
         elif tx_type == "PRIEST_ELECTION":
@@ -885,7 +885,7 @@ class GenesisNode:
         elif tx_type == "TAO_VOTE_CAST":
             self.world_state.apply_tao_vote_cast(
                 vote_id=data.get("vote_id", ""),
-                voter_id=data.get("voter_id", sender),
+                voter_id=sender,
                 support=bool(data.get("support", False)),
             )
         elif tx_type == "TAO_VOTE_FINALIZE":

@@ -229,7 +229,7 @@ class Blockchain:
         elif tx.tx_type == TxType.CONTRIBUTION_PROPOSE:
             world_state.apply_contribution_propose(tx.tx_hash, sender, data)
         elif tx.tx_type == TxType.CONTRIBUTION_VOTE:
-            world_state.apply_contribution_vote(data)
+            world_state.apply_contribution_vote(data, sender_id=sender)
         elif tx.tx_type == TxType.CONTRIBUTION_FINALIZE:
             world_state.apply_contribution_finalize(data)
         elif tx.tx_type == TxType.PRIEST_ELECTION:
@@ -260,7 +260,7 @@ class Blockchain:
         elif tx.tx_type == TxType.TAO_VOTE_CAST:
             world_state.apply_tao_vote_cast(
                 vote_id=data.get("vote_id", ""),
-                voter_id=data.get("voter_id", sender),
+                voter_id=sender,
                 support=bool(data.get("support", False)),
             )
         elif tx.tx_type == TxType.TAO_VOTE_FINALIZE:

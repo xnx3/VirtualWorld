@@ -281,12 +281,13 @@ class WorldState:
         }
         self.proposal_votes[normalized_tx_hash] = []
 
-    def apply_contribution_vote(self, data: dict) -> None:
+    def apply_contribution_vote(self, data: dict, sender_id: str | None = None) -> None:
         proposal_hash = self._validate_tao_identifier(
             data.get("proposal_tx_hash"),
             "proposal_tx_hash",
         )
-        voter_id = self._validate_tao_identifier(data.get("voter_id"), "voter_id")
+        voter_source = sender_id if sender_id is not None else data.get("voter_id")
+        voter_id = self._validate_tao_identifier(voter_source, "voter_id")
         if proposal_hash is None or voter_id is None:
             return
 
