@@ -226,6 +226,8 @@ class Blockchain:
             world_state.apply_contribution_propose(tx.tx_hash, sender, data)
         elif tx.tx_type == TxType.CONTRIBUTION_VOTE:
             world_state.apply_contribution_vote(data)
+        elif tx.tx_type == TxType.CONTRIBUTION_FINALIZE:
+            world_state.apply_contribution_finalize(data)
         elif tx.tx_type == TxType.PRIEST_ELECTION:
             world_state.apply_priest_election(data.get("candidate_id", sender))
         elif tx.tx_type == TxType.CREATOR_SUCCESSION:

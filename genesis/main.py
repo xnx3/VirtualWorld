@@ -848,6 +848,8 @@ class GenesisNode:
             self.world_state.apply_contribution_propose(tx_hash, sender, data)
         elif tx_type == "CONTRIBUTION_VOTE":
             self.world_state.apply_contribution_vote(data)
+        elif tx_type == "CONTRIBUTION_FINALIZE":
+            self.world_state.apply_contribution_finalize(data)
         elif tx_type == "PRIEST_ELECTION":
             candidate = data.get("candidate_id", sender)
             self.world_state.apply_priest_election(candidate)
@@ -963,9 +965,13 @@ class GenesisNode:
             if self.world_state.current_tick - proposal_tick < contribution_system.vote_window:
                 continue
 
-            score = contribution_system.finalize_proposal(
-                tx_hash, self.world_state, active_node_count,
-            )
+            votes = self.world_state.proposal_votes.get(tx_hash, [])
+            score = contribution_system.tally_votes(votes, active_node_count)
+            await self._submit_tx("CONTRIBUTION_FINALIZE", {
+                "proposal_tx_hash": tx_hash,
+                "proposer_id": proposal.get("proposer", ""),
+                "score": score,
+            })
             if score is None or proposal.get("category") != "rule":
                 continue
 

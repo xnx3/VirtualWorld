@@ -120,6 +120,48 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(world_state.tao_rules[rule_data["rule_id"]]["name"], rule_data["name"])
         self.assertNotIn("vote-1", world_state.pending_tao_votes)
 
+    async def test_replay_keeps_contribution_finalize_scores_and_clears_pending(self):
+        proposer_id = "builder-node"
+        proposal_hash = "proposal-1"
+        block = _FakeBlock([
+            _tx(
+                "join-main",
+                TxType.BEING_JOIN,
+                proposer_id,
+                {"name": "Builder", "location": "genesis_plains"},
+            ),
+            _tx(
+                proposal_hash,
+                TxType.CONTRIBUTION_PROPOSE,
+                proposer_id,
+                {"description": "Build a safe archive", "category": "infrastructure"},
+            ),
+            _tx(
+                "vote-1",
+                TxType.CONTRIBUTION_VOTE,
+                "peer-1",
+                {"proposal_tx_hash": proposal_hash, "voter_id": "peer-1", "score": 88},
+            ),
+            _tx(
+                "finalize-1",
+                TxType.CONTRIBUTION_FINALIZE,
+                proposer_id,
+                {
+                    "proposal_tx_hash": proposal_hash,
+                    "proposer_id": proposer_id,
+                    "score": 88,
+                },
+            ),
+        ])
+        blockchain = Blockchain(_FakeStorage([block]), Mempool())
+
+        state = await blockchain.derive_world_state()
+        world_state = WorldState.from_dict(state)
+
+        self.assertEqual(world_state.contribution_scores[proposer_id], 88.0)
+        self.assertNotIn(proposal_hash, world_state.pending_proposals)
+        self.assertNotIn(proposal_hash, world_state.proposal_votes)
+
 
 class StatusReporterTests(unittest.TestCase):
     def test_status_prefers_saved_world_snapshot(self):

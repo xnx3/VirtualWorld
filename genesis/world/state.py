@@ -227,6 +227,26 @@ class WorldState:
                 "score": data.get("score", 0),
             })
 
+    def apply_contribution_finalize(self, data: dict) -> None:
+        proposal_hash = data.get("proposal_tx_hash")
+        if not proposal_hash:
+            return
+
+        proposer = (
+            data.get("proposer_id")
+            or self.pending_proposals.get(proposal_hash, {}).get("proposer")
+        )
+        score = data.get("score")
+        if proposer and score is not None:
+            try:
+                current = self.contribution_scores.get(proposer, 0.0)
+                self.contribution_scores[proposer] = current + float(score)
+            except (TypeError, ValueError):
+                logger.warning("Invalid contribution finalize score for %s", proposal_hash[:8])
+
+        self.pending_proposals.pop(proposal_hash, None)
+        self.proposal_votes.pop(proposal_hash, None)
+
     def apply_priest_election(self, node_id: str) -> None:
         self.priest_node_id = node_id
         self.ticks_without_priest = 0
