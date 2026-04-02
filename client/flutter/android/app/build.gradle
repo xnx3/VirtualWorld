@@ -20,6 +20,10 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
+def repoRootDir = file('../../../../')
+def flutterRootDir = file('../../')
+def generatedRuntimeAssetsDir = file("$buildDir/generated/runtime-assets/main")
+
 android {
     namespace "com.virtualworld.genesis"
     compileSdk flutter.compileSdkVersion
@@ -35,7 +39,10 @@ android {
     }
 
     sourceSets {
-        main.java.srcDirs += 'src/main/kotlin'
+        main {
+            java.srcDirs += 'src/main/kotlin'
+            assets.srcDirs += generatedRuntimeAssetsDir
+        }
     }
 
     defaultConfig {
@@ -60,47 +67,55 @@ android {
     }
 }
 
-def repoRootDir = file('../../../../')
-def flutterRootDir = file('../../')
-
-// 复制 Genesis 文件到 assets
-task copyGenesisAssets(type: Copy) {
-    description = 'Copy Genesis backend files to Android assets'
-    from "${repoRootDir}/genesis"
-    into 'src/main/assets/genesis'
-    exclude '**/__pycache__/**'
-    exclude '**/*.pyc'
-    doFirst {
-        delete 'src/main/assets/genesis'
+task prepareGeneratedRuntimeAssets {
+    description = 'Reset generated Android runtime assets directory'
+    outputs.upToDateWhen { false }
+    doLast {
+        delete generatedRuntimeAssetsDir
+        mkdir generatedRuntimeAssetsDir
     }
 }
 
+// 复制 Genesis 文件到构建生成目录，避免在源码目录维护镜像副本
+task copyGenesisAssets(type: Copy) {
+    description = 'Copy Genesis backend files to generated Android assets'
+    dependsOn prepareGeneratedRuntimeAssets
+    from "${repoRootDir}/genesis"
+    into "${generatedRuntimeAssetsDir}/genesis"
+    exclude '**/__pycache__/**'
+    exclude '**/*.pyc'
+}
+
 task copyTermuxScripts(type: Copy) {
-    description = 'Copy Termux scripts to Android assets'
+    description = 'Copy Termux scripts to generated Android assets'
+    dependsOn prepareGeneratedRuntimeAssets
     from "${repoRootDir}/termux"
-    into 'src/main/assets'
+    into generatedRuntimeAssetsDir
     include 'start_genesis.sh'
     include 'install.sh'
     include 'quick_install.sh'
 }
 
 task copyConfigExample(type: Copy) {
-    description = 'Copy config example to Android assets'
+    description = 'Copy config example to generated Android assets'
+    dependsOn prepareGeneratedRuntimeAssets
     from "${repoRootDir}/config.yaml.example"
-    into 'src/main/assets'
+    into generatedRuntimeAssetsDir
 }
 
 task copyBundledTermuxApks(type: Copy) {
-    description = 'Copy bundled Termux APKs from Flutter assets to Android native assets'
+    description = 'Copy bundled Termux APKs from Flutter assets to generated Android assets'
+    dependsOn prepareGeneratedRuntimeAssets
     from "${flutterRootDir}/assets"
-    into 'src/main/assets'
+    into generatedRuntimeAssetsDir
     include 'termux-*.apk'
 }
 
 task copyTermuxBundle(type: Copy) {
-    description = 'Copy prebuilt Genesis Termux bundle to Android assets (if exists)'
+    description = 'Copy prebuilt Genesis Termux bundle to generated Android assets (if exists)'
+    dependsOn prepareGeneratedRuntimeAssets
     from "${repoRootDir}/termux"
-    into 'src/main/assets'
+    into generatedRuntimeAssetsDir
     include 'genesis-termux-bundle.tar.gz'
     include 'genesis-termux-bundle.tar.gz.sha256'
     onlyIf {
@@ -108,11 +123,22 @@ task copyTermuxBundle(type: Copy) {
     }
 }
 
-preBuild.dependsOn copyGenesisAssets
-preBuild.dependsOn copyTermuxScripts
-preBuild.dependsOn copyConfigExample
-preBuild.dependsOn copyBundledTermuxApks
-preBuild.dependsOn copyTermuxBundle
+task generateAndroidRuntimeAssets {
+    description = 'Generate Android runtime assets from single-source project files'
+    dependsOn copyGenesisAssets
+    dependsOn copyTermuxScripts
+    dependsOn copyConfigExample
+    dependsOn copyBundledTermuxApks
+    dependsOn copyTermuxBundle
+}
+
+preBuild.dependsOn generateAndroidRuntimeAssets
+
+gradle.buildFinished {
+    if (generatedRuntimeAssetsDir.exists()) {
+        delete generatedRuntimeAssetsDir
+    }
+}
 
 flutter {
     source '../..'

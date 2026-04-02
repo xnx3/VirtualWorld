@@ -39,9 +39,6 @@ flutter:
 
   assets:
     - assets/images/
-    - assets/genesis/
-    - assets/install.sh
-    - assets/start_genesis.sh
     - assets/termux-arm64-v8a.apk
 
   fonts:

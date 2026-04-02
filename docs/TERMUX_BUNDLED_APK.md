@@ -88,10 +88,12 @@ Genesis APK
 wget -O termux-app.apk https://f-droid.org/repo/com.termux_1020.apk
 ```
 
-将下载的 APK 放入：
+将下载的 APK 放入 Flutter 资产源目录：
 ```
-client/flutter/android/app/src/main/assets/termux-app.apk
+client/flutter/assets/termux-arm64-v8a.apk
 ```
+
+Android 构建时会自动把它复制到临时生成的原生 assets 中，构建结束后自动清理，无需手工维护 `android/app/src/main/assets/` 副本。
 
 ### Step 2: 更新 build.gradle
 
@@ -287,6 +289,6 @@ if (!await genesisInstaller.isTermuxInstalled()) {
 
 ## 相关文件
 
-- `client/flutter/android/app/src/main/assets/termux-app.apk` - 内置 Termux APK
+- `client/flutter/assets/termux-arm64-v8a.apk` - 内置 Termux APK 的唯一源码位置
 - `client/flutter/android/app/src/main/kotlin/.../GenesisInstaller.kt` - 安装逻辑
 - `client/flutter/android/app/src/main/AndroidManifest.xml` - 权限配置

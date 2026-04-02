@@ -1,1 +1,0 @@
-"""Governance and voting systems."""

@@ -49,3 +49,7 @@ build/
 # Generated files
 bootstrap/bootstrap.pid
 client/flutter/android/app/src/main/java/
+client/flutter/android/app/src/main/assets/
+client/flutter/assets/genesis/
+client/flutter/assets/install.sh
+client/flutter/assets/start_genesis.sh

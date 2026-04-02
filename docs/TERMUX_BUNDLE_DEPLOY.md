@@ -351,9 +351,9 @@ bash build_bundle.sh
 
 **方案 A：随 APK 分发**
 
-1. 将 bundle 文件放入 `client/flutter/android/app/src/main/assets/`
+1. 将 bundle 文件放入仓库根目录下的 `termux/`
 2. 重新构建 APK
-3. Flutter 应用会自动复制 bundle 到共享存储
+3. Android 构建会自动复制 bundle 到临时原生 assets，Flutter 应用再把它复制到共享存储
 
 **方案 B：网络下载**
 
@@ -409,12 +409,12 @@ cp ~/genesis-termux-bundle.tar.gz* ~/storage/downloads/
 ```bash
 # 在开发电脑上
 # 1. 从设备获取 bundle（通过 adb 或其他方式）
-adb pull /sdcard/Download/genesis-termux-bundle.tar.gz client/flutter/android/app/src/main/assets/
-adb pull /sdcard/Download/genesis-termux-bundle.tar.gz.sha256 client/flutter/android/app/src/main/assets/
+adb pull /sdcard/Download/genesis-termux-bundle.tar.gz termux/
+adb pull /sdcard/Download/genesis-termux-bundle.tar.gz.sha256 termux/
 
-# 2. 或手动复制到 assets 目录
-cp genesis-termux-bundle.tar.gz client/flutter/android/app/src/main/assets/
-cp genesis-termux-bundle.tar.gz.sha256 client/flutter/android/app/src/main/assets/
+# 2. 或手动复制到 termux 目录
+cp genesis-termux-bundle.tar.gz termux/
+cp genesis-termux-bundle.tar.gz.sha256 termux/
 ```
 
 ### 步骤 2：构建 Flutter APK
@@ -528,4 +528,3 @@ bash ~/storage/downloads/Genesis/install.sh
 - 确认已运行 `termux-setup-storage`
 - 检查存储空间是否充足
 - 尝试使用完整安装 (`install.sh`)
-
