@@ -18,13 +18,13 @@
 ```
 Genesis APK
 ├── Flutter 应用（GUI）
-├── assets/
-│   ├── genesis/              # Genesis 后端源码
-│   ├── genesis-termux-bundle.tar.gz  # 预构建 Python 环境
-│   ├── termux-app.apk        # Termux APK（内置）
-│   ├── install.sh
-│   ├── quick_install.sh
-│   └── start_genesis.sh
+├── 构建期生成 assets/
+│   ├── genesis/                      # 从项目根 genesis/ 复制
+│   ├── genesis-termux-bundle.tar.gz  # 从 termux/ 复制（可选）
+│   ├── termux-*.apk                  # 从 client/flutter/assets/ 复制
+│   ├── install.sh                    # 从 termux/ 复制
+│   ├── quick_install.sh              # 从 termux/ 复制
+│   └── start_genesis.sh              # 从 termux/ 复制
 └── 自动安装逻辑
 ```
 
@@ -85,77 +85,63 @@ Genesis APK
 # https://f-droid.org/packages/com.termux/
 
 # 或使用 wget
-wget -O termux-app.apk https://f-droid.org/repo/com.termux_1020.apk
-```
-
-将下载的 APK 放入 Flutter 资产源目录：
-```
-client/flutter/assets/termux-arm64-v8a.apk
+wget -O client/flutter/assets/termux-arm64-v8a.apk https://f-droid.org/repo/com.termux_1020.apk
 ```
 
 Android 构建时会自动把它复制到临时生成的原生 assets 中，构建结束后自动清理，无需手工维护 `android/app/src/main/assets/` 副本。
 
 ### Step 2: 更新 build.gradle
 
-在 `client/flutter/android/app/build.gradle` 中添加：
+当前实现的核心思路不是把运行时文件常驻在 `src/main/assets/`，而是把它们复制到构建目录：
 
 ```groovy
-// 复制 Termux APK 到 assets
-task copyTermuxApk(type: Copy) {
-    description = 'Copy Termux APK to Android assets'
-    from '../../../termux/termux-app.apk'
-    into 'src/main/assets'
-    onlyIf { file('../../../termux/termux-app.apk').exists() }
+def generatedRuntimeAssetsDir = file("$buildDir/generated/runtime-assets/main")
+
+android {
+    sourceSets {
+        main {
+            assets.srcDirs += generatedRuntimeAssetsDir
+        }
+    }
 }
 
-preBuild.dependsOn copyTermuxApk
+task copyBundledTermuxApks(type: Copy) {
+    from "${flutterRootDir}/assets"
+    into generatedRuntimeAssetsDir
+    include 'termux-*.apk'
+}
+
+preBuild.dependsOn copyBundledTermuxApks
+
+gradle.buildFinished {
+    delete generatedRuntimeAssetsDir
+}
 ```
 
 ### Step 3: 更新 GenesisInstaller.kt
 
-添加 Termux APK 自动安装逻辑：
+添加 Termux APK 自动安装逻辑。当前实现会按 ABI 从 `termux-*.apk` 中选择最合适的文件：
 
 ```kotlin
-/**
- * 检查 Termux 是否已安装
- */
-fun isTermuxInstalled(context: Context): Boolean {
-    return try {
-        context.packageManager.getPackageInfo("com.termux", 0)
-        true
-    } catch (e: Exception) {
-        false
-    }
-}
+private val TERMUX_APK_NAMES = listOf(
+    "termux-x86_64.apk",
+    "termux-universal.apk",
+    "termux-arm64-v8a.apk"
+)
 
 /**
  * 安装内置的 Termux APK
- * 需要 REQUEST_INSTALL_PACKAGES 权限
  */
-fun installTermuxFromAssets(context: Context): InstallResult {
-    return try {
-        // 从 assets 复制到缓存目录
-        val apkFile = File(context.cacheDir, "termux-app.apk")
-        context.assets.open("termux-app.apk").use { input ->
-            FileOutputStream(apkFile).use { output ->
-                input.copyTo(output)
-            }
-        }
-
-        // 触发安装
-        val intent = Intent(Intent.ACTION_VIEW)
-        intent.setDataAndType(
-            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apkFile),
-            "application/vnd.android.package-archive"
-        )
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
-
-        InstallResult(success = true, message = "Termux 安装已启动，请完成安装后重试")
-    } catch (e: Exception) {
-        InstallResult(success = false, message = "安装 Termux 失败: ${e.message}")
+private fun selectBestTermuxApk(): Pair<String, Boolean> {
+    val availableApks = assets.list("")?.filter { it.startsWith("termux-") && it.endsWith(".apk") }?.toSet() ?: emptySet()
+    val preferredApk = when {
+        Build.SUPPORTED_ABIS.contains("x86_64") && availableApks.contains("termux-x86_64.apk") -> "termux-x86_64.apk"
+        availableApks.contains("termux-universal.apk") -> "termux-universal.apk"
+        Build.SUPPORTED_ABIS.contains("arm64-v8a") && availableApks.contains("termux-arm64-v8a.apk") -> "termux-arm64-v8a.apk"
+        availableApks.isNotEmpty() -> availableApks.first()
+        else -> "termux-universal.apk"
     }
+    return Pair(preferredApk, availableApks.contains(preferredApk))
 }
 ```
 
@@ -248,6 +234,13 @@ if (!await genesisInstaller.isTermuxInstalled()) {
 4. Termux 安装完成 → 返回 Genesis
 5. 点击"一键安装 Genesis"
 6. 完成，可以启动服务
+
+### 资产真源约束
+
+- `genesis/` 是唯一 Python 真源
+- `termux/` 是安装脚本与 bundle 真源
+- `client/flutter/assets/termux-*.apk` 是内置 Termux APK 真源
+- `client/flutter/android/app/src/main/assets/` 不是源码目录，只允许构建期临时生成
 
 ### 兼容性
 

@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DATA_DIR="${SCRIPT_DIR}/data"
 PID_FILE="${DATA_DIR}/genesis.pid"
 LOG_FILE="${DATA_DIR}/genesis.log"
+CONSOLE_LOG_FILE="${DATA_DIR}/console.log"
 VENV_DIR="${SCRIPT_DIR}/venv"
 PYTHON="${VENV_DIR}/bin/python"
 CONFIG_FILE="${DATA_DIR}/config.yaml"
@@ -87,6 +88,28 @@ setup() {
     ensure_data_dir
 }
 
+attach_running_interface() {
+    local pid
+    pid=$(cat "$PID_FILE")
+
+    echo -e "${YELLOW}Genesis is already running (PID ${pid})${NC}"
+    echo -e "${CYAN}Attaching to the live console. Press Ctrl+C to detach.${NC}"
+    echo ""
+
+    if [ -f "$CONSOLE_LOG_FILE" ]; then
+        exec tail -n 200 -f "$CONSOLE_LOG_FILE"
+    fi
+
+    if [ -f "$LOG_FILE" ]; then
+        echo -e "${YELLOW}Live console mirror is unavailable. Following runtime log instead.${NC}"
+        echo ""
+        exec tail -n 200 -f "$LOG_FILE"
+    fi
+
+    echo -e "${YELLOW}No live output file is available yet. Try again in a moment.${NC}"
+    exit 0
+}
+
 ensure_language_set() {
     # 检查 config.yaml 中是否已经明确设置了语种
     local lang_set=false
@@ -139,8 +162,7 @@ start() {
     print_banner
 
     if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-        echo -e "${YELLOW}Genesis is already running (PID $(cat "$PID_FILE"))${NC}"
-        exit 1
+        attach_running_interface
     fi
 
     echo -e "${GREEN}Initializing...${NC}"
@@ -163,7 +185,9 @@ start() {
     fi
 
     # 直接前台运行 Python，信号直达进程
+    : > "$CONSOLE_LOG_FILE"
     echo $$ > "$PID_FILE"
+    export GENESIS_CONSOLE_LOG="$CONSOLE_LOG_FILE"
     exec "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR" $API_ARGS
     rm -f "$PID_FILE"
 }

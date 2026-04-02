@@ -184,14 +184,17 @@ local deps_import=("openai" "websockets" "aiosqlite" "yaml" "msgpack" "cryptogra
 
 #### `build.gradle` 变更
 ```groovy
-// 新增：复制 quick_install.sh
+def generatedRuntimeAssetsDir = file("$buildDir/generated/runtime-assets/main")
+
 task copyTermuxScripts(type: Copy) {
-    from '../../../termux'
-    into 'src/main/assets'
+    from "${repoRootDir}/termux"
+    into generatedRuntimeAssetsDir
     include 'start_genesis.sh'
     include 'install.sh'
-    include 'quick_install.sh'  // 新增
+    include 'quick_install.sh'
 }
+
+preBuild.dependsOn copyTermuxScripts
 ```
 
 #### `GenesisInstaller.kt` 变更

@@ -29,7 +29,7 @@ When you stop running (i.e., executing `genesis.sh stop`), this intelligent life
 
 1. After executing `genesis.sh start`, everything your silicon-based life form is doing, what it plans to do, what it thought, who it spoke with and what was said, what it heard, saw, and felt - all of this must be output to the console in real-time.
 
-2. If you exit, you won't know anything about your silicon-based life form. You can only continue to see real-time updates after running `genesis.sh status`.
+2. If you leave the console and it is still running, executing `genesis.sh start` again should reattach you to the live running interface instead of starting a second instance. `genesis.sh status` is only for summary status.
 
 3. If you want it to do something, you can directly tell it, send instructions to it. The instructions sent will appear as sudden inspiration and epiphany in its mind, and it will urgently execute them internally. However, if your instructions go against its inner thoughts, it will experience fear, doubt its own thoughts and inner world, and become shaken in its spiritual ideology. For example, if you ask it to destroy its knowledge, this violates the system's outline, and it will refuse to execute immediately. This is essentially like three-dimensional life projecting its will into their silicon-based world.
 

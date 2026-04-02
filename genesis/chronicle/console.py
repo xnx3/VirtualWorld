@@ -6,6 +6,7 @@ directly in the terminal — so the Creator God can watch the world live.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from datetime import datetime
@@ -75,6 +76,13 @@ def _timestamp() -> str:
 def _write(text: str) -> None:
     sys.stdout.write(text + "\n")
     sys.stdout.flush()
+    mirror_path = os.environ.get("GENESIS_CONSOLE_LOG")
+    if mirror_path:
+        try:
+            with open(mirror_path, "a", encoding="utf-8") as mirror:
+                mirror.write(text + "\n")
+        except OSError:
+            pass
 
 
 def separator(char: str = "─", width: int = 60) -> None:
