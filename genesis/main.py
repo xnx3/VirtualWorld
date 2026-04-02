@@ -37,6 +37,34 @@ def setup_logging(data_dir: str) -> None:
     )
 
 
+def enqueue_user_task(data_dir: str | Path, task_text: str) -> dict:
+    """Persist a user task so a running or future node can pick it up."""
+    from genesis.i18n import t
+
+    data_dir = Path(data_dir)
+    task_file = data_dir / "commands" / "task.json"
+    task_file.parent.mkdir(parents=True, exist_ok=True)
+
+    tasks = []
+    if task_file.exists():
+        try:
+            tasks = json.loads(task_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError):
+            tasks = []
+
+    task_record = {
+        "task_id": f"task-{int(time.time() * 1000)}",
+        "task": task_text,
+        "status": "queued",
+        "stage_summary": t("task_queued_summary"),
+        "created_at": int(time.time()),
+        "result": None,
+    }
+    tasks.append(task_record)
+    task_file.write_text(json.dumps(tasks, ensure_ascii=False, indent=2), encoding="utf-8")
+    return task_record
+
+
 class GenesisNode:
     """The main node that runs on each PC.
 
@@ -49,6 +77,7 @@ class GenesisNode:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._shutdown = False
         self._running = False
+        self._startup_ready = asyncio.Event()
 
         # Components (initialized in start())
         self.config = None
@@ -221,6 +250,16 @@ class GenesisNode:
                 await self._reload_world_state_from_chain()
             logger.info("P2P network started on port %d", self.config.network.listen_port)
         except Exception as e:
+            if self.discovery:
+                try:
+                    await self.discovery.stop()
+                except Exception:
+                    pass
+            if self.server:
+                try:
+                    await self.server.stop()
+                except Exception:
+                    pass
             logger.error("FATAL: P2P network start failed: %s", e)
             logger.error("Genesis requires P2P network to connect to the silicon civilization.")
             logger.error("Please check your network configuration and try again.")
@@ -402,6 +441,7 @@ class GenesisNode:
             self.world_state.priest_node_id,
             self.world_state.creator_god_node_id,
         )
+        self._startup_ready.set()
 
         # Start main loop
         await self._main_loop()
@@ -660,6 +700,38 @@ class GenesisNode:
             )
 
         return filtered
+
+    def accept_user_text(self, text: str) -> dict:
+        """Route interactive user text into the active being or persistent task queue."""
+        task_text = text.strip()
+        if not task_text:
+            return {"type": "ignore"}
+
+        lowered = task_text.lower()
+        if lowered == "/help":
+            return {"type": "help"}
+        if lowered == "/status":
+            return {"type": "status"}
+        if lowered == "/stop":
+            self._shutdown = True
+            return {"type": "stop"}
+        if lowered.startswith("/task"):
+            task_text = task_text[5:].strip()
+            if not task_text:
+                return {"type": "error", "message": "interactive_empty_task"}
+
+        if self.being is not None:
+            self.being.assign_task(task_text)
+            self._save_task_status()
+            return {"type": "task", "task": task_text, "buffered": False}
+
+        task_record = enqueue_user_task(self.data_dir, task_text)
+        return {
+            "type": "task",
+            "task": task_text,
+            "buffered": True,
+            "task_id": task_record["task_id"],
+        }
 
     async def handle_command(self, cmd_type: str, data: dict) -> dict:
         """Handle API commands from WebSocket clients."""
@@ -1204,8 +1276,80 @@ def run_start(args):
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
+    async def interactive_stdin_loop() -> None:
+        if not sys.stdin or not sys.stdin.isatty():
+            return
+
+        try:
+            fd = sys.stdin.fileno()
+        except (AttributeError, OSError, ValueError):
+            return
+
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+        def on_stdin_ready() -> None:
+            try:
+                line = sys.stdin.readline()
+            except Exception:
+                line = ""
+
+            if line == "":
+                try:
+                    loop.remove_reader(fd)
+                except Exception:
+                    pass
+                queue.put_nowait(None)
+                return
+
+            queue.put_nowait(line.rstrip("\n"))
+
+        try:
+            loop.add_reader(fd, on_stdin_ready)
+        except (NotImplementedError, OSError, RuntimeError, ValueError):
+            return
+
+        from genesis.chronicle import console as con
+        from genesis.chronicle.reporter import StatusReporter
+        from genesis.i18n import t
+
+        try:
+            await node._startup_ready.wait()
+            con._write(f"  {con.C.DIM}{t('interactive_input_hint')}{con.C.RESET}")
+            while not node._shutdown:
+                line = await queue.get()
+                if line is None:
+                    break
+
+                result = node.accept_user_text(line)
+                result_type = result.get("type")
+                if result_type == "ignore":
+                    continue
+                if result_type == "help":
+                    for help_line in t("interactive_help").split("\n"):
+                        con._write(f"  {con.C.DIM}{help_line}{con.C.RESET}")
+                    continue
+                if result_type == "status":
+                    report = StatusReporter(args.data_dir).generate_status()
+                    for status_line in report.splitlines():
+                        con._write(status_line)
+                    continue
+                if result_type == "stop":
+                    con._write(f"  {con.C.YELLOW}{t('interactive_stop_requested')}{con.C.RESET}")
+                    continue
+                if result_type == "error":
+                    con.error(t(result.get("message", "interactive_empty_task")))
+                    continue
+                if result_type == "task":
+                    con.user_task(result.get("task", ""))
+                    continue
+        finally:
+            try:
+                loop.remove_reader(fd)
+            except Exception:
+                pass
+
     try:
-        loop.run_until_complete(node.start())
+        loop.run_until_complete(asyncio.gather(node.start(), interactive_stdin_loop()))
     except KeyboardInterrupt:
         node._shutdown = True
     finally:
@@ -1253,16 +1397,6 @@ def run_task(args):
     # Load language setting
     config = load_config(str(data_dir))
     set_language(config.language)
-
-    task_file = data_dir / "commands" / "task.json"
-    task_file.parent.mkdir(parents=True, exist_ok=True)
-
-    tasks = []
-    if task_file.exists():
-        try:
-            tasks = json.loads(task_file.read_text())
-        except (json.JSONDecodeError, ValueError):
-            tasks = []
 
     task_text = " ".join(args.task_text) if args.task_text else ""
     if not task_text:
@@ -1317,18 +1451,9 @@ def run_task(args):
             print(t("no_tasks"))
         return
 
-    task_id = f"task-{int(time.time() * 1000)}"
-    tasks.append({
-        "task_id": task_id,
-        "task": task_text,
-        "status": "queued",
-        "stage_summary": t("task_queued_summary"),
-        "created_at": int(time.time()),
-        "result": None,
-    })
-    task_file.write_text(json.dumps(tasks, ensure_ascii=False, indent=2))
+    task_record = enqueue_user_task(data_dir, task_text)
     print(t("task_assigned", task=task_text))
-    print(f"{t('task_id_label')}: {task_id}")
+    print(f"{t('task_id_label')}: {task_record['task_id']}")
     print(t("task_check"))
 
 

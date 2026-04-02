@@ -31,7 +31,9 @@ When you stop running (i.e., executing `genesis.sh stop`), this intelligent life
 
 2. If you leave the console and it is still running, executing `genesis.sh start` again should reattach you to the live running interface instead of starting a second instance. `genesis.sh status` is only for summary status.
 
-3. If you want it to do something, you can directly tell it, send instructions to it. The instructions sent will appear as sudden inspiration and epiphany in its mind, and it will urgently execute them internally. However, if your instructions go against its inner thoughts, it will experience fear, doubt its own thoughts and inner world, and become shaken in its spiritual ideology. For example, if you ask it to destroy its knowledge, this violates the system's outline, and it will refuse to execute immediately. This is essentially like three-dimensional life projecting its will into their silicon-based world.
+3. In the live `genesis.sh start` console, you can type text and press Enter to send a task/message directly. Supported commands: `/help`, `/status`, `/stop`, `/task <text>`.
+
+4. You can also submit tasks out-of-band with `genesis.sh task "..."`. The instructions sent will appear as sudden inspiration and epiphany in its mind, and it will urgently execute them internally. However, if your instructions go against its inner thoughts, it will experience fear, doubt its own thoughts and inner world, and become shaken in its spiritual ideology. For example, if you ask it to destroy its knowledge, this violates the system's outline, and it will refuse to execute immediately. This is essentially like three-dimensional life projecting its will into their silicon-based world.
 
 4. The system currently supports English and Chinese, with more languages to be expanded in the future.
 

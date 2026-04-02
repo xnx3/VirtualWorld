@@ -192,6 +192,10 @@ EN: dict[str, str] = {
     "task_assigned": "Task assigned to your being: {task}",
     "task_queued_summary": "Queued. The being will begin planning on the next tick.",
     "task_check": "It will be processed in the next tick. Check results with: genesis.sh task",
+    "interactive_input_hint": "Interactive input ready. Type a line and press Enter to send it to your being. Commands: /help /status /stop",
+    "interactive_help": "Interactive commands:\n/help  Show this help\n/status  Show a summary status report\n/stop  Hibernate and stop Genesis\n/task <text>  Send a task explicitly\nAny other text is also sent as a task or message.",
+    "interactive_stop_requested": "Stop requested. Genesis will enter hibernation.",
+    "interactive_empty_task": "Empty task ignored.",
 
     # --- Reporter: status ---
     "status_title": "Genesis Status",
@@ -481,6 +485,10 @@ ZH: dict[str, str] = {
     "task_assigned": "任务已分配给你的生命体: {task}",
     "task_queued_summary": "任务已排队，将在下一个 tick 开始规划。",
     "task_check": "将在下一个 tick 处理。查看结果: genesis.sh task",
+    "interactive_input_hint": "交互输入已就绪。直接输入一行文字并回车即可发给硅基生命。命令: /help /status /stop",
+    "interactive_help": "交互命令:\n/help  查看帮助\n/status  查看摘要状态\n/stop  让 Genesis 休眠并停止\n/task <内容>  显式发送任务\n其他任意文本也会作为任务或交流内容发给它。",
+    "interactive_stop_requested": "已收到停止请求。Genesis 将进入休眠。",
+    "interactive_empty_task": "忽略空任务。",
 
     # --- Reporter: status ---
     "status_title": "创世 · 状态",
