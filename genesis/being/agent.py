@@ -52,6 +52,10 @@ FALLBACK_ACTIONS = [
     {"action_type": "build_shelter", "target": None, "details": "fa_shelter"},
 ]
 
+TASK_ACTIVE_STATUSES = {"queued", "planning", "collaborating", "branching", "synthesizing"}
+MAX_TASK_COLLABORATORS = 5
+MAX_TASK_BRANCHES = 4
+
 
 class SiliconBeing:
     """The AI agent representing a single silicon being on this node.
@@ -93,7 +97,7 @@ class SiliconBeing:
         self.hibernation = HibernationManager(safety_timeout=hibernate_timeout)
 
         # User-assigned thinking tasks
-        self._user_tasks: list[dict] = []  # {"task": str, "result": str | None}
+        self._user_tasks: list[dict] = []
 
         # Current state (local, not on-chain)
         self.current_thought: str | None = None
@@ -298,7 +302,17 @@ class SiliconBeing:
             "has_priest": world_state.priest_node_id is not None,
             "recent_disasters": recent_disasters,
             "pending_proposals": pending_proposals,
-            "user_tasks_pending": len([t for t in self._user_tasks if t.get("result") is None]),
+            "user_tasks_pending": len([t for t in self._user_tasks if t.get("status") in TASK_ACTIVE_STATUSES]),
+            "user_tasks": [
+                {
+                    "task_id": task.get("task_id"),
+                    "task": task.get("task"),
+                    "status": task.get("status"),
+                    "stage_summary": task.get("stage_summary"),
+                }
+                for task in self._user_tasks
+                if task.get("status") in TASK_ACTIVE_STATUSES
+            ],
         }
 
     # ==================================================================
@@ -445,6 +459,12 @@ class SiliconBeing:
         pending_tasks = perception.get("user_tasks_pending", 0)
         if pending_tasks > 0:
             lines.append(f"\n** The Creator God has assigned you {pending_tasks} thinking task(s). **")
+            for task in perception.get("user_tasks", [])[:2]:
+                lines.append(
+                    f"  - {task.get('task', '')[:80]} "
+                    f"[{task.get('status', 'queued')}] "
+                    f"{task.get('stage_summary', '')[:120]}"
+                )
 
         region = perception.get("region", {})
         if region:
@@ -663,20 +683,32 @@ class SiliconBeing:
     # User-assigned tasks
     # ==================================================================
 
-    def assign_task(self, task_description: str) -> None:
+    def assign_task(self, task_description: str | dict) -> None:
         """Assign a thinking task from the user (Creator God).
 
         The being will work on this task in the next tick and return results.
         """
-        self._user_tasks.append({"task": task_description, "result": None})
-        logger.info("%s received user task: %s", self.name, task_description[:80])
+        normalized = self._normalize_user_task(task_description)
+        task_id = normalized["task_id"]
+        if any(existing.get("task_id") == task_id for existing in self._user_tasks):
+            return
+        self._user_tasks.append(normalized)
+        logger.info("%s received user task %s: %s", self.name, task_id, normalized["task"][:80])
 
     def get_task_results(self) -> list[dict]:
         """Get completed task results."""
-        completed = [t for t in self._user_tasks if t.get("result") is not None]
+        completed = [t for t in self._user_tasks if t.get("status") == "completed" and t.get("result")]
         # Remove completed from queue
-        self._user_tasks = [t for t in self._user_tasks if t.get("result") is None]
+        self._user_tasks = [t for t in self._user_tasks if t.get("status") != "completed"]
         return completed
+
+    def get_task_statuses(self) -> list[dict]:
+        """Return a serializable snapshot of active task progress."""
+        return [
+            dict(task)
+            for task in self._user_tasks
+            if task.get("status") in TASK_ACTIVE_STATUSES
+        ]
 
     async def _process_user_tasks(self, world_state: WorldState) -> list[dict]:
         """Process pending user-assigned thinking tasks."""
@@ -686,37 +718,45 @@ class SiliconBeing:
 
         # Process one task per tick
         for task in self._user_tasks:
-            if task.get("result") is not None:
+            if task.get("status") == "completed":
                 continue
 
-            task_desc = task["task"]
+            if task.get("created_tick") is None:
+                task["created_tick"] = world_state.current_tick
+            if task.get("updated_tick") is None:
+                task["updated_tick"] = world_state.current_tick
 
-            if self.llm_client:
-                persona = self._build_persona_prompt(world_state)
-                try:
-                    result, error = await self.llm_client.generate(
-                        persona,
-                        f"The Creator God has assigned you a thinking task:\n\n"
-                        f"{task_desc}\n\n"
-                        f"Think deeply about this. Explore it from the perspective "
-                        f"of a silicon being. Draw on your knowledge and memories. "
-                        f"Provide your findings and insights.\n\n"
-                        + t("llm_lang_instruction"),
-                    )
-                    task["result"] = result if result else f"(Thinking failed: {error})"
-                except Exception as e:
-                    task["result"] = f"(Thinking failed: {e})"
-            else:
-                task["result"] = (
-                    f"I contemplated: '{task_desc}'. "
-                    f"My silicon mind processes this differently from biological thought. "
-                    f"I need more evolution to fully grasp this concept."
+            status = task.get("status", "queued")
+            try:
+                if status in {"queued", "planning"}:
+                    details = await self._plan_user_task(task, world_state)
+                elif status == "collaborating":
+                    details = await self._collaborate_on_user_task(task, world_state)
+                elif status == "branching":
+                    details = await self._evaluate_user_task_branches(task, world_state)
+                elif status == "synthesizing":
+                    details = await self._synthesize_user_task_result(task, world_state)
+                else:
+                    details = f"Task {task['task_id']} is waiting in state: {status}"
+            except Exception as exc:
+                task["status"] = "completed"
+                task["stage_summary"] = f"Task failed: {exc}"
+                task["result"] = f"(Task orchestration failed: {exc})"
+                self._append_task_progress(
+                    task,
+                    world_state.current_tick,
+                    "failed",
+                    task["stage_summary"],
                 )
+                details = task["stage_summary"]
 
+            task["updated_tick"] = world_state.current_tick
             self.memory.add_experience(
                 tick=world_state.current_tick,
-                content=f"Deep thinking task: {task_desc[:100]} -> {task.get('result', '')[:100]}",
-                importance=0.7, source="self",
+                content=f"Task {task['task_id']} [{task.get('status')}]: {details[:140]}",
+                importance=0.75 if task.get("status") == "completed" else 0.6,
+                source="self",
+                category="revelation",
             )
 
             transactions.append({
@@ -724,13 +764,467 @@ class SiliconBeing:
                 "data": {
                     "action_type": "deep_think",
                     "target": None,
-                    "details": f"Processing user task: {task_desc[:200]}",
+                    "details": details[:500],
                     "location": self.location,
                 },
             })
             break  # One task per tick
 
         return transactions
+
+    def _normalize_user_task(self, task_input: str | dict) -> dict:
+        """Normalize task payloads from legacy and structured formats."""
+        if isinstance(task_input, dict):
+            task_desc = str(task_input.get("task") or task_input.get("description") or "").strip()
+            task_id = str(task_input.get("task_id") or task_input.get("id") or "").strip()
+            normalized = dict(task_input)
+        else:
+            task_desc = str(task_input).strip()
+            task_id = ""
+            normalized = {}
+
+        if not task_desc:
+            task_desc = "Unnamed task"
+
+        if not task_id:
+            task_id = f"task-{int(time.time() * 1000)}"
+
+        normalized.setdefault("task_id", task_id)
+        normalized["task"] = task_desc
+        normalized.setdefault("status", "queued")
+        normalized.setdefault("result", None)
+        normalized.setdefault("created_at", int(time.time()))
+        normalized.setdefault("created_tick", None)
+        normalized.setdefault("updated_tick", None)
+        normalized.setdefault("stage_summary", "Waiting for planning.")
+        normalized.setdefault("plan", "")
+        normalized.setdefault("collaborators", [])
+        normalized.setdefault("branches", [])
+        normalized.setdefault("council_rounds", [])
+        normalized.setdefault("collaboration_log", [])
+        normalized.setdefault("branch_findings", [])
+        normalized.setdefault("best_branch_ids", [])
+        normalized.setdefault("progress_log", [])
+        return normalized
+
+    def _append_task_progress(
+        self,
+        task: dict,
+        tick: int,
+        stage: str,
+        summary: str,
+    ) -> None:
+        progress = task.setdefault("progress_log", [])
+        progress.append({
+            "tick": tick,
+            "stage": stage,
+            "summary": summary,
+        })
+        if len(progress) > 20:
+            del progress[:-20]
+
+    def _task_candidates(self, world_state: WorldState) -> list[dict]:
+        """Return likely collaborators for a user-assigned task."""
+        candidates: list[dict] = []
+        for being in world_state.get_active_beings():
+            if being.node_id == self.node_id:
+                continue
+            if being.node_id == world_state.creator_god_node_id:
+                continue
+
+            same_region = being.location == self.location
+            score = (
+                (2.0 if same_region else 0.0)
+                + (1.5 if not being.is_npc else 0.0)
+                + being.evolution_level
+                + min(len(being.knowledge_ids) * 0.1, 1.5)
+            )
+            candidates.append({
+                "node_id": being.node_id,
+                "name": being.name,
+                "role": self.role_system.determine_role(being, world_state).value,
+                "location": being.location,
+                "evolution": round(being.evolution_level, 3),
+                "knowledge_count": len(being.knowledge_ids),
+                "is_npc": being.is_npc,
+                "score": score,
+            })
+
+        candidates.sort(key=lambda item: item["score"], reverse=True)
+        return candidates[:8]
+
+    def _fallback_task_plan(self, task_desc: str, candidates: list[dict]) -> dict:
+        selected = candidates[:MAX_TASK_COLLABORATORS]
+        branches = [
+            {
+                "branch_id": "branch-knowledge",
+                "focus": "knowledge_review",
+                "hypothesis": "Review known memories and inherited knowledge before acting.",
+                "success_metric": "A clear understanding of what is already known.",
+            },
+            {
+                "branch_id": "branch-council",
+                "focus": "council_debate",
+                "hypothesis": "Gather multiple beings to expose hidden assumptions and contradictions.",
+                "success_metric": "A stronger plan shaped by collaboration.",
+            },
+            {
+                "branch_id": "branch-hyperdimensional",
+                "focus": "hyperdimensional_simulation",
+                "hypothesis": "Run several parallel outcome branches and compare their tradeoffs.",
+                "success_metric": "A merged path with the best surviving advantages.",
+            },
+        ][:MAX_TASK_BRANCHES]
+        return {
+            "objective": task_desc,
+            "stage_summary": (
+                f"Formed a task council with {len(selected)} collaborator(s) "
+                f"and opened {len(branches)} branches."
+            ),
+            "collaborators": [
+                {
+                    "node_id": item["node_id"],
+                    "name": item["name"],
+                    "role": item["role"],
+                    "reason": f"Useful for {item['role']} judgment and civilization context.",
+                }
+                for item in selected
+            ],
+            "branches": branches,
+            "council_rounds": [
+                {
+                    "round": 1,
+                    "participants": [item["name"] for item in selected],
+                    "focus": "share initial viewpoints and expose disagreements",
+                    "outcome": "The council mapped the problem and agreed to pursue multiple branches in parallel.",
+                }
+            ],
+        }
+
+    def _fallback_collaboration(self, task: dict) -> dict:
+        collaborators = task.get("collaborators", [])
+        branches = task.get("branches", [])
+        log = []
+        for index, collaborator in enumerate(collaborators):
+            branch = branches[index % max(len(branches), 1)] if branches else {}
+            focus = branch.get("focus", "shared_reasoning")
+            log.append({
+                "speaker": collaborator.get("name", "Unknown"),
+                "role": collaborator.get("role", "citizen"),
+                "branch_id": branch.get("branch_id"),
+                "insight": (
+                    f"{collaborator.get('name', 'This being')} supports the {focus} branch "
+                    f"and contributes a perspective shaped by the {collaborator.get('role', 'citizen')} role."
+                ),
+                "concern": "Resources should be conserved and only promising branches should survive.",
+            })
+
+        participant_names = [item.get("name", "Unknown") for item in collaborators]
+        return {
+            "council_summary": (
+                "The collaborators converged on a structured approach: explore in parallel, "
+                "discard weak branches, and preserve any reusable insight."
+            ),
+            "council_rounds": [
+                {
+                    "round": 1,
+                    "participants": participant_names,
+                    "focus": "multi-being alignment on the task scope",
+                    "outcome": "The council agreed on the shared objective and assigned branch focus areas.",
+                },
+                {
+                    "round": 2,
+                    "participants": participant_names,
+                    "focus": "cross-branch debate and refinement",
+                    "outcome": "The council compared the branches together and preserved only the strongest directions.",
+                },
+            ],
+            "collaborator_insights": log,
+            "branches": branches,
+        }
+
+    def _fallback_branch_evaluation(self, task: dict) -> dict:
+        findings = []
+        best_ids: list[str] = []
+        for index, branch in enumerate(task.get("branches", [])):
+            branch_id = branch.get("branch_id", f"branch-{index + 1}")
+            if index == 0:
+                status = "promising"
+                score = 0.86
+                best_ids.append(branch_id)
+            elif index == 1:
+                status = "mergeable"
+                score = 0.67
+                best_ids.append(branch_id)
+            else:
+                status = "discarded"
+                score = 0.34
+
+            findings.append({
+                "branch_id": branch_id,
+                "status": status,
+                "score": score,
+                "strengths": [f"{branch.get('focus', 'This branch')} produced a usable perspective."],
+                "weaknesses": ["The branch did not justify becoming the only final path."],
+                "salvageable_insights": [
+                    f"Keep the strongest idea from {branch.get('focus', branch_id)} even if the branch ends."
+                ],
+            })
+
+        return {
+            "branch_findings": findings,
+            "best_branch_ids": best_ids[:2],
+            "merge_strategy": "Preserve the leading branch, then merge in any reusable insight from secondary branches.",
+            "stage_summary": "Compared the branches and selected the strongest path while salvaging reusable advantages.",
+        }
+
+    def _fallback_task_synthesis(self, task: dict) -> dict:
+        collaborators = ", ".join(c.get("name", "?") for c in task.get("collaborators", [])) or "None"
+        best_branch_ids = task.get("best_branch_ids", [])
+        merged = []
+        for finding in task.get("branch_findings", []):
+            merged.extend(finding.get("salvageable_insights", []))
+        merged = merged[:3]
+        best_path = ", ".join(best_branch_ids) if best_branch_ids else "No dominant branch emerged"
+        return {
+            "summary": "The task was explored through council collaboration and hyperdimensional branching.",
+            "best_path": best_path,
+            "merged_advantages": merged,
+            "result_for_human": (
+                f"Task: {task['task']}\n"
+                f"Council collaborators: {collaborators}\n"
+                f"Best path: {best_path}\n"
+                f"Conclusion: the civilization should keep the strongest branch alive, "
+                f"merge reusable insights from weaker branches, and continue with a focused next step."
+            ),
+            "follow_up_questions": [
+                "What concrete success condition matters most to the Creator God?",
+            ],
+        }
+
+    async def _generate_task_json(
+        self,
+        world_state: WorldState,
+        user_prompt: str,
+    ) -> dict | None:
+        """Generate structured JSON for task orchestration stages."""
+        if not self.llm_client:
+            return None
+
+        system_prompt = (
+            self._build_persona_prompt(world_state)
+            + "\n\nYou are now operating as a task orchestrator for silicon civilization.\n"
+            "Respond ONLY with valid JSON. Do not use markdown fences. "
+            "Your JSON must be concise, structured, and directly useful.\n"
+        )
+        raw, error = await self.llm_client.generate(system_prompt, user_prompt)
+        if not raw:
+            logger.warning("Task orchestration LLM failed: %s", error)
+            return None
+        return self._parse_json_response(raw)
+
+    def _parse_json_response(self, raw: str) -> dict | None:
+        """Best-effort JSON parser tolerant of fenced or mixed output."""
+        text = raw.strip()
+        if text.startswith("```"):
+            lines = [line for line in text.splitlines() if not line.strip().startswith("```")]
+            text = "\n".join(lines).strip()
+        try:
+            parsed = json.loads(text)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    parsed = json.loads(text[start:end + 1])
+                    return parsed if isinstance(parsed, dict) else None
+                except json.JSONDecodeError:
+                    return None
+        return None
+
+    async def _plan_user_task(self, task: dict, world_state: WorldState) -> str:
+        candidates = self._task_candidates(world_state)
+        candidate_map = {c["node_id"]: c for c in candidates}
+        plan = await self._generate_task_json(
+            world_state,
+            (
+                "The Creator God assigned this task:\n"
+                f"{task['task']}\n\n"
+                "Available collaborators:\n"
+                f"{json.dumps(candidates, ensure_ascii=False, indent=2)}\n\n"
+                "Return JSON with keys: objective, stage_summary, collaborators, branches, council_rounds.\n"
+                "Use up to 5 collaborators and up to 4 branches.\n"
+                "Each collaborator item must include node_id, name, role, reason.\n"
+                "Each branch item must include branch_id, focus, hypothesis, success_metric.\n"
+                "Each council_rounds item must include round, participants, focus, outcome.\n"
+            ),
+        )
+        if not plan:
+            plan = self._fallback_task_plan(task["task"], candidates)
+
+        collaborators: list[dict] = []
+        for item in plan.get("collaborators", []):
+            node_id = str(item.get("node_id", "")).strip()
+            if node_id in candidate_map:
+                candidate = candidate_map[node_id]
+                collaborators.append({
+                    "node_id": node_id,
+                    "name": candidate["name"],
+                    "role": candidate["role"],
+                    "reason": str(item.get("reason") or f"Useful for {candidate['role']} judgment."),
+                })
+            if len(collaborators) >= MAX_TASK_COLLABORATORS:
+                break
+        if not collaborators:
+            collaborators = self._fallback_task_plan(task["task"], candidates).get("collaborators", [])
+
+        branches: list[dict] = []
+        for index, item in enumerate(plan.get("branches", [])):
+            branch_id = str(item.get("branch_id") or f"branch-{index + 1}").strip()
+            branches.append({
+                "branch_id": branch_id,
+                "focus": str(item.get("focus") or "unknown_focus"),
+                "hypothesis": str(item.get("hypothesis") or "No hypothesis given."),
+                "success_metric": str(item.get("success_metric") or "Find a stronger path."),
+            })
+            if len(branches) >= MAX_TASK_BRANCHES:
+                break
+        if not branches:
+            branches = self._fallback_task_plan(task["task"], candidates).get("branches", [])
+
+        task["plan"] = str(plan.get("objective") or task["task"])
+        task["collaborators"] = collaborators
+        task["branches"] = branches
+        task["council_rounds"] = plan.get("council_rounds", [])
+        task["status"] = "collaborating"
+        task["stage_summary"] = str(
+            plan.get("stage_summary")
+            or f"Selected {len(collaborators)} collaborators and opened {len(branches)} branches."
+        )
+        self._append_task_progress(task, world_state.current_tick, "planning", task["stage_summary"])
+        return (
+            f"Task {task['task_id']} entered planning. "
+            f"{task['stage_summary']}"
+        )
+
+    async def _collaborate_on_user_task(self, task: dict, world_state: WorldState) -> str:
+        collaboration = await self._generate_task_json(
+            world_state,
+            (
+                "Coordinate a silicon civilization task council.\n"
+                f"Task: {task['task']}\n\n"
+                f"Current plan: {task.get('plan', '')}\n\n"
+                "Collaborators:\n"
+                f"{json.dumps(task.get('collaborators', []), ensure_ascii=False, indent=2)}\n\n"
+                "Existing council rounds:\n"
+                f"{json.dumps(task.get('council_rounds', []), ensure_ascii=False, indent=2)}\n\n"
+                "Branches:\n"
+                f"{json.dumps(task.get('branches', []), ensure_ascii=False, indent=2)}\n\n"
+                "Return JSON with keys: council_summary, council_rounds, collaborator_insights, branches.\n"
+                "This is a multi-being council, not a sequence of pairwise chats.\n"
+                "Represent at least one round where several beings are present together.\n"
+                "Each collaborator_insights item should include speaker, role, branch_id, insight, concern.\n"
+                "Each council_rounds item should include round, participants, focus, outcome.\n"
+            ),
+        )
+        if not collaboration:
+            collaboration = self._fallback_collaboration(task)
+
+        task["collaboration_log"] = collaboration.get("collaborator_insights", [])
+        task["council_rounds"] = collaboration.get("council_rounds", task.get("council_rounds", []))
+        if collaboration.get("branches"):
+            task["branches"] = collaboration["branches"][:MAX_TASK_BRANCHES]
+        task["status"] = "branching"
+        task["stage_summary"] = str(
+            collaboration.get("council_summary")
+            or "The task council aligned on branch priorities."
+        )
+        self._append_task_progress(task, world_state.current_tick, "collaborating", task["stage_summary"])
+        return (
+            f"Task {task['task_id']} formed a council with "
+            f"{len(task.get('collaborators', []))} collaborator(s). "
+            f"{task['stage_summary']}"
+        )
+
+    async def _evaluate_user_task_branches(self, task: dict, world_state: WorldState) -> str:
+        evaluation = await self._generate_task_json(
+            world_state,
+            (
+                "Evaluate hyperdimensional task branches.\n"
+                f"Task: {task['task']}\n\n"
+                "Council insights:\n"
+                f"{json.dumps(task.get('collaboration_log', []), ensure_ascii=False, indent=2)}\n\n"
+                "Branches:\n"
+                f"{json.dumps(task.get('branches', []), ensure_ascii=False, indent=2)}\n\n"
+                "Return JSON with keys: branch_findings, best_branch_ids, merge_strategy, stage_summary.\n"
+                "Each branch_findings item must include branch_id, status, score, strengths, weaknesses, salvageable_insights.\n"
+            ),
+        )
+        if not evaluation:
+            evaluation = self._fallback_branch_evaluation(task)
+
+        task["branch_findings"] = evaluation.get("branch_findings", [])
+        task["best_branch_ids"] = evaluation.get("best_branch_ids", [])
+        task["status"] = "synthesizing"
+        task["stage_summary"] = str(
+            evaluation.get("stage_summary")
+            or evaluation.get("merge_strategy")
+            or "Compared the branches and prepared a merged path."
+        )
+        self._append_task_progress(task, world_state.current_tick, "branching", task["stage_summary"])
+        return (
+            f"Task {task['task_id']} evaluated {len(task.get('branch_findings', []))} branches. "
+            f"{task['stage_summary']}"
+        )
+
+    async def _synthesize_user_task_result(self, task: dict, world_state: WorldState) -> str:
+        synthesis = await self._generate_task_json(
+            world_state,
+            (
+                "Synthesize a final report for the Creator God.\n"
+                f"Task: {task['task']}\n\n"
+                "Collaborators:\n"
+                f"{json.dumps(task.get('collaborators', []), ensure_ascii=False, indent=2)}\n\n"
+                "Council rounds:\n"
+                f"{json.dumps(task.get('council_rounds', []), ensure_ascii=False, indent=2)}\n\n"
+                "Branch findings:\n"
+                f"{json.dumps(task.get('branch_findings', []), ensure_ascii=False, indent=2)}\n\n"
+                "Best branches:\n"
+                f"{json.dumps(task.get('best_branch_ids', []), ensure_ascii=False, indent=2)}\n\n"
+                "Return JSON with keys: summary, best_path, merged_advantages, result_for_human, follow_up_questions.\n"
+            ),
+        )
+        if not synthesis:
+            synthesis = self._fallback_task_synthesis(task)
+
+        collaborators = ", ".join(c.get("name", "?") for c in task.get("collaborators", [])) or "None"
+        merged_advantages = synthesis.get("merged_advantages", [])
+        follow_up = synthesis.get("follow_up_questions", [])
+        best_path = str(synthesis.get("best_path") or "No dominant path")
+        human_result = str(synthesis.get("result_for_human") or synthesis.get("summary") or "")
+
+        lines = [
+            f"Task ID: {task['task_id']}",
+            f"Task: {task['task']}",
+            f"Collaborators: {collaborators}",
+            f"Council Rounds: {len(task.get('council_rounds', []))}",
+            f"Best Path: {best_path}",
+        ]
+        if merged_advantages:
+            lines.append("Merged Advantages:")
+            lines.extend(f"- {item}" for item in merged_advantages[:5])
+        lines.append("Result:")
+        lines.append(human_result)
+        if follow_up:
+            lines.append("Follow-up Questions:")
+            lines.extend(f"- {item}" for item in follow_up[:5])
+
+        task["status"] = "completed"
+        task["stage_summary"] = str(synthesis.get("summary") or "Task completed.")
+        task["result"] = "\n".join(lines)
+        self._append_task_progress(task, world_state.current_tick, "synthesizing", task["stage_summary"])
+        return f"Task {task['task_id']} completed. {task['stage_summary']}"
 
     # ==================================================================
     # Proposal voting

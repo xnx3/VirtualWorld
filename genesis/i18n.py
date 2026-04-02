@@ -113,6 +113,7 @@ EN: dict[str, str] = {
     "task_complete": "Task Complete",
     "task_question": "Question",
     "task_received": "Creator God task received:",
+    "task_progress": "Task Progress",
 
     # --- Console: knowledge ---
     "knowledge_discovered": "New Knowledge Discovered:",
@@ -180,10 +181,16 @@ EN: dict[str, str] = {
 
     # --- Main: task command ---
     "task_results_title": "=== Completed Task Results ===",
+    "task_pending_title": "=== Pending / In-Progress Tasks ===",
     "task_label": "Task",
+    "task_id_label": "Task ID",
+    "task_status_label": "Status",
+    "task_summary_label": "Summary",
+    "task_collaborators_label": "Collaborators",
     "result_label": "Result",
     "no_tasks": "No tasks. Usage: genesis.sh task 'your thinking question here'",
     "task_assigned": "Task assigned to your being: {task}",
+    "task_queued_summary": "Queued. The being will begin planning on the next tick.",
     "task_check": "It will be processed in the next tick. Check results with: genesis.sh task",
 
     # --- Reporter: status ---
@@ -395,6 +402,7 @@ ZH: dict[str, str] = {
     "task_complete": "任务完成",
     "task_question": "问题",
     "task_received": "收到创世神任务:",
+    "task_progress": "任务进度",
 
     # --- Console: knowledge ---
     "knowledge_discovered": "发现新知识:",
@@ -462,10 +470,16 @@ ZH: dict[str, str] = {
 
     # --- Main: task command ---
     "task_results_title": "=== 已完成的任务结果 ===",
+    "task_pending_title": "=== 进行中的任务 ===",
     "task_label": "任务",
+    "task_id_label": "任务 ID",
+    "task_status_label": "状态",
+    "task_summary_label": "摘要",
+    "task_collaborators_label": "协作者",
     "result_label": "结果",
     "no_tasks": "无任务。用法: genesis.sh task '你的思考问题'",
     "task_assigned": "任务已分配给你的生命体: {task}",
+    "task_queued_summary": "任务已排队，将在下一个 tick 开始规划。",
     "task_check": "将在下一个 tick 处理。查看结果: genesis.sh task",
 
     # --- Reporter: status ---

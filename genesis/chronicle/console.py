@@ -237,6 +237,17 @@ def user_task(task_desc: str, result: str | None = None) -> None:
         _write(f"  {ICONS['task']} {C.CYAN}{t('task_received')}{C.RESET} {task_desc[:60]}")
 
 
+def user_task_progress(task_desc: str, status: str, summary: str = "") -> None:
+    _write(
+        f"  {ICONS['task']} {C.CYAN}{t('task_progress')}{C.RESET} "
+        f"{task_desc[:50]}"
+    )
+    _write(f"     {C.DIM}{t('task_status_label')}:{C.RESET} {status}")
+    if summary:
+        for line in _wrap(summary, 65):
+            _write(f"     {C.BCYAN}{line}{C.RESET}")
+
+
 def knowledge_event(event_type: str, content: str) -> None:
     icon = ICONS["knowledge"]
     if event_type == "discovered":

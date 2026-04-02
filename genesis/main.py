@@ -446,11 +446,16 @@ class GenesisNode:
 
                 # Load user-assigned tasks
                 self._load_user_tasks()
+                self._save_task_status()
 
                 # Show user tasks if any
-                pending_tasks = [t for t in self.being._user_tasks if t.get("result") is None]
+                pending_tasks = self.being.get_task_statuses()
                 for t in pending_tasks:
-                    con.user_task(t["task"])
+                    con.user_task_progress(
+                        t.get("task", "?"),
+                        t.get("status", "queued"),
+                        t.get("stage_summary", ""),
+                    )
 
                 # === PERCEIVE (shown by agent, but we also show on console) ===
                 perception = await self.being.perceive(self.world_state)
@@ -477,8 +482,12 @@ class GenesisNode:
                 if self.being.current_action:
                     action_detail = ""
                     for tx in transactions:
-                        if tx.get("tx_type") == "ACTION":
-                            action_detail = tx.get("data", {}).get("details", "")
+                        tx_data = tx.get("data", {})
+                        if (
+                            tx.get("tx_type") == "ACTION"
+                            and tx_data.get("action_type") == self.being.current_action
+                        ):
+                            action_detail = tx_data.get("details", "")
                             break
                     con.decide(
                         self.being.name,
@@ -507,6 +516,7 @@ class GenesisNode:
                 for t in completed:
                     con.user_task(t["task"], t["result"])
                 self._save_task_results()
+                self._save_task_status()
 
                 # Submit transactions
                 for tx_data in transactions:
@@ -949,11 +959,18 @@ class GenesisNode:
             tasks = json.loads(task_file.read_text())
             for task in tasks:
                 if task.get("result") is None:
-                    self.being.assign_task(task["task"])
+                    self.being.assign_task(task)
             # Clear the file after loading
             task_file.write_text("[]")
         except (json.JSONDecodeError, KeyError):
             pass
+
+    def _save_task_status(self) -> None:
+        """Persist in-progress task state for CLI and UI inspection."""
+        status_file = self.data_dir / "commands" / "task_status.json"
+        status_file.parent.mkdir(parents=True, exist_ok=True)
+        statuses = self.being.get_task_statuses()
+        status_file.write_text(json.dumps(statuses, ensure_ascii=False, indent=2))
 
     def _save_task_results(self) -> None:
         """Save completed task results for the user to read."""
@@ -1249,25 +1266,69 @@ def run_task(args):
 
     task_text = " ".join(args.task_text) if args.task_text else ""
     if not task_text:
+        pending_file = data_dir / "commands" / "task.json"
+        status_file = data_dir / "commands" / "task_status.json"
         result_file = data_dir / "commands" / "task_results.json"
+        has_output = False
+
+        pending: list[dict] = []
+        for path in (pending_file, status_file):
+            if path.exists():
+                try:
+                    for item in json.loads(path.read_text()):
+                        if isinstance(item, dict):
+                            pending.append(item)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+        deduped_pending: dict[str, dict] = {}
+        for item in pending:
+            task_id = str(item.get("task_id") or item.get("task") or "")
+            deduped_pending[task_id] = item
+
+        if deduped_pending:
+            has_output = True
+            print(t("task_pending_title"))
+            for item in deduped_pending.values():
+                print(f"\n{t('task_id_label')}: {item.get('task_id', '?')}")
+                print(f"{t('task_label')}: {item.get('task', '?')}")
+                print(f"{t('task_status_label')}: {item.get('status', 'queued')}")
+                summary = item.get("stage_summary")
+                if summary:
+                    print(f"{t('task_summary_label')}: {summary}")
+                collaborators = item.get("collaborators") or []
+                if collaborators:
+                    names = ", ".join(c.get("name", "?") for c in collaborators[:5])
+                    print(f"{t('task_collaborators_label')}: {names}")
+                print("-" * 40)
+
         if result_file.exists():
             results = json.loads(result_file.read_text())
             if results:
+                has_output = True
                 print(t("task_results_title"))
                 for r in results:
-                    print(f"\n{t('task_label')}: {r.get('task', '?')}")
+                    print(f"\n{t('task_id_label')}: {r.get('task_id', '?')}")
+                    print(f"{t('task_label')}: {r.get('task', '?')}")
                     print(f"{t('result_label')}: {r.get('result', 'pending...')}")
                     print("-" * 40)
                 result_file.write_text("[]")
-            else:
-                print(t("no_tasks"))
-        else:
+        if not has_output:
             print(t("no_tasks"))
         return
 
-    tasks.append({"task": task_text, "result": None})
+    task_id = f"task-{int(time.time() * 1000)}"
+    tasks.append({
+        "task_id": task_id,
+        "task": task_text,
+        "status": "queued",
+        "stage_summary": t("task_queued_summary"),
+        "created_at": int(time.time()),
+        "result": None,
+    })
     task_file.write_text(json.dumps(tasks, ensure_ascii=False, indent=2))
     print(t("task_assigned", task=task_text))
+    print(f"{t('task_id_label')}: {task_id}")
     print(t("task_check"))
 
 
