@@ -37,12 +37,30 @@ def setup_logging(data_dir: str) -> None:
     )
 
 
+def _task_text_key(task_text: str) -> str:
+    """Normalize task text for duplicate detection."""
+    return " ".join(task_text.strip().lower().split())
+
+
+def _task_status_rank(status: str) -> int:
+    order = {
+        "queued": 0,
+        "planning": 1,
+        "collaborating": 2,
+        "branching": 3,
+        "synthesizing": 4,
+        "completed": 5,
+    }
+    return order.get(status, -1)
+
+
 def enqueue_user_task(data_dir: str | Path, task_text: str) -> dict:
     """Persist a user task so a running or future node can pick it up."""
     from genesis.i18n import t
 
     data_dir = Path(data_dir)
     task_file = data_dir / "commands" / "task.json"
+    status_file = data_dir / "commands" / "task_status.json"
     task_file.parent.mkdir(parents=True, exist_ok=True)
 
     tasks = []
@@ -52,6 +70,34 @@ def enqueue_user_task(data_dir: str | Path, task_text: str) -> dict:
         except (json.JSONDecodeError, ValueError):
             tasks = []
 
+    normalized_key = _task_text_key(task_text)
+    active_statuses = {"queued", "planning", "collaborating", "branching", "synthesizing"}
+
+    for existing in tasks:
+        if not isinstance(existing, dict):
+            continue
+        if existing.get("status") not in active_statuses:
+            continue
+        if _task_text_key(str(existing.get("task", ""))) == normalized_key:
+            reused = dict(existing)
+            reused["deduplicated"] = True
+            return reused
+
+    if status_file.exists():
+        try:
+            live_tasks = json.loads(status_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError):
+            live_tasks = []
+        for existing in live_tasks:
+            if not isinstance(existing, dict):
+                continue
+            if existing.get("status") not in active_statuses:
+                continue
+            if _task_text_key(str(existing.get("task", ""))) == normalized_key:
+                reused = dict(existing)
+                reused["deduplicated"] = True
+                return reused
+
     task_record = {
         "task_id": f"task-{int(time.time() * 1000)}",
         "task": task_text,
@@ -59,6 +105,7 @@ def enqueue_user_task(data_dir: str | Path, task_text: str) -> dict:
         "stage_summary": t("task_queued_summary"),
         "created_at": int(time.time()),
         "result": None,
+        "deduplicated": False,
     }
     tasks.append(task_record)
     task_file.write_text(json.dumps(tasks, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1417,8 +1464,23 @@ def run_task(args):
 
         deduped_pending: dict[str, dict] = {}
         for item in pending:
-            task_id = str(item.get("task_id") or item.get("task") or "")
-            deduped_pending[task_id] = item
+            task_text = str(item.get("task", ""))
+            key = _task_text_key(task_text) or str(item.get("task_id") or "")
+            existing = deduped_pending.get(key)
+            if existing is None:
+                deduped_pending[key] = item
+                continue
+
+            existing_rank = _task_status_rank(str(existing.get("status", "queued")))
+            current_rank = _task_status_rank(str(item.get("status", "queued")))
+            if current_rank > existing_rank:
+                deduped_pending[key] = item
+                continue
+            if current_rank == existing_rank:
+                existing_time = int(existing.get("created_at") or 0)
+                current_time = int(item.get("created_at") or 0)
+                if current_time > existing_time:
+                    deduped_pending[key] = item
 
         if deduped_pending:
             has_output = True
@@ -1452,7 +1514,10 @@ def run_task(args):
         return
 
     task_record = enqueue_user_task(data_dir, task_text)
-    print(t("task_assigned", task=task_text))
+    if task_record.get("deduplicated"):
+        print(t("task_deduplicated"))
+    else:
+        print(t("task_assigned", task=task_text))
     print(f"{t('task_id_label')}: {task_record['task_id']}")
     print(t("task_check"))
 

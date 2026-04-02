@@ -57,6 +57,22 @@ MAX_TASK_COLLABORATORS = 5
 MAX_TASK_BRANCHES = 4
 
 
+def _task_text_key(task_text: str) -> str:
+    return " ".join(task_text.strip().lower().split())
+
+
+def _task_status_rank(status: str) -> int:
+    order = {
+        "queued": 0,
+        "planning": 1,
+        "collaborating": 2,
+        "branching": 3,
+        "synthesizing": 4,
+        "completed": 5,
+    }
+    return order.get(status, -1)
+
+
 class SiliconBeing:
     """The AI agent representing a single silicon being on this node.
 
@@ -690,8 +706,19 @@ class SiliconBeing:
         """
         normalized = self._normalize_user_task(task_description)
         task_id = normalized["task_id"]
+        normalized_text = _task_text_key(str(normalized.get("task", "")))
         if any(existing.get("task_id") == task_id for existing in self._user_tasks):
             return
+        for existing in self._user_tasks:
+            if existing.get("status") not in TASK_ACTIVE_STATUSES:
+                continue
+            if _task_text_key(str(existing.get("task", ""))) == normalized_text:
+                logger.info(
+                    "%s ignored duplicate task text and reused %s",
+                    self.name,
+                    existing.get("task_id", "unknown"),
+                )
+                return
         self._user_tasks.append(normalized)
         logger.info("%s received user task %s: %s", self.name, task_id, normalized["task"][:80])
 
@@ -710,11 +737,65 @@ class SiliconBeing:
             if task.get("status") in TASK_ACTIVE_STATUSES
         ]
 
+    def _deduplicate_active_tasks(self) -> None:
+        """Collapse duplicate active tasks that only differ by task_id."""
+        active_by_text: dict[str, dict] = {}
+        deduplicated: list[dict] = []
+
+        for task in self._user_tasks:
+            status = str(task.get("status", "queued"))
+            if status not in TASK_ACTIVE_STATUSES:
+                deduplicated.append(task)
+                continue
+
+            key = _task_text_key(str(task.get("task", "")))
+            existing = active_by_text.get(key)
+            if existing is None:
+                active_by_text[key] = task
+                deduplicated.append(task)
+                continue
+
+            keep_existing = True
+            existing_rank = _task_status_rank(str(existing.get("status", "queued")))
+            current_rank = _task_status_rank(status)
+            if current_rank > existing_rank:
+                keep_existing = False
+            elif current_rank == existing_rank:
+                existing_created = int(existing.get("created_at") or 0)
+                current_created = int(task.get("created_at") or 0)
+                if current_created < existing_created:
+                    keep_existing = False
+
+            if keep_existing:
+                logger.info(
+                    "%s collapsed duplicate task %s into %s",
+                    self.name,
+                    task.get("task_id", "unknown"),
+                    existing.get("task_id", "unknown"),
+                )
+                continue
+
+            logger.info(
+                "%s replaced duplicate task %s with %s",
+                self.name,
+                existing.get("task_id", "unknown"),
+                task.get("task_id", "unknown"),
+            )
+            for idx, item in enumerate(deduplicated):
+                if item is existing:
+                    deduplicated[idx] = task
+                    break
+            active_by_text[key] = task
+
+        self._user_tasks = deduplicated
+
     async def _process_user_tasks(self, world_state: WorldState) -> list[dict]:
         """Process pending user-assigned thinking tasks."""
         transactions = []
         if not self._user_tasks:
             return transactions
+
+        self._deduplicate_active_tasks()
 
         # Process one task per tick
         for task in self._user_tasks:

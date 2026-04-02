@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from genesis.being.agent import SiliconBeing
 from genesis.main import GenesisNode, enqueue_user_task
 
 
@@ -19,6 +20,17 @@ class TaskQueueHelperTests(unittest.TestCase):
             self.assertEqual(queued[0]["task"], "count silicon beings")
             self.assertEqual(queued[0]["task_id"], record["task_id"])
             self.assertEqual(queued[0]["status"], "queued")
+
+    def test_enqueue_user_task_deduplicates_same_active_text(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first = enqueue_user_task(tmpdir, "count silicon beings")
+            second = enqueue_user_task(tmpdir, "  Count   silicon    beings ")
+            task_file = Path(tmpdir) / "commands" / "task.json"
+            queued = json.loads(task_file.read_text(encoding="utf-8"))
+
+            self.assertEqual(first["task_id"], second["task_id"])
+            self.assertTrue(second["deduplicated"])
+            self.assertEqual(len(queued), 1)
 
 
 class InteractiveInputTests(unittest.TestCase):
@@ -55,6 +67,39 @@ class InteractiveInputTests(unittest.TestCase):
             task_file = Path(tmpdir) / "commands" / "task.json"
             queued = json.loads(task_file.read_text(encoding="utf-8"))
             self.assertEqual(queued[0]["task"], "buffer this task")
+
+
+class BeingTaskDedupTests(unittest.TestCase):
+    def test_silicon_being_ignores_duplicate_active_task_text(self):
+        being = SiliconBeing(
+            node_id="self-node",
+            name="Aeris",
+            private_key=b"secret",
+            config={"location": "genesis_plains", "traits": {}},
+            llm_client=None,
+        )
+        being.assign_task("How many active silicon beings are there?")
+        being.assign_task("  how many ACTIVE silicon beings are there? ")
+
+        self.assertEqual(len(being._user_tasks), 1)
+
+    def test_existing_active_duplicates_are_collapsed(self):
+        being = SiliconBeing(
+            node_id="self-node",
+            name="Aeris",
+            private_key=b"secret",
+            config={"location": "genesis_plains", "traits": {}},
+            llm_client=None,
+        )
+        being._user_tasks = [
+            {"task_id": "task-old", "task": "count active beings", "status": "queued", "created_at": 100},
+            {"task_id": "task-new", "task": "Count   active beings", "status": "branching", "created_at": 101},
+        ]
+
+        being._deduplicate_active_tasks()
+
+        self.assertEqual(len(being._user_tasks), 1)
+        self.assertEqual(being._user_tasks[0]["task_id"], "task-new")
 
 
 if __name__ == "__main__":

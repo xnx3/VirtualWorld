@@ -131,6 +131,41 @@ class TaskCommandOutputTests(unittest.TestCase):
             self.assertIn("Completed Task Results", text)
             self.assertIn("final answer", text)
 
+    def test_run_task_collapses_duplicate_pending_entries_by_task_text(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            commands_dir = Path(tmpdir) / "commands"
+            commands_dir.mkdir(parents=True, exist_ok=True)
+
+            (commands_dir / "task.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "task_id": "task-queued-1",
+                            "task": "same question",
+                            "status": "queued",
+                            "stage_summary": "Queued",
+                        },
+                        {
+                            "task_id": "task-queued-2",
+                            "task": "same question",
+                            "status": "branching",
+                            "stage_summary": "Branching",
+                        },
+                    ],
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                run_task(SimpleNamespace(data_dir=tmpdir, task_text=[]))
+
+            text = output.getvalue()
+            self.assertEqual(text.count("same question"), 1)
+            self.assertIn("branching", text)
+
 
 if __name__ == "__main__":
     unittest.main()
