@@ -253,6 +253,24 @@ class P2PServerAccessorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(delivered, [(MessageType.PING, "peer-1")])
 
+    async def test_public_reachability_callback_fires_only_on_transition(self):
+        identity = NodeIdentity.generate()
+        server = P2PServer("local-node", identity.private_key)
+        transitions = []
+
+        server.on_public_reachability_change(lambda reachable: transitions.append(reachable))
+
+        with patch("genesis.network.server.time.time", return_value=100.0):
+            await server._record_public_inbound("8.8.8.8")
+        with patch("genesis.network.server.time.time", return_value=120.0):
+            await server._record_public_inbound("1.1.1.1")
+        with patch("genesis.network.server.time.time", return_value=140.0):
+            await server._record_public_inbound("192.168.1.8")
+
+        self.assertEqual(transitions, [True])
+        with patch("genesis.network.server.time.time", return_value=150.0):
+            self.assertTrue(server.has_recent_public_inbound())
+
 
 class BlockchainPendingTxTests(unittest.IsolatedAsyncioTestCase):
     async def test_add_pending_tx_accepts_serialized_transaction(self):

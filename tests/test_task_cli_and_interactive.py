@@ -1,3 +1,4 @@
+import asyncio
 import json
 import socket
 import tempfile
@@ -296,6 +297,101 @@ class GenesisStartupGuardTests(unittest.TestCase):
             ):
                 with patch("genesis.main.socket.socket", side_effect=OSError("skip")):
                     self.assertEqual(node._resolve_advertise_address(), "8.8.8.8")
+
+    def test_refresh_local_peer_endpoint_submits_state_update_when_runtime_capability_changes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.identity = SimpleNamespace(node_id="self-node")
+            node.being = SimpleNamespace(name="Self")
+            node.mempool = object()
+            node.server = SimpleNamespace(
+                has_route_to_peer=lambda peer_id: False,
+                has_recent_public_inbound=lambda: True,
+            )
+            node.config = SimpleNamespace(
+                network=SimpleNamespace(
+                    listen_port=19841,
+                    peer_endpoint_ttl=600,
+                    relay_capable=False,
+                    max_relay_hints=2,
+                    advertise_address="8.8.8.8",
+                )
+            )
+            state = WorldState()
+            state.apply_being_join(
+                "self-node",
+                "Self",
+                {
+                    "p2p_address": "8.8.8.8",
+                    "p2p_port": 19841,
+                    "p2p_updated_at": 1_000,
+                    "p2p_ttl": 600,
+                    "p2p_transports": ["tcp"],
+                    "p2p_relay_hints": [],
+                    "p2p_capabilities": {"relay": False},
+                },
+            )
+            node.world_state = state
+
+            submitted = []
+
+            async def fake_submit(tx_type: str, data: dict) -> None:
+                submitted.append((tx_type, dict(data)))
+                node._apply_tx_to_state(tx_type, node.identity.node_id, data, "tx-1")
+
+            node._submit_tx = fake_submit  # type: ignore[method-assign]
+
+            with patch("genesis.main.time.time", return_value=1_200):
+                refreshed = asyncio.run(node._refresh_local_peer_endpoint_if_needed())
+
+            self.assertTrue(refreshed)
+            self.assertEqual(submitted[0][0], "STATE_UPDATE")
+            self.assertEqual(submitted[0][1]["p2p_capabilities"], {"relay": True})
+
+    def test_refresh_local_peer_endpoint_skips_when_chain_contact_card_is_current(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.identity = SimpleNamespace(node_id="self-node")
+            node.being = SimpleNamespace(name="Self")
+            node.mempool = object()
+            node.server = SimpleNamespace(
+                has_route_to_peer=lambda peer_id: False,
+                has_recent_public_inbound=lambda: True,
+            )
+            node.config = SimpleNamespace(
+                network=SimpleNamespace(
+                    listen_port=19841,
+                    peer_endpoint_ttl=600,
+                    relay_capable=False,
+                    max_relay_hints=2,
+                    advertise_address="8.8.8.8",
+                )
+            )
+            state = WorldState()
+            state.apply_being_join(
+                "self-node",
+                "Self",
+                {
+                    "p2p_address": "8.8.8.8",
+                    "p2p_port": 19841,
+                    "p2p_updated_at": 1_000,
+                    "p2p_ttl": 600,
+                    "p2p_transports": ["tcp"],
+                    "p2p_relay_hints": [],
+                    "p2p_capabilities": {"relay": True},
+                },
+            )
+            node.world_state = state
+
+            async def fail_submit(tx_type: str, data: dict) -> None:
+                raise AssertionError("unexpected submit")
+
+            node._submit_tx = fail_submit  # type: ignore[method-assign]
+
+            with patch("genesis.main.time.time", return_value=1_200):
+                refreshed = asyncio.run(node._refresh_local_peer_endpoint_if_needed())
+
+            self.assertFalse(refreshed)
 
 
 class BeingTaskDedupTests(unittest.TestCase):

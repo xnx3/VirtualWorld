@@ -146,6 +146,8 @@ class GenesisNode:
         self.chronicle = None
         self.consensus = None
         self.webrtc = None
+        self._peer_endpoint_refresh_in_flight = False
+        self._last_peer_endpoint_refresh_at = 0.0
 
     def _load_persisted_world_state(self):
         """Load the last locally-saved world snapshot if present."""
@@ -451,6 +453,79 @@ class GenesisNode:
                 return candidate
         return candidates[0] if candidates else ""
 
+    @staticmethod
+    def _peer_endpoint_signature_from_dict(endpoint: dict[str, object]) -> tuple[object, ...]:
+        caps = endpoint.get("p2p_capabilities", {}) or {}
+        return (
+            str(endpoint.get("p2p_address", "") or "").strip(),
+            int(endpoint.get("p2p_port", 0) or 0),
+            str(endpoint.get("p2p_relay", "") or "").strip(),
+            tuple(str(item).strip() for item in (endpoint.get("p2p_transports", []) or [])),
+            tuple(str(item).strip() for item in (endpoint.get("p2p_relay_hints", []) or [])),
+            json.dumps(dict(caps) if isinstance(caps, dict) else {}, sort_keys=True, separators=(",", ":")),
+        )
+
+    @classmethod
+    def _peer_endpoint_signature_from_being(cls, being: object | None) -> tuple[object, ...]:
+        if being is None:
+            return ("", 0, "", (), (), "{}")
+        return cls._peer_endpoint_signature_from_dict(
+            {
+                "p2p_address": getattr(being, "p2p_address", ""),
+                "p2p_port": getattr(being, "p2p_port", 0),
+                "p2p_relay": getattr(being, "p2p_relay", ""),
+                "p2p_transports": getattr(being, "p2p_transports", []) or [],
+                "p2p_relay_hints": getattr(being, "p2p_relay_hints", []) or [],
+                "p2p_capabilities": getattr(being, "p2p_capabilities", {}) or {},
+            }
+        )
+
+    async def _refresh_local_peer_endpoint_if_needed(self, *, force: bool = False) -> bool:
+        """Publish a fresh on-chain contact card when runtime reachability changed."""
+        if self._peer_endpoint_refresh_in_flight:
+            return False
+        if (
+            self.identity is None
+            or self.world_state is None
+            or self.being is None
+            or self.config is None
+            or self.mempool is None
+        ):
+            return False
+
+        local_being = self.world_state.get_being(self.identity.node_id)
+        if local_being is None or local_being.status != "active":
+            return False
+
+        endpoint = self._build_peer_endpoint()
+        current_signature = self._peer_endpoint_signature_from_dict(endpoint)
+        published_signature = self._peer_endpoint_signature_from_being(local_being)
+        if current_signature == published_signature:
+            return False
+
+        now = time.time()
+        if not force and (now - self._last_peer_endpoint_refresh_at) < 5.0:
+            return False
+
+        self._peer_endpoint_refresh_in_flight = True
+        try:
+            self._last_peer_endpoint_refresh_at = now
+            await self._submit_tx("STATE_UPDATE", endpoint)
+            logger.info("Published refreshed on-chain peer endpoint")
+            return True
+        finally:
+            self._peer_endpoint_refresh_in_flight = False
+
+    def _handle_public_reachability_change(self, reachable: bool) -> None:
+        """Schedule an immediate contact-card refresh after public reachability changes."""
+        if not reachable:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self._refresh_local_peer_endpoint_if_needed(force=True))
+
     def _get_chain_seed_peers(self) -> list[tuple[str, str, int]]:
         """Return peer endpoints learned from the synced world state."""
         if self.world_state is None or self.identity is None:
@@ -715,6 +790,7 @@ class GenesisNode:
         )
         if getattr(self.config.network, "webrtc_enabled", True) and not self.webrtc.available:
             logger.info("WebRTC transport enabled but aiortc is unavailable; continuing with TCP/relay only")
+        self.server.on_public_reachability_change(self._handle_public_reachability_change)
         self.discovery.on_peer_discovered(self._handle_discovered_peer)
         self.server.on_message(self._handle_network_message)
 
@@ -974,6 +1050,7 @@ class GenesisNode:
             try:
                 tick_start = time.time()
                 await self._run_periodic_sync_if_due()
+                await self._refresh_local_peer_endpoint_if_needed()
 
                 # 获取当前生命体状态
                 being_state = self.world_state.get_being(self.identity.node_id)
@@ -1166,6 +1243,7 @@ class GenesisNode:
                 wait_time = max(0, tick_interval - elapsed)
                 while wait_time > 0 and not self._shutdown:
                     await self._run_periodic_sync_if_due()
+                    await self._refresh_local_peer_endpoint_if_needed()
                     await asyncio.sleep(min(1.0, wait_time))
                     wait_time -= 1.0
                 if self._shutdown:

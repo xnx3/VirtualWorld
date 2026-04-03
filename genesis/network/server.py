@@ -58,6 +58,7 @@ class P2PServer:
         self._peer_capabilities: dict[str, dict[str, Any]] = {}
         self._peer_transports: dict[str, list[str]] = {}
         self._virtual_connections: dict[str, tuple[str, Callable[[Message], Awaitable[None] | None]]] = {}
+        self._public_reachability_handlers: list[Callable[[bool], Awaitable[None] | None]] = []
         self._last_public_inbound_at: float = 0.0
 
     # ------------------------------------------------------------------
@@ -86,6 +87,13 @@ class P2PServer:
     def has_recent_public_inbound(self, max_age: float = 3600.0) -> bool:
         """True after a recent inbound connection from a globally routable peer."""
         return self._last_public_inbound_at > 0 and (time.time() - self._last_public_inbound_at) <= max_age
+
+    def on_public_reachability_change(
+        self,
+        callback: Callable[[bool], Awaitable[None] | None],
+    ) -> None:
+        """Register a callback for public reachability transitions."""
+        self._public_reachability_handlers.append(callback)
 
     def has_route_to_peer(self, node_id: str) -> bool:
         """True when this node can currently reach *node_id* directly or via relay."""
@@ -391,6 +399,26 @@ class P2PServer:
         """
         self._message_handlers.append(callback)
 
+    async def _dispatch_public_reachability_change(self, reachable: bool) -> None:
+        """Notify listeners that public reachability changed."""
+        for handler in self._public_reachability_handlers:
+            try:
+                result = handler(reachable)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.exception("Error in public reachability handler")
+
+    async def _record_public_inbound(self, remote_ip: str) -> None:
+        """Record an inbound connection from a public IP and emit transitions."""
+        if not self._is_public_ip(remote_ip):
+            return
+
+        was_public = self.has_recent_public_inbound()
+        self._last_public_inbound_at = time.time()
+        if not was_public:
+            await self._dispatch_public_reachability_change(True)
+
     # ------------------------------------------------------------------
     # Internal: inbound handling
     # ------------------------------------------------------------------
@@ -474,8 +502,7 @@ class P2PServer:
             )
         )
         self.register_contact_card(peer_id, transports=["tcp"])
-        if self._is_public_ip(remote_ip):
-            self._last_public_inbound_at = time.time()
+        await self._record_public_inbound(remote_ip)
 
         logger.info("Inbound peer %s from %s", peer_id[:16], remote_ip)
         asyncio.create_task(self._read_loop(peer_id, reader, writer))
