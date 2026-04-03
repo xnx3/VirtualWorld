@@ -115,6 +115,12 @@ network:
   peer_endpoint_ttl: 600
   relay_capable: false
   max_relay_hints: 3
+  webrtc_enabled: true
+  stun_servers:
+    - "stun:stun.l.google.com:19302"
+  turn_servers: []
+  webrtc_offer_timeout: 20
+  webrtc_session_ttl: 300
 
 being:
   hibernate_safety_timeout: 300

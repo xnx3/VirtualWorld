@@ -284,7 +284,7 @@ class GenesisNode:
         if self.world_state is None or self.identity is None:
             return []
 
-        relay_candidates: list[tuple[int, str]] = []
+        relay_candidates: list[tuple[int, int, str]] = []
         for being in self.world_state.beings.values():
             if being.node_id == self.identity.node_id or being.is_npc:
                 continue
@@ -298,10 +298,11 @@ class GenesisNode:
             ):
                 continue
             updated_at = int(getattr(being, "p2p_updated_at", 0) or 0)
-            relay_candidates.append((updated_at, being.node_id))
+            route_priority = 1 if self.server and self.server.has_route_to_peer(being.node_id) else 0
+            relay_candidates.append((route_priority, updated_at, being.node_id))
 
         relay_candidates.sort(reverse=True)
-        return [node_id for _, node_id in relay_candidates[: self._relay_hint_limit()]]
+        return [node_id for _, _, node_id in relay_candidates[: self._relay_hint_limit()]]
 
     def _refresh_chain_contact_cards(self) -> None:
         """Push chain-learned transport and relay hints into the live transport router."""
@@ -650,7 +651,17 @@ class GenesisNode:
             bootstrap_nodes=self.config.network.bootstrap_nodes,
         )
         self.chain_sync = ChainSync(self.server, self.peer_manager)
-        self.webrtc = WebRTCSessionManager(self.identity.node_id, self.server)
+        self.webrtc = WebRTCSessionManager(
+            self.identity.node_id,
+            self.server,
+            enabled=getattr(self.config.network, "webrtc_enabled", True),
+            stun_servers=getattr(self.config.network, "stun_servers", None),
+            turn_servers=getattr(self.config.network, "turn_servers", None),
+            offer_timeout=getattr(self.config.network, "webrtc_offer_timeout", 20),
+            session_ttl=getattr(self.config.network, "webrtc_session_ttl", 300),
+        )
+        if getattr(self.config.network, "webrtc_enabled", True) and not self.webrtc.available:
+            logger.info("WebRTC transport enabled but aiortc is unavailable; continuing with TCP/relay only")
         self.discovery.on_peer_discovered(self._handle_discovered_peer)
         self.server.on_message(self._handle_network_message)
 

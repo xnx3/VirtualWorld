@@ -33,6 +33,18 @@ network:
   peer_endpoint_ttl: 600      # Seconds a published on-chain peer endpoint stays fresh
   relay_capable: false        # Set true only on publicly reachable nodes willing to relay traffic
   max_relay_hints: 3          # Max relay node IDs advertised in each on-chain contact card
+  webrtc_enabled: true        # Enable WebRTC data channels for NAT traversal and relay-assisted dialing
+  stun_servers:
+    - "stun:stun.l.google.com:19302"
+  turn_servers: []            # Fill with your own TURN relays when home NATs cannot hole-punch directly
+  # turn_servers:
+  #   - urls:
+  #       - "turn:turn.example.com:3478?transport=udp"
+  #       - "turns:turn.example.com:5349?transport=tcp"
+  #     username: "genesis"
+  #     credential: "replace-me"
+  webrtc_offer_timeout: 20    # Seconds to wait for WebRTC signaling progress before retrying
+  webrtc_session_ttl: 300     # Max age of an unfinished WebRTC negotiation before cleanup
 
 # Simulation Configuration
 simulation:

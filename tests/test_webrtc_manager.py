@@ -20,6 +20,19 @@ class _FakeIceCandidate:
             setattr(self, key, value)
 
 
+class _FakeRTCIceServer:
+    def __init__(self, urls, username=None, credential=None, credentialType=None) -> None:
+        self.urls = urls
+        self.username = username
+        self.credential = credential
+        self.credentialType = credentialType
+
+
+class _FakeRTCConfiguration:
+    def __init__(self, iceServers=None) -> None:
+        self.iceServers = list(iceServers or [])
+
+
 class _FakeDataChannel:
     def __init__(self) -> None:
         self._handlers = {}
@@ -43,8 +56,9 @@ class _FakeDataChannel:
 
 
 class _FakePeerConnection:
-    def __init__(self) -> None:
+    def __init__(self, configuration=None) -> None:
         self._handlers = {}
+        self.configuration = configuration
         self.localDescription = None
         self.remoteDescription = None
         self.connectionState = "new"
@@ -117,11 +131,28 @@ class WebRTCManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(manager.available)
         self.assertEqual(manager.advertised_transports(["tcp"]), ["tcp"])
 
+    def test_manager_can_be_disabled_even_with_backend_present(self):
+        backend = {
+            "RTCPeerConnection": _FakePeerConnection,
+            "RTCSessionDescription": _FakeDescription,
+            "RTCIceCandidate": _FakeIceCandidate,
+            "RTCConfiguration": _FakeRTCConfiguration,
+            "RTCIceServer": _FakeRTCIceServer,
+        }
+
+        with patch("genesis.network.webrtc._load_aiortc_backend", return_value=backend):
+            manager = WebRTCSessionManager("local-node", _FakeServer(), enabled=False)
+
+        self.assertFalse(manager.available)
+        self.assertEqual(manager.advertised_transports(["tcp"]), ["tcp"])
+
     async def test_ensure_session_sends_offer_and_registers_virtual_transport(self):
         backend = {
             "RTCPeerConnection": _FakePeerConnection,
             "RTCSessionDescription": _FakeDescription,
             "RTCIceCandidate": _FakeIceCandidate,
+            "RTCConfiguration": _FakeRTCConfiguration,
+            "RTCIceServer": _FakeRTCIceServer,
         }
         server = _FakeServer()
         server.routes.add("peer-1")
@@ -149,11 +180,90 @@ class WebRTCManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(server.injected[0][1].msg_type, MessageType.PING)
         self.assertEqual(server.injected[0][2], "webrtc")
 
+    async def test_ensure_session_applies_configured_ice_servers(self):
+        backend = {
+            "RTCPeerConnection": _FakePeerConnection,
+            "RTCSessionDescription": _FakeDescription,
+            "RTCIceCandidate": _FakeIceCandidate,
+            "RTCConfiguration": _FakeRTCConfiguration,
+            "RTCIceServer": _FakeRTCIceServer,
+        }
+        server = _FakeServer()
+        server.routes.add("peer-1")
+
+        with patch("genesis.network.webrtc._load_aiortc_backend", return_value=backend):
+            manager = WebRTCSessionManager(
+                "local-node",
+                server,
+                stun_servers=["stun:stun1.example.net:3478"],
+                turn_servers=[
+                    {
+                        "urls": [
+                            "turn:turn.example.net:3478?transport=udp",
+                            "turns:turn.example.net:5349?transport=tcp",
+                        ],
+                        "username": "relay-user",
+                        "credential": "relay-pass",
+                    }
+                ],
+            )
+
+        started = await manager.ensure_session("peer-1")
+
+        self.assertTrue(started)
+        record = manager._sessions[manager._peer_sessions["peer-1"]]
+        ice_servers = record.connection.configuration.iceServers
+        self.assertEqual(len(ice_servers), 2)
+        self.assertEqual(ice_servers[0].urls, "stun:stun1.example.net:3478")
+        self.assertEqual(
+            ice_servers[1].urls,
+            [
+                "turn:turn.example.net:3478?transport=udp",
+                "turns:turn.example.net:5349?transport=tcp",
+            ],
+        )
+        self.assertEqual(ice_servers[1].username, "relay-user")
+        self.assertEqual(ice_servers[1].credential, "relay-pass")
+
+    async def test_stale_offer_session_is_reaped_before_retry(self):
+        backend = {
+            "RTCPeerConnection": _FakePeerConnection,
+            "RTCSessionDescription": _FakeDescription,
+            "RTCIceCandidate": _FakeIceCandidate,
+            "RTCConfiguration": _FakeRTCConfiguration,
+            "RTCIceServer": _FakeRTCIceServer,
+        }
+        server = _FakeServer()
+        server.routes.add("peer-1")
+
+        with patch("genesis.network.webrtc._load_aiortc_backend", return_value=backend):
+            manager = WebRTCSessionManager("local-node", server, offer_timeout=10)
+
+        first_started = await manager.ensure_session("peer-1")
+        self.assertTrue(first_started)
+
+        first_session_id = manager._peer_sessions["peer-1"]
+        first_record = manager._sessions[first_session_id]
+        first_record.updated_at = 1_000
+        first_record.created_at = 1_000
+
+        with patch("genesis.network.webrtc.time.time", return_value=1_020):
+            restarted = await manager.ensure_session("peer-1")
+
+        self.assertTrue(restarted)
+        second_session_id = manager._peer_sessions["peer-1"]
+        self.assertNotEqual(first_session_id, second_session_id)
+        self.assertNotIn(first_session_id, manager._sessions)
+        self.assertEqual(first_record.connection.connectionState, "closed")
+        self.assertEqual(len(server.sent), 2)
+
     async def test_handle_offer_creates_answer_session(self):
         backend = {
             "RTCPeerConnection": _FakePeerConnection,
             "RTCSessionDescription": _FakeDescription,
             "RTCIceCandidate": _FakeIceCandidate,
+            "RTCConfiguration": _FakeRTCConfiguration,
+            "RTCIceServer": _FakeRTCIceServer,
         }
         server = _FakeServer()
         server.routes.add("peer-2")

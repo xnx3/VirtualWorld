@@ -12,12 +12,19 @@ from typing import Any
 from genesis.network.protocol import Message
 
 logger = logging.getLogger(__name__)
+_DEFAULT_STUN_SERVERS = ["stun:stun.l.google.com:19302"]
 
 
 def _load_aiortc_backend() -> dict[str, Any] | None:
     """Load aiortc lazily so the core node still works without the dependency."""
     try:
-        from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
+        from aiortc import (
+            RTCPeerConnection,
+            RTCSessionDescription,
+            RTCIceCandidate,
+            RTCConfiguration,
+            RTCIceServer,
+        )
     except Exception:
         return None
 
@@ -25,7 +32,35 @@ def _load_aiortc_backend() -> dict[str, Any] | None:
         "RTCPeerConnection": RTCPeerConnection,
         "RTCSessionDescription": RTCSessionDescription,
         "RTCIceCandidate": RTCIceCandidate,
+        "RTCConfiguration": RTCConfiguration,
+        "RTCIceServer": RTCIceServer,
     }
+
+
+def _normalize_timeout(value: Any, *, default: int, minimum: int) -> int:
+    try:
+        parsed = int(value if value is not None else default)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, parsed)
+
+
+def _normalize_urls(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items = [raw]
+    elif isinstance(raw, (list, tuple, set)):
+        items = list(raw)
+    else:
+        return []
+
+    normalized: list[str] = []
+    for item in items:
+        value = str(item).strip()
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
 
 
 @dataclass
@@ -47,16 +82,35 @@ class WebRTCSession:
 class WebRTCSessionManager:
     """Negotiate optional direct DataChannel transports over existing routes."""
 
-    def __init__(self, node_id: str, server: Any) -> None:
+    def __init__(
+        self,
+        node_id: str,
+        server: Any,
+        *,
+        enabled: bool = True,
+        stun_servers: list[str] | None = None,
+        turn_servers: list[dict[str, Any]] | None = None,
+        offer_timeout: int = 20,
+        session_ttl: int = 300,
+    ) -> None:
         self._node_id = node_id
         self._server = server
-        self._backend = _load_aiortc_backend()
+        self._enabled = bool(enabled)
+        self._backend = _load_aiortc_backend() if self._enabled else None
         self._sessions: dict[str, WebRTCSession] = {}
         self._peer_sessions: dict[str, str] = {}
+        self._offer_timeout = _normalize_timeout(offer_timeout, default=20, minimum=5)
+        self._session_ttl = max(
+            self._offer_timeout,
+            _normalize_timeout(session_ttl, default=300, minimum=30),
+        )
+        default_stun = _DEFAULT_STUN_SERVERS if stun_servers is None else stun_servers
+        self._stun_servers = _normalize_urls(default_stun)
+        self._turn_servers = self._normalize_turn_servers(turn_servers)
 
     @property
     def available(self) -> bool:
-        return self._backend is not None
+        return self._enabled and self._backend is not None
 
     def advertised_transports(self, base: list[str] | None = None) -> list[str]:
         """Return transport names suitable for publishing in the on-chain contact card."""
@@ -85,6 +139,7 @@ class WebRTCSessionManager:
 
     async def ensure_session(self, peer_id: str) -> bool:
         """Initiate a WebRTC session to *peer_id* if no active session exists."""
+        await self._expire_stale_sessions()
         if not self.available:
             return False
         if not self._server.has_route_to_peer(peer_id):
@@ -121,6 +176,7 @@ class WebRTCSessionManager:
 
     async def handle_signal(self, peer_id: str, payload: dict[str, Any]) -> bool:
         """Process a received ``WEBRTC_SIGNAL`` message."""
+        await self._expire_stale_sessions()
         if not self.available:
             return False
 
@@ -179,6 +235,95 @@ class WebRTCSessionManager:
         for session_id in list(self._sessions.keys()):
             await self._close_session(session_id)
 
+    @staticmethod
+    def _normalize_turn_servers(turn_servers: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for entry in turn_servers or []:
+            if not isinstance(entry, dict):
+                continue
+            urls = _normalize_urls(entry.get("urls") or entry.get("url"))
+            if not urls:
+                continue
+            item: dict[str, Any] = {"urls": urls if len(urls) > 1 else urls[0]}
+            username = str(entry.get("username", "") or "").strip()
+            credential = str(entry.get("credential", "") or "")
+            credential_type = str(
+                entry.get("credential_type", "")
+                or entry.get("credentialType", "")
+                or ""
+            ).strip()
+            if username:
+                item["username"] = username
+            if credential:
+                item["credential"] = credential
+            if credential_type:
+                item["credentialType"] = credential_type
+            normalized.append(item)
+        return normalized
+
+    def _create_peer_connection(self) -> Any:
+        backend = self._backend
+        if backend is None:
+            raise RuntimeError("WebRTC backend unavailable")
+
+        connection_cls = backend["RTCPeerConnection"]
+        configuration = self._build_rtc_configuration()
+        if configuration is None:
+            return connection_cls()
+        try:
+            return connection_cls(configuration=configuration)
+        except TypeError:
+            try:
+                return connection_cls(configuration)
+            except TypeError:
+                return connection_cls()
+
+    def _build_rtc_configuration(self) -> Any | None:
+        backend = self._backend
+        if backend is None:
+            return None
+        rtc_configuration_cls = backend.get("RTCConfiguration")
+        if backend.get("RTCIceServer") is None or rtc_configuration_cls is None:
+            return None
+
+        ice_servers: list[Any] = []
+        for stun_url in self._stun_servers:
+            server = self._create_ice_server(stun_url)
+            if server is not None:
+                ice_servers.append(server)
+        for turn_server in self._turn_servers:
+            server = self._create_ice_server(**turn_server)
+            if server is not None:
+                ice_servers.append(server)
+        if not ice_servers:
+            return None
+
+        try:
+            return rtc_configuration_cls(iceServers=ice_servers)
+        except TypeError:
+            try:
+                return rtc_configuration_cls(ice_servers)
+            except TypeError:
+                logger.debug("RTCConfiguration constructor rejected ICE servers", exc_info=True)
+                return None
+
+    def _create_ice_server(self, urls: str | list[str], **kwargs: Any) -> Any | None:
+        backend = self._backend
+        if backend is None:
+            return None
+        ice_server_cls = backend.get("RTCIceServer")
+        if ice_server_cls is None:
+            return None
+
+        try:
+            return ice_server_cls(urls=urls, **kwargs)
+        except TypeError:
+            try:
+                return ice_server_cls(urls, **kwargs)
+            except TypeError:
+                logger.debug("RTCIceServer constructor rejected ICE config for %s", urls, exc_info=True)
+                return None
+
     async def _create_session(
         self,
         peer_id: str,
@@ -190,7 +335,7 @@ class WebRTCSessionManager:
         if backend is None:
             raise RuntimeError("WebRTC backend unavailable")
 
-        connection = backend["RTCPeerConnection"]()
+        connection = self._create_peer_connection()
         record = WebRTCSession(
             session_id=session_id or uuid.uuid4().hex,
             peer_id=peer_id,
@@ -359,6 +504,25 @@ class WebRTCSessionManager:
             sdpMLineIndex=payload.get("sdpMLineIndex"),
             tcpType=payload.get("tcpType"),
         )
+
+    async def _expire_stale_sessions(self) -> None:
+        now = time.time()
+        stale_ids: list[str] = []
+        for record in list(self._sessions.values()):
+            if record.state in {"closed", "failed"}:
+                stale_ids.append(record.session_id)
+                continue
+            if record.transport_ready:
+                continue
+            if record.state in {"offer-sent", "answer-sent", "connecting"}:
+                if (now - record.updated_at) > self._offer_timeout:
+                    stale_ids.append(record.session_id)
+                    continue
+            if (now - record.created_at) > self._session_ttl:
+                stale_ids.append(record.session_id)
+
+        for session_id in stale_ids:
+            await self._close_session(session_id)
 
     async def _close_session(self, session_id: str) -> None:
         record = self._sessions.pop(session_id, None)

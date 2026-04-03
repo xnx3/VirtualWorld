@@ -40,6 +40,11 @@ class NetworkConfig:
     peer_endpoint_ttl: int = 600
     relay_capable: bool = False
     max_relay_hints: int = 3
+    webrtc_enabled: bool = True
+    stun_servers: list[str] = field(default_factory=lambda: ["stun:stun.l.google.com:19302"])
+    turn_servers: list[dict[str, Any]] = field(default_factory=list)
+    webrtc_offer_timeout: int = 20
+    webrtc_session_ttl: int = 300
 
 
 @dataclass
