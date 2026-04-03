@@ -25,6 +25,35 @@ When you stop running (i.e., executing `genesis.sh stop`), this intelligent life
 - `genesis.sh status` - Current status
 - `genesis.sh restart` - Restart
 
+### One-Command Single-File Build
+
+If you want to share Genesis as a single runnable file:
+
+```bash
+bash scripts/build_single_binary.sh
+```
+
+After build completes, the executable is:
+
+```bash
+dist/genesis-run
+```
+
+Usage examples:
+
+- `./dist/genesis-run` (defaults to `start`)
+- `./dist/genesis-run start`
+- `./dist/genesis-run stop`
+- `./dist/genesis-run status`
+- `./dist/genesis-run task "your task"`
+- `./dist/genesis-run lang zh`
+
+Notes:
+
+- The binary embeds Python dependencies and runs without local venv setup on the target machine.
+- Runtime data is stored next to the executable under `data/`.
+- Build and target machines must use the same OS and CPU architecture.
+
 ### Interaction
 
 1. After executing `genesis.sh start`, everything your silicon-based life form is doing, what it plans to do, what it thought, who it spoke with and what was said, what it heard, saw, and felt - all of this must be output to the console in real-time.

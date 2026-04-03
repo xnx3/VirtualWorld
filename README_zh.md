@@ -40,6 +40,35 @@
 - `./genesis.sh task "你的问题"`：投递一个思考任务
 - `./genesis.sh lang [en|zh]`：切换系统语言
 
+### 一键打包为单文件可执行程序
+
+如果你要把项目打包成一个可直接分发的运行文件，执行：
+
+```bash
+bash scripts/build_single_binary.sh
+```
+
+打包完成后产物为：
+
+```bash
+dist/genesis-run
+```
+
+常用命令：
+
+- `./dist/genesis-run`（默认等价于 `start`）
+- `./dist/genesis-run start`
+- `./dist/genesis-run stop`
+- `./dist/genesis-run status`
+- `./dist/genesis-run task "你的任务"`
+- `./dist/genesis-run lang zh`
+
+说明：
+
+- 产物已内置 Python 依赖，目标机器不需要再手工创建 venv。
+- 运行时数据默认放在可执行文件同目录下的 `data/`。
+- 打包机器与目标机器需要保持相同操作系统和 CPU 架构。
+
 ### 交互
 
 1. 当执行 `./genesis.sh start` 启动后，硅基生命体在做什么、准备做什么、想了什么、与谁交流了什么、听到了什么、看到了什么、感觉到了什么，都应持续输出到控制台。
