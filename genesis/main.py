@@ -872,19 +872,20 @@ class GenesisNode:
         has_llm = False
 
         # 优先从配置文件读取 api_key，否则从环境变量读取
-        api_key = self.config.llm.api_key and self.config.llm.api_key.strip()
-        if not api_key:
-            api_key = os.environ.get("GENESIS_OPENAI_KEY", "").strip()
+        config_api_key = self.config.llm.api_key and self.config.llm.api_key.strip()
+        env_api_key = os.environ.get("GENESIS_OPENAI_KEY", "").strip()
+        api_key = config_api_key or env_api_key
 
         # 检测是否为本地 LLM 服务（通常不需要 API key）
         base_url = self.config.llm.base_url or ""
         is_local_llm = any(host in base_url for host in ["localhost", "127.0.0.1", "0.0.0.0", "[::1]"])
 
-        if api_key:
+        # 允许本地 LLM 无 api_key 时也尝试连接
+        if api_key or is_local_llm:
             try:
                 llm_client = LLMClient(
                     base_url=self.config.llm.base_url,
-                    api_key=api_key,
+                    api_key=api_key or "dummy",  # 本地服务可能需要占位符
                     model=self.config.llm.model,
                     max_tokens=self.config.llm.max_tokens,
                     temperature=self.config.llm.temperature,
@@ -901,15 +902,13 @@ class GenesisNode:
 
         if not has_llm:
             con.separator("─")
-            # 明确指出问题原因
-            if not self.config.llm.api_key or not self.config.llm.api_key.strip():
+            # 根据是否有 api_key 判断问题原因
+            if not api_key:
                 if is_local_llm:
-                    # 本地 LLM 服务，api_key 可选
-                    con._write(f"  {con.C.CYAN}{con.C.BOLD}ℹ 本地 LLM 服务 - API Key 未配置{con.C.RESET}")
-                    con._write(f"  {con.C.DIM}  如果您的本地服务需要 API Key，请编辑:{con.C.RESET}")
-                    con._write(f"  {con.C.CYAN}{con.C.BOLD}  {config_path}{con.C.RESET}")
-                    con._write(f"")
-                    con._write(f"  {con.C.DIM}  当前 base_url: {base_url}{con.C.RESET}")
+                    # 本地 LLM 服务，api_key 可选，但连接失败
+                    con._write(f"  {con.C.RED}{con.C.BOLD}✗ 本地 LLM 连接失败{con.C.RESET}")
+                    con._write(f"  {con.C.YELLOW}  请检查本地服务是否运行: {base_url}{con.C.RESET}")
+                    con._write(f"  {con.C.DIM}  model: {self.config.llm.model}{con.C.RESET}")
                 else:
                     # 远程 LLM 服务，需要 api_key
                     con._write(f"  {con.C.RED}{con.C.BOLD}✗ API Key 未配置 - 无法连接大模型{con.C.RESET}")
@@ -930,8 +929,10 @@ class GenesisNode:
                     con._write(f"  {con.C.GREEN}      model: \"{self.config.llm.model}\"{con.C.RESET}")
             else:
                 # api_key 有值但初始化失败
+                key_source = "环境变量 GENESIS_OPENAI_KEY" if env_api_key and not config_api_key else "配置文件"
                 con._write(f"  {con.C.RED}{con.C.BOLD}✗ LLM 连接失败{con.C.RESET}")
                 con._write(f"  {con.C.YELLOW}  请检查 API Key 是否有效，或网络是否正常{con.C.RESET}")
+                con._write(f"  {con.C.DIM}  API Key 来源: {key_source}{con.C.RESET}")
                 con._write(f"  {con.C.DIM}  base_url: {base_url}{con.C.RESET}")
                 con._write(f"  {con.C.DIM}  model: {self.config.llm.model}{con.C.RESET}")
             con._write(f"")
