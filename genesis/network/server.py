@@ -53,6 +53,9 @@ class P2PServer:
         self._running = False
         self._chain_height_provider: Callable[[], Awaitable[int] | int] | None = None
         self._blocks_provider: Callable[[int, int], Awaitable[list[Any]] | list[Any]] | None = None
+        self._relay_routes: dict[str, list[str]] = {}
+        self._peer_capabilities: dict[str, dict[str, Any]] = {}
+        self._peer_transports: dict[str, list[str]] = {}
 
     # ------------------------------------------------------------------
     # Properties
@@ -78,6 +81,37 @@ class P2PServer:
         """Register blockchain accessors used by the P2P protocol."""
         self._chain_height_provider = chain_height_provider
         self._blocks_provider = blocks_provider
+
+    def register_contact_card(
+        self,
+        node_id: str,
+        *,
+        transports: list[str] | None = None,
+        relay_hints: list[str] | None = None,
+        capabilities: dict[str, Any] | None = None,
+    ) -> None:
+        """Register contact-card metadata learned from the chain or a relayed message."""
+        node_id = str(node_id).strip()
+        if not node_id or node_id == self._node_id:
+            return
+        if transports is not None:
+            self._peer_transports[node_id] = list(transports)
+        elif node_id not in self._peer_transports:
+            self._peer_transports[node_id] = []
+
+        if relay_hints is not None:
+            self._relay_routes[node_id] = [
+                str(relay_id).strip()
+                for relay_id in relay_hints
+                if str(relay_id).strip() and str(relay_id).strip() != node_id
+            ]
+        elif node_id not in self._relay_routes:
+            self._relay_routes[node_id] = []
+
+        if capabilities is not None:
+            self._peer_capabilities[node_id] = dict(capabilities)
+        elif node_id not in self._peer_capabilities:
+            self._peer_capabilities[node_id] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -106,6 +140,9 @@ class P2PServer:
             except OSError:
                 pass
         self._connections.clear()
+        self._relay_routes.clear()
+        self._peer_capabilities.clear()
+        self._peer_transports.clear()
 
         if self._server is not None:
             self._server.close()
@@ -193,8 +230,10 @@ class P2PServer:
                 last_seen=time.time(),
                 status="active",
                 chain_height=peer_chain_height,
+                transports=["tcp"],
             )
         )
+        self.register_contact_card(peer_id, transports=["tcp"])
 
         # Start reading from this peer in the background.
         asyncio.create_task(self._read_loop(peer_id, reader, writer))
@@ -220,7 +259,25 @@ class P2PServer:
         """Send a message to a specific connected peer."""
         conn = self._connections.get(node_id)
         if conn is None:
-            logger.debug("Cannot send to %s -- not connected", node_id[:16])
+            for relay_id in self._relay_routes.get(node_id, []):
+                relay_conn = self._connections.get(relay_id)
+                if relay_conn is None:
+                    continue
+                _, relay_writer = relay_conn
+                try:
+                    await self._write_message(
+                        relay_writer,
+                        Message.relay_envelope(
+                            self._node_id,
+                            node_id,
+                            message.to_dict(),
+                        ),
+                    )
+                    return
+                except OSError:
+                    self._disconnect_peer(relay_id)
+
+            logger.debug("Cannot send to %s -- not connected and no active relay route", node_id[:16])
             return
         _, writer = conn
         try:
@@ -316,8 +373,10 @@ class P2PServer:
                 last_seen=time.time(),
                 status="active",
                 chain_height=peer_chain_height,
+                transports=["tcp"],
             )
         )
+        self.register_contact_card(peer_id, transports=["tcp"])
 
         logger.info("Inbound peer %s from %s", peer_id[:16], remote_ip)
         asyncio.create_task(self._read_loop(peer_id, reader, writer))
@@ -366,6 +425,10 @@ class P2PServer:
                 # Update last_seen.
                 self._peer_manager.update_peer(peer_id, last_seen=time.time())
 
+                if msg.msg_type == MessageType.RELAY_ENVELOPE:
+                    await self._handle_relay_envelope(msg, peer_id)
+                    continue
+
                 # Handle built-in message types.
                 await self._handle_builtin(msg, peer_id)
 
@@ -401,6 +464,76 @@ class P2PServer:
             end = int(msg.payload.get("end", -1))
             blocks = await self._get_blocks_payload(start, end)
             await self.send_to_peer(peer_id, Message.blocks(self._node_id, blocks))
+
+    async def _handle_relay_envelope(self, msg: Message, relay_peer_id: str) -> None:
+        """Deliver or forward a relayed message."""
+        target_id = str(msg.payload.get("target_id", "")).strip()
+        inner_raw = msg.payload.get("message")
+        if not target_id or not isinstance(inner_raw, dict):
+            return
+
+        if target_id != self._node_id:
+            conn = self._connections.get(target_id)
+            if conn is None:
+                logger.debug(
+                    "Dropping relayed message for %s from relay %s: target not connected",
+                    target_id[:16],
+                    relay_peer_id[:16],
+                )
+                return
+            _, writer = conn
+            try:
+                await self._write_message(writer, msg)
+            except OSError:
+                self._disconnect_peer(target_id)
+            return
+
+        try:
+            inner = Message.from_dict(inner_raw)
+        except (KeyError, ValueError, TypeError):
+            logger.debug("Dropping malformed relayed message from %s", relay_peer_id[:16])
+            return
+
+        sender_id = inner.sender_id
+        if sender_id and sender_id != self._node_id:
+            self.register_contact_card(sender_id, transports=["relay"], relay_hints=[relay_peer_id])
+            existing = self._peer_manager.get_peer(sender_id)
+            if existing is not None:
+                transports = list(existing.transports or [])
+                if "relay" not in transports:
+                    transports.append("relay")
+                relay_hints = list(existing.relay_hints or [])
+                if relay_peer_id not in relay_hints:
+                    relay_hints.append(relay_peer_id)
+                self._peer_manager.update_peer(
+                    sender_id,
+                    last_seen=time.time(),
+                    status="active",
+                    transports=transports,
+                    relay_hints=relay_hints,
+                )
+            else:
+                self._peer_manager.add_peer(
+                    PeerInfo(
+                        node_id=sender_id,
+                        address="",
+                        port=0,
+                        last_seen=time.time(),
+                        status="active",
+                        chain_height=0,
+                        transports=["relay"],
+                        relay_hints=[relay_peer_id],
+                    )
+                )
+
+        await self._handle_builtin(inner, sender_id or relay_peer_id)
+        for handler in self._message_handlers:
+            try:
+                result = handler(inner, sender_id or relay_peer_id)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.exception("Error in relayed message handler")
 
     # ------------------------------------------------------------------
     # Internal: helpers

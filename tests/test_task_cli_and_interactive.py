@@ -143,6 +143,51 @@ class GenesisStartupGuardTests(unittest.TestCase):
 
             self.assertEqual(node._load_known_peers(), [("peer-1", "10.0.0.8", 22333)])
 
+    def test_build_peer_endpoint_publishes_relay_hints_and_capabilities(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.identity = SimpleNamespace(node_id="self-node")
+            node.config = SimpleNamespace(
+                network=SimpleNamespace(
+                    listen_port=19841,
+                    peer_endpoint_ttl=600,
+                    relay_capable=False,
+                    max_relay_hints=2,
+                    advertise_address="203.0.113.8",
+                )
+            )
+            state = WorldState()
+            state.apply_being_join(
+                "relay-a",
+                "RelayA",
+                {
+                    "p2p_address": "198.51.100.10",
+                    "p2p_port": 19841,
+                    "p2p_updated_at": 1_050,
+                    "p2p_ttl": 600,
+                    "p2p_capabilities": {"relay": True},
+                },
+            )
+            state.apply_being_join(
+                "relay-b",
+                "RelayB",
+                {
+                    "p2p_address": "198.51.100.11",
+                    "p2p_port": 19841,
+                    "p2p_updated_at": 1_100,
+                    "p2p_ttl": 600,
+                    "p2p_capabilities": {"relay": True},
+                },
+            )
+            node.world_state = state
+
+            with patch("genesis.main.time.time", return_value=1_200):
+                endpoint = node._build_peer_endpoint()
+
+            self.assertEqual(endpoint["p2p_transports"], ["tcp", "relay"])
+            self.assertEqual(endpoint["p2p_relay_hints"], ["relay-b", "relay-a"])
+            self.assertEqual(endpoint["p2p_capabilities"], {"relay": False})
+
 
 class BeingTaskDedupTests(unittest.TestCase):
     def test_silicon_being_ignores_duplicate_active_task_text(self):

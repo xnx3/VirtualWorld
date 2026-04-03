@@ -113,6 +113,8 @@ network:
   sync_interval: 30
   startup_sync_timeout: 45
   peer_endpoint_ttl: 600
+  relay_capable: false
+  max_relay_hints: 3
 
 being:
   hibernate_safety_timeout: 300

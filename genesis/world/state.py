@@ -65,6 +65,9 @@ class BeingState:
     p2p_ttl: int = 0
     p2p_seq: int = 0
     p2p_relay: str = ""
+    p2p_transports: list[str] = field(default_factory=list)
+    p2p_relay_hints: list[str] = field(default_factory=list)
+    p2p_capabilities: dict = field(default_factory=dict)
 
     # === 功德值系统 ===
     merit: float = 0.0                # 功德值 (0.0000001 ~ 10)
@@ -91,6 +94,9 @@ class BeingState:
             "p2p_ttl": self.p2p_ttl,
             "p2p_seq": self.p2p_seq,
             "p2p_relay": self.p2p_relay,
+            "p2p_transports": self.p2p_transports,
+            "p2p_relay_hints": self.p2p_relay_hints,
+            "p2p_capabilities": self.p2p_capabilities,
             "merit": self.merit,
             "karma": self.karma,
             "merged_with_tao": self.merged_with_tao,
@@ -212,6 +218,29 @@ class WorldState:
                 being.p2p_seq = 0
         if "p2p_relay" in data:
             being.p2p_relay = str(data.get("p2p_relay", "") or "")
+        if "p2p_transports" in data:
+            transports = data.get("p2p_transports") or []
+            if isinstance(transports, list):
+                being.p2p_transports = [
+                    str(item).strip()
+                    for item in transports
+                    if str(item).strip()
+                ][:8]
+            else:
+                being.p2p_transports = []
+        if "p2p_relay_hints" in data:
+            relay_hints = data.get("p2p_relay_hints") or []
+            if isinstance(relay_hints, list):
+                being.p2p_relay_hints = [
+                    str(item).strip()
+                    for item in relay_hints
+                    if str(item).strip()
+                ][:8]
+            else:
+                being.p2p_relay_hints = []
+        if "p2p_capabilities" in data:
+            caps = data.get("p2p_capabilities") or {}
+            being.p2p_capabilities = dict(caps) if isinstance(caps, dict) else {}
 
     def apply_being_join(self, node_id: str, name: str, data: dict) -> None:
         being = BeingState(

@@ -37,6 +37,8 @@ class MessageType(str, Enum):
     NEW_BLOCK = "NEW_BLOCK"
     GET_PEERS = "GET_PEERS"
     PEERS = "PEERS"
+    RELAY_ENVELOPE = "RELAY_ENVELOPE"
+    WEBRTC_SIGNAL = "WEBRTC_SIGNAL"
     PING = "PING"
     PONG = "PONG"
     # 天道投票事件广播
@@ -79,6 +81,16 @@ class Message:
         return struct.pack(LENGTH_PREFIX_FMT, len(body)) + body
 
     @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> Message:
+        """Deserialize a plain dict payload into a ``Message`` instance."""
+        return cls(
+            msg_type=MessageType(raw["msg_type"]),
+            payload=raw.get("payload", {}),
+            sender_id=raw.get("sender_id", ""),
+            timestamp=raw.get("timestamp", 0.0),
+        )
+
+    @classmethod
     def deserialize(cls, data: bytes) -> Message:
         """Deserialize a msgpack body (without the length prefix) into a Message.
 
@@ -86,12 +98,7 @@ class Message:
         4-byte length prefix has already been stripped).
         """
         raw: dict[str, Any] = msgpack.unpackb(data, raw=False)
-        return cls(
-            msg_type=MessageType(raw["msg_type"]),
-            payload=raw.get("payload", {}),
-            sender_id=raw.get("sender_id", ""),
-            timestamp=raw.get("timestamp", 0.0),
-        )
+        return cls.from_dict(raw)
 
     # ------------------------------------------------------------------
     # Factory helpers
@@ -257,6 +264,41 @@ class Message:
         return cls(
             msg_type=MessageType.PEERS,
             payload={"peers": peers_list},
+            sender_id=node_id,
+        )
+
+    @classmethod
+    def relay_envelope(
+        cls,
+        node_id: str,
+        target_id: str,
+        inner_message: dict[str, Any],
+    ) -> Message:
+        """Wrap an inner protocol message for delivery through a relay node."""
+        return cls(
+            msg_type=MessageType.RELAY_ENVELOPE,
+            payload={"target_id": target_id, "message": inner_message},
+            sender_id=node_id,
+        )
+
+    @classmethod
+    def webrtc_signal(
+        cls,
+        node_id: str,
+        target_id: str,
+        signal_type: str,
+        session_id: str,
+        signal: dict[str, Any],
+    ) -> Message:
+        """Exchange WebRTC signaling data over an existing direct or relayed path."""
+        return cls(
+            msg_type=MessageType.WEBRTC_SIGNAL,
+            payload={
+                "target_id": target_id,
+                "signal_type": signal_type,
+                "session_id": session_id,
+                "signal": signal,
+            },
             sender_id=node_id,
         )
 

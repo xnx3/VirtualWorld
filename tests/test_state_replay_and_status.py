@@ -64,6 +64,9 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
                     "p2p_updated_at": 123456,
                     "p2p_ttl": 600,
                     "p2p_seq": 99,
+                    "p2p_transports": ["tcp", "relay"],
+                    "p2p_relay_hints": ["relay-a"],
+                    "p2p_capabilities": {"relay": False},
                 },
             ),
             _tx(
@@ -129,6 +132,9 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(world_state.get_being(proposer_id).p2p_updated_at, 123456)
         self.assertEqual(world_state.get_being(proposer_id).p2p_ttl, 600)
         self.assertEqual(world_state.get_being(proposer_id).p2p_seq, 99)
+        self.assertEqual(world_state.get_being(proposer_id).p2p_transports, ["tcp", "relay"])
+        self.assertEqual(world_state.get_being(proposer_id).p2p_relay_hints, ["relay-a"])
+        self.assertEqual(world_state.get_being(proposer_id).p2p_capabilities, {"relay": False})
         self.assertTrue(world_state.get_being(proposer_id).merged_with_tao)
         self.assertEqual(world_state.tao_rules[rule_data["rule_id"]]["name"], rule_data["name"])
         self.assertNotIn("vote-1", world_state.pending_tao_votes)

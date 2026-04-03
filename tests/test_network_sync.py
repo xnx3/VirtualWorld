@@ -54,6 +54,24 @@ class DummyStorage:
         return 0
 
 
+class FakeWriter:
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.buffer.extend(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        return None
+
+
 class ChainSyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_sync_chain_starts_from_next_missing_height(self):
         server = DummyServer()
@@ -173,6 +191,40 @@ class P2PServerAccessorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent[0][1].msg_type, MessageType.BLOCKS)
         self.assertEqual(sent[0][1].payload["blocks"][0]["index"], 1)
 
+    async def test_send_to_peer_falls_back_to_registered_relay_route(self):
+        identity = NodeIdentity.generate()
+        server = P2PServer("local-node", identity.private_key)
+        relay_writer = FakeWriter()
+        server._connections["relay-1"] = (asyncio.StreamReader(), relay_writer)  # type: ignore[attr-defined]
+        server.register_contact_card("peer-1", transports=["relay"], relay_hints=["relay-1"])
+
+        await server.send_to_peer("peer-1", Message.ping("local-node"))
+
+        written = bytes(relay_writer.buffer)
+        (length,) = unpack("!I", written[:LENGTH_PREFIX_SIZE])
+        outbound = Message.deserialize(written[LENGTH_PREFIX_SIZE:LENGTH_PREFIX_SIZE + length])
+        self.assertEqual(outbound.msg_type, MessageType.RELAY_ENVELOPE)
+        self.assertEqual(outbound.payload["target_id"], "peer-1")
+        self.assertEqual(outbound.payload["message"]["msg_type"], MessageType.PING.value)
+
+    async def test_relay_envelope_delivers_inner_message_as_original_sender(self):
+        identity = NodeIdentity.generate()
+        server = P2PServer("local-node", identity.private_key)
+        delivered = []
+
+        async def handler(message: Message, peer_id: str) -> None:
+            delivered.append((message.msg_type, peer_id, message.sender_id))
+
+        server.on_message(handler)
+        inner = Message.ping("peer-1")
+
+        await server._handle_relay_envelope(
+            Message.relay_envelope("relay-1", "local-node", inner.to_dict()),
+            "relay-1",
+        )
+
+        self.assertEqual(delivered, [(MessageType.PING, "peer-1", "peer-1")])
+
 
 class BlockchainPendingTxTests(unittest.IsolatedAsyncioTestCase):
     async def test_add_pending_tx_accepts_serialized_transaction(self):
@@ -243,23 +295,6 @@ class PeerDiscoveryBootstrapTests(unittest.IsolatedAsyncioTestCase):
             ).serialize()
         )
         reader.feed_eof()
-
-        class FakeWriter:
-            def __init__(self) -> None:
-                self.buffer = bytearray()
-                self.closed = False
-
-            def write(self, data: bytes) -> None:
-                self.buffer.extend(data)
-
-            async def drain(self) -> None:
-                return None
-
-            def close(self) -> None:
-                self.closed = True
-
-            async def wait_closed(self) -> None:
-                return None
 
         writer = FakeWriter()
 

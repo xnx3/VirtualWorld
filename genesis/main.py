@@ -261,6 +261,69 @@ class GenesisNode:
                 value = 45
         return max(5, value)
 
+    def _relay_hint_limit(self) -> int:
+        value = 3
+        if self.config is not None:
+            try:
+                value = int(getattr(self.config.network, "max_relay_hints", 3) or 3)
+            except (TypeError, ValueError):
+                value = 3
+        return max(0, min(8, value))
+
+    @staticmethod
+    def _peer_capabilities(being: object) -> dict[str, object]:
+        caps = getattr(being, "p2p_capabilities", {}) or {}
+        return dict(caps) if isinstance(caps, dict) else {}
+
+    def _is_relay_capable(self, being: object) -> bool:
+        return bool(self._peer_capabilities(being).get("relay"))
+
+    def _select_relay_hints(self) -> list[str]:
+        """Choose a small set of fresh relay-capable peers to publish on-chain."""
+        if self.world_state is None or self.identity is None:
+            return []
+
+        relay_candidates: list[tuple[int, str]] = []
+        for being in self.world_state.beings.values():
+            if being.node_id == self.identity.node_id or being.is_npc:
+                continue
+            address = str(getattr(being, "p2p_address", "") or "").strip()
+            port = int(getattr(being, "p2p_port", 0) or 0)
+            if (
+                not address
+                or port <= 0
+                or not self._is_peer_endpoint_fresh(being)
+                or not self._is_relay_capable(being)
+            ):
+                continue
+            updated_at = int(getattr(being, "p2p_updated_at", 0) or 0)
+            relay_candidates.append((updated_at, being.node_id))
+
+        relay_candidates.sort(reverse=True)
+        return [node_id for _, node_id in relay_candidates[: self._relay_hint_limit()]]
+
+    def _refresh_chain_contact_cards(self) -> None:
+        """Push chain-learned transport and relay hints into the live transport router."""
+        if self.world_state is None or self.identity is None or self.server is None:
+            return
+
+        for being in self.world_state.beings.values():
+            if being.node_id == self.identity.node_id or being.is_npc:
+                continue
+            transports = list(getattr(being, "p2p_transports", []) or [])
+            relay_hints = list(getattr(being, "p2p_relay_hints", []) or [])
+            if not relay_hints:
+                legacy_relay = str(getattr(being, "p2p_relay", "") or "").strip()
+                if legacy_relay:
+                    relay_hints = [legacy_relay]
+            capabilities = self._peer_capabilities(being)
+            self.server.register_contact_card(
+                being.node_id,
+                transports=transports,
+                relay_hints=relay_hints,
+                capabilities=capabilities,
+            )
+
     def _build_peer_endpoint(self) -> dict[str, object]:
         """Build the on-chain endpoint card advertised for this node."""
         ttl = 600
@@ -270,12 +333,24 @@ class GenesisNode:
             except (TypeError, ValueError):
                 ttl = 600
         now = int(time.time())
+        transports = ["tcp"]
+        relay_hints = self._select_relay_hints()
+        if relay_hints:
+            transports.append("relay")
         return {
             "p2p_address": self._resolve_advertise_address(),
             "p2p_port": self.config.network.listen_port,
             "p2p_updated_at": now,
             "p2p_ttl": max(60, ttl),
             "p2p_seq": int(time.time() * 1000),
+            "p2p_relay": relay_hints[0] if relay_hints else "",
+            "p2p_transports": transports,
+            "p2p_relay_hints": relay_hints,
+            "p2p_capabilities": {
+                "relay": bool(
+                    self.config and getattr(self.config.network, "relay_capable", False)
+                ),
+            },
         }
 
     @staticmethod
@@ -323,7 +398,7 @@ class GenesisNode:
         if self.world_state is None or self.identity is None:
             return []
 
-        seeds: list[tuple[int, str, str, int]] = []
+        seeds: list[tuple[int, int, str, str, int]] = []
         for being in self.world_state.beings.values():
             if being.node_id == self.identity.node_id or being.is_npc:
                 continue
@@ -332,9 +407,10 @@ class GenesisNode:
             if not address or port <= 0 or not self._is_peer_endpoint_fresh(being):
                 continue
             updated_at = int(getattr(being, "p2p_updated_at", 0) or 0)
-            seeds.append((updated_at, being.node_id, address, port))
+            relay_priority = 1 if self._is_relay_capable(being) else 0
+            seeds.append((relay_priority, updated_at, being.node_id, address, port))
         seeds.sort(reverse=True)
-        return [(node_id, address, port) for _, node_id, address, port in seeds]
+        return [(node_id, address, port) for _, _, node_id, address, port in seeds]
 
     async def _connect_chain_seed_peers(self) -> None:
         """Attempt direct peer connections using endpoints stored on-chain."""
@@ -467,6 +543,7 @@ class GenesisNode:
             wmap.generate()
             self.world_state.world_map = {k: v.to_dict() for k, v in wmap.regions.items()}
 
+        self._refresh_chain_contact_cards()
         self._persist_world_state_snapshot()
 
     async def start(self) -> None:

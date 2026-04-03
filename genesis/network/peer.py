@@ -22,6 +22,9 @@ class PeerInfo:
     last_seen: float = field(default_factory=time.time)
     status: str = "active"  # 'active', 'hibernating', 'dead'
     chain_height: int = 0
+    transports: list[str] = field(default_factory=list)
+    relay_hints: list[str] = field(default_factory=list)
+    capabilities: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict for wire transmission."""
@@ -32,6 +35,9 @@ class PeerInfo:
             "last_seen": self.last_seen,
             "status": self.status,
             "chain_height": self.chain_height,
+            "transports": self.transports,
+            "relay_hints": self.relay_hints,
+            "capabilities": self.capabilities,
         }
 
     @classmethod
@@ -44,6 +50,9 @@ class PeerInfo:
             last_seen=data.get("last_seen", time.time()),
             status=data.get("status", "active"),
             chain_height=data.get("chain_height", 0),
+            transports=list(data.get("transports", []) or []),
+            relay_hints=list(data.get("relay_hints", []) or []),
+            capabilities=dict(data.get("capabilities", {}) or {}),
         )
 
 
@@ -76,6 +85,9 @@ class PeerManager:
                 existing.last_seen = time.time()
                 existing.status = peer.status
                 existing.chain_height = peer.chain_height
+                existing.transports = list(peer.transports)
+                existing.relay_hints = list(peer.relay_hints)
+                existing.capabilities = dict(peer.capabilities)
                 return False
             if len(self._peers) >= self._max_peers:
                 logger.warning(
