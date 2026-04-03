@@ -56,7 +56,15 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
                 "join-main",
                 TxType.BEING_JOIN,
                 proposer_id,
-                {"name": "Creator", "location": "genesis_plains"},
+                {
+                    "name": "Creator",
+                    "location": "genesis_plains",
+                    "p2p_address": "10.0.0.8",
+                    "p2p_port": 22333,
+                    "p2p_updated_at": 123456,
+                    "p2p_ttl": 600,
+                    "p2p_seq": 99,
+                },
             ),
             _tx(
                 "join-npc",
@@ -116,6 +124,11 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("npc-1", world_state.beings)
         self.assertEqual(world_state.get_being("npc-1").name, "Sentinel")
         self.assertEqual(world_state.get_being(proposer_id).location, "signal_tower")
+        self.assertEqual(world_state.get_being(proposer_id).p2p_address, "10.0.0.8")
+        self.assertEqual(world_state.get_being(proposer_id).p2p_port, 22333)
+        self.assertEqual(world_state.get_being(proposer_id).p2p_updated_at, 123456)
+        self.assertEqual(world_state.get_being(proposer_id).p2p_ttl, 600)
+        self.assertEqual(world_state.get_being(proposer_id).p2p_seq, 99)
         self.assertTrue(world_state.get_being(proposer_id).merged_with_tao)
         self.assertEqual(world_state.tao_rules[rule_data["rule_id"]]["name"], rule_data["name"])
         self.assertNotIn("vote-1", world_state.pending_tao_votes)

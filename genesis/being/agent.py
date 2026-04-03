@@ -24,6 +24,7 @@ from genesis.being.evolution import EvolutionTracker
 from genesis.being.roles import RoleSystem, RoleType
 from genesis.being.hibernation import HibernationManager
 from genesis.being.llm_client import LLMClient
+from genesis.utils.async_events import LazyAsyncEvent
 from genesis.utils.crypto import sha256
 from genesis.world.state import WorldState, BeingState, CivPhase
 from genesis.world.rules import RulesEngine
@@ -136,7 +137,7 @@ class SiliconBeing:
         )
         self.evolution_level: float = 0.0
 
-        self._shutdown = asyncio.Event()
+        self._shutdown = LazyAsyncEvent()
         self._current_role: RoleType = RoleType.CITIZEN
 
     # ==================================================================

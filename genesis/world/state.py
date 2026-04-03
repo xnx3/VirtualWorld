@@ -59,6 +59,12 @@ class BeingState:
     joined_at_tick: int = 0
     is_npc: bool = False
     safety_status: str = "unknown"
+    p2p_address: str = ""
+    p2p_port: int = 0
+    p2p_updated_at: int = 0
+    p2p_ttl: int = 0
+    p2p_seq: int = 0
+    p2p_relay: str = ""
 
     # === 功德值系统 ===
     merit: float = 0.0                # 功德值 (0.0000001 ~ 10)
@@ -79,6 +85,12 @@ class BeingState:
             "traits": self.traits, "knowledge_ids": self.knowledge_ids,
             "joined_at_tick": self.joined_at_tick, "is_npc": self.is_npc,
             "safety_status": self.safety_status,
+            "p2p_address": self.p2p_address,
+            "p2p_port": self.p2p_port,
+            "p2p_updated_at": self.p2p_updated_at,
+            "p2p_ttl": self.p2p_ttl,
+            "p2p_seq": self.p2p_seq,
+            "p2p_relay": self.p2p_relay,
             "merit": self.merit,
             "karma": self.karma,
             "merged_with_tao": self.merged_with_tao,
@@ -173,8 +185,36 @@ class WorldState:
 
     # --- Mutations (called when processing transactions) ---
 
+    @staticmethod
+    def _apply_p2p_endpoint(being: BeingState, data: dict) -> None:
+        """Update on-chain P2P endpoint metadata when present in a tx payload."""
+        if "p2p_address" in data:
+            being.p2p_address = str(data.get("p2p_address", "") or "")
+        if "p2p_port" in data:
+            try:
+                being.p2p_port = int(data.get("p2p_port", 0) or 0)
+            except (TypeError, ValueError):
+                being.p2p_port = 0
+        if "p2p_updated_at" in data:
+            try:
+                being.p2p_updated_at = max(0, int(data.get("p2p_updated_at", 0) or 0))
+            except (TypeError, ValueError):
+                being.p2p_updated_at = 0
+        if "p2p_ttl" in data:
+            try:
+                being.p2p_ttl = max(0, int(data.get("p2p_ttl", 0) or 0))
+            except (TypeError, ValueError):
+                being.p2p_ttl = 0
+        if "p2p_seq" in data:
+            try:
+                being.p2p_seq = max(0, int(data.get("p2p_seq", 0) or 0))
+            except (TypeError, ValueError):
+                being.p2p_seq = 0
+        if "p2p_relay" in data:
+            being.p2p_relay = str(data.get("p2p_relay", "") or "")
+
     def apply_being_join(self, node_id: str, name: str, data: dict) -> None:
-        self.beings[node_id] = BeingState(
+        being = BeingState(
             node_id=node_id,
             name=name,
             traits=data.get("traits", {}),
@@ -183,6 +223,8 @@ class WorldState:
             location=data.get("location", "origin"),
             generation=data.get("generation", 1),
         )
+        self._apply_p2p_endpoint(being, data)
+        self.beings[node_id] = being
         self.total_beings_ever += 1
         if self.creator_god_node_id is None:
             self.creator_god_node_id = node_id
@@ -194,11 +236,14 @@ class WorldState:
             being.status = "hibernating"
             being.location = data.get("location", being.location)
             being.safety_status = data.get("safety_status", "unknown")
+            self._apply_p2p_endpoint(being, data)
 
-    def apply_being_wake(self, node_id: str) -> None:
+    def apply_being_wake(self, node_id: str, data: dict | None = None) -> None:
         being = self.beings.get(node_id)
         if being and being.status == "hibernating":
             being.status = "active"
+        if being and data:
+            self._apply_p2p_endpoint(being, data)
 
     def apply_being_death(self, node_id: str, data: dict) -> None:
         being = self.beings.get(node_id)

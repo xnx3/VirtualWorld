@@ -50,13 +50,17 @@ class ChainSync:
 
         Returns True if the chain was advanced, False otherwise.
         """
-        best_peer = self._peer_manager.get_best_peer()
-        if best_peer is None:
+        peers = sorted(
+            self._peer_manager.get_active_peers(),
+            key=lambda peer: peer.chain_height,
+            reverse=True,
+        )
+        if not peers:
             logger.info("No peers available for sync")
             return False
 
         local_height = await blockchain.get_chain_height()
-        remote_height = best_peer.chain_height
+        remote_height = peers[0].chain_height
 
         if remote_height <= local_height:
             logger.info(
@@ -66,26 +70,56 @@ class ChainSync:
             )
             return False
 
-        logger.info(
-            "Starting sync from height %d to %d (peer %s)",
-            local_height,
-            remote_height,
-            best_peer.node_id[:16],
-        )
+        advanced = False
+        target_height = remote_height
 
+        for peer in peers:
+            current_height = await blockchain.get_chain_height()
+            if peer.chain_height <= current_height:
+                continue
+
+            logger.info(
+                "Starting sync from height %d to %d (peer %s)",
+                current_height,
+                peer.chain_height,
+                peer.node_id[:16],
+            )
+
+            if await self._sync_from_peer(blockchain, peer.node_id, peer.chain_height, current_height):
+                advanced = True
+
+            synced_height = await blockchain.get_chain_height()
+            if synced_height >= target_height:
+                break
+
+        if advanced:
+            logger.info(
+                "Sync complete: chain advanced to height %d",
+                await blockchain.get_chain_height(),
+            )
+        return advanced
+
+    async def _sync_from_peer(
+        self,
+        blockchain: Any,
+        peer_id: str,
+        remote_height: int,
+        local_height: int,
+    ) -> bool:
+        """Synchronize missing blocks from one peer and report whether progress was made."""
         advanced = False
         current = local_height + 1
 
         while current <= remote_height:
             end = min(current + _BATCH_SIZE - 1, remote_height)
             try:
-                blocks = await self.request_blocks(best_peer.node_id, current, end)
+                blocks = await self.request_blocks(peer_id, current, end)
             except (asyncio.TimeoutError, OSError) as exc:
-                logger.warning("Block request failed at height %d: %s", current, exc)
+                logger.warning("Block request from %s failed at height %d: %s", peer_id[:16], current, exc)
                 break
 
             if not blocks:
-                logger.warning("Received empty block batch at height %d", current)
+                logger.warning("Received empty block batch from %s at height %d", peer_id[:16], current)
                 break
 
             for block_data in blocks:
@@ -100,11 +134,8 @@ class ChainSync:
                     advanced = True
                 else:
                     logger.warning("Block validation failed at height %d", current)
-                    # Try to continue with the next peer in the future.
                     return advanced
 
-        if advanced:
-            logger.info("Sync complete: chain advanced to height %d", current)
         return advanced
 
     async def request_blocks(

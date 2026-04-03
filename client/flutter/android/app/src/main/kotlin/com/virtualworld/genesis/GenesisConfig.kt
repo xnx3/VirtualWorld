@@ -110,6 +110,9 @@ network:
   listen_port: 7331
   discovery_port: 7332
   max_peers: 50
+  sync_interval: 30
+  startup_sync_timeout: 45
+  peer_endpoint_ttl: 600
 
 being:
   hibernate_safety_timeout: 300

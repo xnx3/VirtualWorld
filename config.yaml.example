@@ -24,8 +24,13 @@ network:
   discovery_port: 19840       # UDP port for LAN discovery
   bootstrap_nodes:            # Bootstrap server addresses for global node discovery
     - "http://45.205.24.48:8760"
+  advertise_address: ""       # Optional public/LAN address announced on-chain; auto-detected when empty
+  allow_local_bootstrap: false # Set true only when intentionally creating a brand-new civilization
   max_peers: 50               # Maximum peer connections
   discovery_interval: 30      # Seconds between LAN broadcasts
+  sync_interval: 30           # Seconds between proactive chain sync attempts
+  startup_sync_timeout: 45    # First-startup sync deadline before failing closed
+  peer_endpoint_ttl: 600      # Seconds a published on-chain peer endpoint stays fresh
 
 # Simulation Configuration
 simulation:

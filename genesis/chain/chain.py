@@ -216,7 +216,7 @@ class Blockchain:
         elif tx.tx_type == TxType.BEING_HIBERNATE:
             world_state.apply_being_hibernate(target_id, data)
         elif tx.tx_type == TxType.BEING_WAKE:
-            world_state.apply_being_wake(target_id)
+            world_state.apply_being_wake(target_id, data)
         elif tx.tx_type == TxType.BEING_DEATH:
             world_state.apply_being_death(target_id, data)
         elif tx.tx_type == TxType.ACTION:

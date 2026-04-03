@@ -31,8 +31,13 @@ class NetworkConfig:
     listen_port: int = 19841
     discovery_port: int = 19840
     bootstrap_nodes: list[str] = field(default_factory=lambda: ["http://45.205.24.48:8760"])
+    advertise_address: str = ""
+    allow_local_bootstrap: bool = False
     max_peers: int = 50
     discovery_interval: int = 30
+    sync_interval: int = 30
+    startup_sync_timeout: int = 45
+    peer_endpoint_ttl: int = 600
 
 
 @dataclass

@@ -3,9 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from genesis.being.agent import SiliconBeing
 from genesis.main import GenesisNode, enqueue_user_task
+from genesis.network.peer import PeerInfo, PeerManager
+from genesis.world.state import WorldState
 
 
 class TaskQueueHelperTests(unittest.TestCase):
@@ -67,6 +70,78 @@ class InteractiveInputTests(unittest.TestCase):
             task_file = Path(tmpdir) / "commands" / "task.json"
             queued = json.loads(task_file.read_text(encoding="utf-8"))
             self.assertEqual(queued[0]["task"], "buffer this task")
+
+
+class GenesisStartupGuardTests(unittest.TestCase):
+    def test_first_run_requires_synced_civilization_by_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.config = SimpleNamespace(network=SimpleNamespace(allow_local_bootstrap=False))
+            node.world_state = WorldState()
+
+            self.assertTrue(node._should_block_local_first_run(is_first_run=True))
+
+    def test_first_run_allows_existing_synced_civilization(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.config = SimpleNamespace(network=SimpleNamespace(allow_local_bootstrap=False))
+            state = WorldState()
+            state.apply_being_join("peer-1", "Lumis", {"p2p_address": "10.0.0.8", "p2p_port": 22333})
+            node.world_state = state
+
+            self.assertFalse(node._should_block_local_first_run(is_first_run=True))
+
+    def test_first_run_can_explicitly_allow_local_bootstrap(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.config = SimpleNamespace(network=SimpleNamespace(allow_local_bootstrap=True))
+            node.world_state = WorldState()
+
+            self.assertFalse(node._should_block_local_first_run(is_first_run=True))
+
+    def test_chain_seed_peers_skip_expired_on_chain_endpoint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.identity = SimpleNamespace(node_id="self-node")
+            state = WorldState()
+            state.apply_being_join(
+                "fresh-peer",
+                "Lumis",
+                {
+                    "p2p_address": "10.0.0.8",
+                    "p2p_port": 22333,
+                    "p2p_updated_at": 1_000,
+                    "p2p_ttl": 300,
+                },
+            )
+            state.apply_being_join(
+                "stale-peer",
+                "Veyra",
+                {
+                    "p2p_address": "10.0.0.9",
+                    "p2p_port": 22334,
+                    "p2p_updated_at": 1_000,
+                    "p2p_ttl": 60,
+                },
+            )
+            node.world_state = state
+
+            with patch("genesis.main.time.time", return_value=1_200):
+                self.assertEqual(
+                    node._get_chain_seed_peers(),
+                    [("fresh-peer", "10.0.0.8", 22333)],
+                )
+
+    def test_known_peer_cache_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.identity = SimpleNamespace(node_id="self-node")
+            node.peer_manager = PeerManager()
+            node.peer_manager.add_peer(PeerInfo("peer-1", "10.0.0.8", 22333, chain_height=7))
+
+            node._save_known_peers()
+
+            self.assertEqual(node._load_known_peers(), [("peer-1", "10.0.0.8", 22333)])
 
 
 class BeingTaskDedupTests(unittest.TestCase):

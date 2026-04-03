@@ -18,9 +18,12 @@ import json
 import logging
 import os
 import signal
+import socket
 import sys
 import time
 from pathlib import Path
+
+from genesis.utils.async_events import LazyAsyncEvent
 
 logger = logging.getLogger("genesis")
 
@@ -124,7 +127,8 @@ class GenesisNode:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._shutdown = False
         self._running = False
-        self._startup_ready = asyncio.Event()
+        self._startup_ready = LazyAsyncEvent()
+        self._next_periodic_sync_at = 0.0
 
         # Components (initialized in start())
         self.config = None
@@ -178,6 +182,270 @@ class GenesisNode:
         if self.world_state.total_beings_ever == 0 and snapshot.total_beings_ever > 0:
             self.world_state.total_beings_ever = snapshot.total_beings_ever
 
+    def _persist_world_state_snapshot(self) -> None:
+        """Persist the latest materialized world state for restarts and status views."""
+        if self.world_state is None:
+            return
+        snapshot_path = self.data_dir / "world_state.json"
+        snapshot_path.write_text(
+            json.dumps(self.world_state.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _known_peers_path(self) -> Path:
+        return self.data_dir / "known_peers.json"
+
+    def _load_known_peers(self) -> list[tuple[str, str, int]]:
+        """Load previously reachable peers from local disk."""
+        path = self._known_peers_path()
+        if not path.exists():
+            return []
+
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            logger.warning("Failed to load known peers cache: %s", exc)
+            return []
+
+        peers: list[tuple[str, str, int]] = []
+        if not isinstance(raw, list):
+            return peers
+
+        for item in raw[:200]:
+            if not isinstance(item, dict):
+                continue
+            node_id = str(item.get("node_id", "")).strip()
+            address = str(item.get("address", "")).strip()
+            try:
+                port = int(item.get("port", 0) or 0)
+            except (TypeError, ValueError):
+                port = 0
+            if node_id and address and 1 <= port <= 65535:
+                peers.append((node_id, address, port))
+        return peers
+
+    def _save_known_peers(self) -> None:
+        """Persist the latest reachable peers so restart does not depend on bootstrap."""
+        if self.peer_manager is None or self.identity is None:
+            return
+
+        peers = []
+        for peer in sorted(
+            self.peer_manager.get_all_peers(),
+            key=lambda item: (item.status != "active", -item.chain_height, -item.last_seen),
+        ):
+            if peer.node_id == self.identity.node_id:
+                continue
+            if not peer.address or peer.port <= 0:
+                continue
+            peers.append(peer.to_dict())
+
+        path = self._known_peers_path()
+        path.write_text(json.dumps(peers[:200], ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _chain_sync_interval_seconds(self) -> int:
+        value = 30
+        if self.config is not None:
+            try:
+                value = int(getattr(self.config.network, "sync_interval", 30) or 30)
+            except (TypeError, ValueError):
+                value = 30
+        return max(5, value)
+
+    def _startup_sync_timeout_seconds(self) -> int:
+        value = 45
+        if self.config is not None:
+            try:
+                value = int(getattr(self.config.network, "startup_sync_timeout", 45) or 45)
+            except (TypeError, ValueError):
+                value = 45
+        return max(5, value)
+
+    def _build_peer_endpoint(self) -> dict[str, object]:
+        """Build the on-chain endpoint card advertised for this node."""
+        ttl = 600
+        if self.config is not None:
+            try:
+                ttl = int(getattr(self.config.network, "peer_endpoint_ttl", 600) or 600)
+            except (TypeError, ValueError):
+                ttl = 600
+        now = int(time.time())
+        return {
+            "p2p_address": self._resolve_advertise_address(),
+            "p2p_port": self.config.network.listen_port,
+            "p2p_updated_at": now,
+            "p2p_ttl": max(60, ttl),
+            "p2p_seq": int(time.time() * 1000),
+        }
+
+    @staticmethod
+    def _is_peer_endpoint_fresh(being: object) -> bool:
+        """Check whether a chain-published peer endpoint is still within its TTL."""
+        try:
+            updated_at = int(getattr(being, "p2p_updated_at", 0) or 0)
+            ttl = int(getattr(being, "p2p_ttl", 0) or 0)
+        except (TypeError, ValueError):
+            return True
+        if updated_at <= 0 or ttl <= 0:
+            return True
+        return (updated_at + ttl) >= int(time.time())
+
+    def _resolve_advertise_address(self) -> str:
+        """Resolve the address this node should publish on-chain."""
+        configured = ""
+        if self.config is not None:
+            configured = str(getattr(self.config.network, "advertise_address", "") or "").strip()
+        if configured:
+            return configured
+
+        try:
+            hostname = socket.gethostname()
+            for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None, socket.AF_INET):
+                address = str(sockaddr[0]).strip()
+                if address and not address.startswith("127."):
+                    return address
+        except OSError:
+            pass
+
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.connect(("8.8.8.8", 80))
+                address = str(sock.getsockname()[0]).strip()
+                if address and not address.startswith("127."):
+                    return address
+        except OSError:
+            pass
+
+        return ""
+
+    def _get_chain_seed_peers(self) -> list[tuple[str, str, int]]:
+        """Return peer endpoints learned from the synced world state."""
+        if self.world_state is None or self.identity is None:
+            return []
+
+        seeds: list[tuple[int, str, str, int]] = []
+        for being in self.world_state.beings.values():
+            if being.node_id == self.identity.node_id or being.is_npc:
+                continue
+            address = str(getattr(being, "p2p_address", "") or "").strip()
+            port = int(getattr(being, "p2p_port", 0) or 0)
+            if not address or port <= 0 or not self._is_peer_endpoint_fresh(being):
+                continue
+            updated_at = int(getattr(being, "p2p_updated_at", 0) or 0)
+            seeds.append((updated_at, being.node_id, address, port))
+        seeds.sort(reverse=True)
+        return [(node_id, address, port) for _, node_id, address, port in seeds]
+
+    async def _connect_chain_seed_peers(self) -> None:
+        """Attempt direct peer connections using endpoints stored on-chain."""
+        for node_id, address, port in self._get_chain_seed_peers():
+            try:
+                await self._handle_discovered_peer(node_id, address, port)
+            except Exception as exc:
+                logger.debug("Chain seed peer connect failed for %s at %s:%d: %s", node_id[:16], address, port, exc)
+
+    async def _connect_known_peers(self) -> None:
+        """Reconnect to locally cached peers before falling back to bootstrap services."""
+        for node_id, address, port in self._load_known_peers():
+            try:
+                await self._handle_discovered_peer(node_id, address, port)
+            except Exception as exc:
+                logger.debug("Known peer reconnect failed for %s at %s:%d: %s", node_id[:16], address, port, exc)
+
+    async def _run_sync_round(self, refresh_bootstrap: bool) -> bool:
+        """Run one network maintenance round and sync chain if a better peer exists."""
+        if (
+            self.blockchain is None
+            or self.chain_sync is None
+            or self.peer_manager is None
+        ):
+            return False
+
+        self.peer_manager.expire_peers()
+        await self._connect_known_peers()
+        await self._connect_chain_seed_peers()
+
+        if refresh_bootstrap and self.discovery is not None:
+            await self.discovery.broadcast_presence()
+            await self.discovery.query_bootstrap()
+
+        advanced = await self.chain_sync.sync_chain(self.blockchain)
+        if advanced:
+            await self._reload_world_state_from_chain()
+            await self._connect_chain_seed_peers()
+
+        self._save_known_peers()
+        return advanced
+
+    async def _sync_until_current(self, is_first_run: bool) -> None:
+        """Keep syncing until local height matches the best reachable peer or time runs out."""
+        allow_local_bootstrap = bool(
+            self.config and getattr(self.config.network, "allow_local_bootstrap", False)
+        )
+        deadline = time.time() + self._startup_sync_timeout_seconds()
+
+        while not self._shutdown:
+            await self._run_sync_round(refresh_bootstrap=True)
+
+            local_height = await self.blockchain.get_chain_height()
+            best_peer = self.peer_manager.get_best_peer() if self.peer_manager else None
+            peer_ahead = best_peer is not None and best_peer.chain_height > local_height
+
+            if not peer_ahead:
+                if not is_first_run or allow_local_bootstrap or self._has_synced_existing_civilization():
+                    return
+
+            if time.time() >= deadline:
+                break
+
+            await asyncio.sleep(2.0)
+
+        local_height = await self.blockchain.get_chain_height()
+        best_peer = self.peer_manager.get_best_peer() if self.peer_manager else None
+        peer_ahead = best_peer is not None and best_peer.chain_height > local_height
+
+        if is_first_run and not allow_local_bootstrap and not self._has_synced_existing_civilization():
+            raise RuntimeError(
+                "First startup must sync an existing civilization from blockchain before creating a new being. "
+                "Configure reachable peers or set network.allow_local_bootstrap=true to intentionally create a new world."
+            )
+
+        if is_first_run and peer_ahead:
+            raise RuntimeError(
+                "First startup could not catch up to the latest reachable chain tip before timeout. "
+                "Check reachable peers or increase network.startup_sync_timeout."
+            )
+
+        if peer_ahead:
+            logger.warning(
+                "Startup sync stopped before catch-up completed (local=%d, best_peer=%d)",
+                local_height,
+                best_peer.chain_height if best_peer else -1,
+            )
+
+    async def _run_periodic_sync_if_due(self) -> None:
+        """Periodically refresh the local chain from reachable peers while the node is running."""
+        now = time.time()
+        if self._next_periodic_sync_at and now < self._next_periodic_sync_at:
+            return
+        self._next_periodic_sync_at = now + self._chain_sync_interval_seconds()
+        try:
+            await self._run_sync_round(refresh_bootstrap=False)
+        except Exception as exc:
+            logger.debug("Periodic sync failed: %s", exc)
+
+    def _has_synced_existing_civilization(self) -> bool:
+        """True when local state already contains meaningful shared civilization data."""
+        return bool(self.world_state and self.world_state.beings)
+
+    def _should_block_local_first_run(self, is_first_run: bool) -> bool:
+        """Block brand-new local bootstrap unless explicitly allowed by config."""
+        if not is_first_run:
+            return False
+        if self.config and getattr(self.config.network, "allow_local_bootstrap", False):
+            return False
+        return not self._has_synced_existing_civilization()
+
     async def _reload_world_state_from_chain(self) -> None:
         """Rebuild world state from the current local chain tip."""
         from genesis.world.state import WorldState
@@ -198,6 +466,8 @@ class GenesisNode:
             wmap = WorldMap()
             wmap.generate()
             self.world_state.world_map = {k: v.to_dict() for k, v in wmap.regions.items()}
+
+        self._persist_world_state_snapshot()
 
     async def start(self) -> None:
         """Start the virtual world node."""
@@ -291,11 +561,13 @@ class GenesisNode:
         try:
             await self.server.start()
             await self.discovery.start()
-            await self.discovery.broadcast_presence()
-            await self.discovery.query_bootstrap()
-            if await self.chain_sync.sync_chain(self.blockchain):
-                await self._reload_world_state_from_chain()
+            await self._sync_until_current(is_first_run)
             logger.info("P2P network started on port %d", self.config.network.listen_port)
+            if self._should_block_local_first_run(is_first_run):
+                raise RuntimeError(
+                    "First startup must sync an existing civilization from blockchain before creating a new being. "
+                    "Configure reachable peers or set network.allow_local_bootstrap=true to intentionally create a new world."
+                )
         except Exception as e:
             if self.discovery:
                 try:
@@ -366,6 +638,7 @@ class GenesisNode:
             con._write("")
 
         being_state_path = str(self.data_dir / "being_state.json")
+        peer_endpoint = self._build_peer_endpoint()
         if is_first_run:
             # First run — create a new being
             from genesis.world.registry import generate_being_name, generate_traits, generate_form
@@ -392,6 +665,7 @@ class GenesisNode:
             await self._submit_tx("BEING_JOIN", {
                 "name": name, "traits": traits, "form": form,
                 "location": "genesis_plains", "is_npc": False,
+                **peer_endpoint,
             })
 
             self.chronicle.log_birth(
@@ -433,10 +707,11 @@ class GenesisNode:
                         "name": name, "traits": self.being.traits,
                         "form": self.being.form, "location": "genesis_plains",
                         "is_npc": False, "generation": old_gen + 1,
+                        **peer_endpoint,
                     })
                 else:
                     # Wake up
-                    await self._submit_tx("BEING_WAKE", {})
+                    await self._submit_tx("BEING_WAKE", peer_endpoint)
                     logger.info("Being %s woke up from hibernation", self.being.name)
 
             except (FileNotFoundError, json.JSONDecodeError) as e:
@@ -460,6 +735,7 @@ class GenesisNode:
                     "name": name, "traits": self.being.traits,
                     "form": self.being.form, "location": "genesis_plains",
                     "is_npc": False,
+                    **peer_endpoint,
                 })
 
         # 11. Check minimum beings — spawn NPCs if needed
@@ -489,6 +765,7 @@ class GenesisNode:
             self.world_state.creator_god_node_id,
         )
         self._startup_ready.set()
+        self._next_periodic_sync_at = time.time() + self._chain_sync_interval_seconds()
 
         # Start main loop
         await self._main_loop()
@@ -516,6 +793,7 @@ class GenesisNode:
         while not self._shutdown:
             try:
                 tick_start = time.time()
+                await self._run_periodic_sync_if_due()
 
                 # 获取当前生命体状态
                 being_state = self.world_state.get_being(self.identity.node_id)
@@ -707,6 +985,7 @@ class GenesisNode:
                 elapsed = time.time() - tick_start
                 wait_time = max(0, tick_interval - elapsed)
                 while wait_time > 0 and not self._shutdown:
+                    await self._run_periodic_sync_if_due()
                     await asyncio.sleep(min(1.0, wait_time))
                     wait_time -= 1.0
                 if self._shutdown:
@@ -859,6 +1138,8 @@ class GenesisNode:
 
             con.header(t("hibernate_goodbye", name=self.being.name))
 
+        self._save_known_peers()
+
         # Stop network (with 2s timeout each to avoid hanging)
         if self.discovery:
             try:
@@ -937,11 +1218,14 @@ class GenesisNode:
                 port=port,
                 last_seen=time.time(),
             )
+            self._save_known_peers()
             return
 
         connected = await self.server.connect_to_peer(address, port)
         if not connected:
             return
+
+        self._save_known_peers()
 
         try:
             if await self.chain_sync.sync_chain(self.blockchain):
@@ -1006,7 +1290,7 @@ class GenesisNode:
         elif tx_type == "BEING_HIBERNATE":
             self.world_state.apply_being_hibernate(target_id, data)
         elif tx_type == "BEING_WAKE":
-            self.world_state.apply_being_wake(target_id)
+            self.world_state.apply_being_wake(target_id, data)
         elif tx_type == "BEING_DEATH":
             target = data.get("node_id", sender)
             self.world_state.apply_being_death(target, data)
