@@ -92,7 +92,7 @@ journalctl -u genesis-bootstrap -f
 
 ## 用户如何接入
 
-Bootstrap 节点启动后，用户编辑自己电脑上的 `data/config.yaml`，添加你的服务器地址：
+Bootstrap 节点启动后，用户编辑自己电脑上的 `config.yaml`，添加你的服务器地址：
 
 ```yaml
 network:

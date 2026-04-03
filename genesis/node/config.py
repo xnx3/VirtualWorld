@@ -1,7 +1,8 @@
 """Configuration loading and defaults for Genesis nodes.
 
-Configuration is read from ``data_dir/config.yaml`` (YAML).  Missing keys
-fall back to sensible defaults that match ``config.yaml.example``.
+Configuration is read from ``config.yaml`` in the project/executable root (YAML).
+The genesis.sh script syncs this to ``data_dir/config.yaml`` before Python starts.
+Missing keys fall back to sensible defaults that match ``config.yaml.example``.
 """
 
 from __future__ import annotations
@@ -113,6 +114,9 @@ _CONFIG_FILE = "config.yaml"
 
 def load_config(data_dir: str | Path) -> VWConfig:
     """Load configuration from ``<data_dir>/config.yaml``.
+
+    Note: genesis.sh syncs the root ``config.yaml`` to ``data_dir/`` before startup,
+    so this reads the synced copy. Users should edit the root ``config.yaml`` instead.
 
     If the file does not exist, all-default values are returned.
     Unknown top-level or nested keys are silently ignored.

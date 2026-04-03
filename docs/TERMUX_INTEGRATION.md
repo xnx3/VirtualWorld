@@ -136,7 +136,7 @@ bash ~/storage/downloads/Genesis/install.sh
 
 ```bash
 # 编辑配置文件
-nano ~/genesis/data/config.yaml
+nano ~/genesis/config.yaml
 
 # 添加 LLM 配置
 llm:
@@ -165,9 +165,9 @@ cd ~/genesis
 │   └── ...
 ├── venv/                           # Python 虚拟环境（快速安装）
 ├── data/                           # 数据目录
-│   ├── config.yaml                 # 配置文件（需手动配置 API）
 │   ├── genesis.log                 # 日志文件
 │   └── chronicle/                  # 历史记录
+├── config.yaml                     # 配置文件（需手动配置 API）
 ├── start_genesis.sh                # 启动脚本
 ├── install.sh                      # 完整安装脚本
 ├── quick_install.sh                # 快速安装脚本
@@ -295,7 +295,7 @@ pip install --force-reinstall -r ~/genesis/requirements.txt
 4. 确认 **Model** 名称正确
 5. 点击 **保存并验证**
 
-应用会自动测试 API 连接，验证成功后配置将保存到 Termux 的 `config.yaml`。
+应用会自动测试 API 连接，验证成功后配置将保存到 `~/genesis/config.yaml`。
 
 ### 支持的提供商
 
@@ -311,7 +311,7 @@ pip install --force-reinstall -r ~/genesis/requirements.txt
 如需手动编辑配置文件：
 
 ```bash
-nano ~/genesis/data/config.yaml
+nano ~/genesis/config.yaml
 ```
 
 配置格式：

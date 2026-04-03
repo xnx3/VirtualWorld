@@ -1,5 +1,5 @@
 # VirtualWorld Configuration
-# Copy to data/config.yaml and modify as needed
+# Copy to config.yaml and modify as needed
 
 # Language: "en" (English) or "zh" (Simplified Chinese / 简体中文)
 language: "en"

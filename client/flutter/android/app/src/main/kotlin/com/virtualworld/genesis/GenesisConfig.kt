@@ -85,10 +85,7 @@ object GenesisConfig {
 #!/bin/bash
 # Genesis 配置更新脚本
 
-CONFIG_FILE="${'$'}HOME/genesis/data/config.yaml"
-
-# 创建配置目录
-mkdir -p "${'$'}HOME/genesis/data"
+CONFIG_FILE="${'$'}HOME/genesis/config.yaml"
 
 # 如果配置文件不存在，创建默认配置
 if [ ! -f "${'$'}CONFIG_FILE" ]; then

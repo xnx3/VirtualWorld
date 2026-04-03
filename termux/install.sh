@@ -176,11 +176,11 @@ main() {
     # 复制配置模板
     if [ -f "$SOURCE_DIR/config.yaml.example" ]; then
         echo "  Installing config template..."
-        cp "$SOURCE_DIR/config.yaml.example" "$INSTALL_DIR/data/"
+        cp "$SOURCE_DIR/config.yaml.example" "$INSTALL_DIR/"
 
         # 创建默认配置文件
-        if [ ! -f "$INSTALL_DIR/data/config.yaml" ]; then
-            cp "$SOURCE_DIR/config.yaml.example" "$INSTALL_DIR/data/config.yaml"
+        if [ ! -f "$INSTALL_DIR/config.yaml" ]; then
+            cp "$SOURCE_DIR/config.yaml.example" "$INSTALL_DIR/config.yaml"
         fi
     fi
 
@@ -225,7 +225,7 @@ main() {
     echo -e "${CYAN}Genesis installed to:${NC} $INSTALL_DIR"
     echo ""
     echo -e "${CYAN}Next steps:${NC}"
-    echo -e "  1. ${YELLOW}Configure API:${NC} nano $INSTALL_DIR/data/config.yaml"
+    echo -e "  1. ${YELLOW}Configure API:${NC} nano $INSTALL_DIR/config.yaml"
     echo -e "  2. ${YELLOW}Start service:${NC} $INSTALL_DIR/start_genesis.sh"
     echo -e "  3. ${YELLOW}API endpoint:${NC} ws://127.0.0.1:19842"
     echo -e "  4. ${YELLOW}Tip:${NC} If you launched this from the Android app, just return to the app and wait for auto-start."

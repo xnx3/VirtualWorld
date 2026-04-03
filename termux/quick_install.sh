@@ -247,8 +247,8 @@ install_bundle() {
     mkdir -p "$INSTALL_DIR/data"
 
     # 复制默认配置（如果不存在）
-    if [ ! -f "$INSTALL_DIR/data/config.yaml" ] && [ -f "$INSTALL_DIR/config.yaml.example" ]; then
-        cp "$INSTALL_DIR/config.yaml.example" "$INSTALL_DIR/data/config.yaml"
+    if [ ! -f "$INSTALL_DIR/config.yaml" ] && [ -f "$INSTALL_DIR/config.yaml.example" ]; then
+        cp "$INSTALL_DIR/config.yaml.example" "$INSTALL_DIR/config.yaml"
         echo -e "${GREEN}  Default config created${NC}"
     fi
 
@@ -336,7 +336,7 @@ show_complete() {
     echo ""
     echo -e "${CYAN}Next steps:${NC}"
     echo -e "  1. Edit config (optional):"
-    echo -e "     ${YELLOW}nano $INSTALL_DIR/data/config.yaml${NC}"
+    echo -e "     ${YELLOW}nano $INSTALL_DIR/config.yaml${NC}"
     echo ""
     echo -e "  2. Start Genesis service manually if needed:"
     echo -e "     ${YELLOW}$INSTALL_DIR/start_genesis.sh${NC}"
