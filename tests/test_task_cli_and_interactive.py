@@ -1,4 +1,5 @@
 import json
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -153,7 +154,7 @@ class GenesisStartupGuardTests(unittest.TestCase):
                     peer_endpoint_ttl=600,
                     relay_capable=False,
                     max_relay_hints=2,
-                    advertise_address="203.0.113.8",
+                    advertise_address="8.8.8.8",
                 )
             )
             state = WorldState()
@@ -180,6 +181,7 @@ class GenesisStartupGuardTests(unittest.TestCase):
                 },
             )
             node.world_state = state
+            node.server = SimpleNamespace(has_recent_public_inbound=lambda: False)
 
             with patch("genesis.main.time.time", return_value=1_200):
                 endpoint = node._build_peer_endpoint()
@@ -199,7 +201,7 @@ class GenesisStartupGuardTests(unittest.TestCase):
                     peer_endpoint_ttl=600,
                     relay_capable=False,
                     max_relay_hints=2,
-                    advertise_address="203.0.113.8",
+                    advertise_address="8.8.8.8",
                 )
             )
             state = WorldState()
@@ -231,6 +233,69 @@ class GenesisStartupGuardTests(unittest.TestCase):
                 endpoint = node._build_peer_endpoint()
 
             self.assertEqual(endpoint["p2p_relay_hints"], ["relay-a", "relay-b"])
+
+    def test_build_peer_endpoint_auto_enables_relay_when_publicly_reachable(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.identity = SimpleNamespace(node_id="self-node")
+            node.server = SimpleNamespace(
+                has_route_to_peer=lambda peer_id: False,
+                has_recent_public_inbound=lambda: True,
+            )
+            node.config = SimpleNamespace(
+                network=SimpleNamespace(
+                    listen_port=19841,
+                    peer_endpoint_ttl=600,
+                    relay_capable=False,
+                    max_relay_hints=2,
+                    advertise_address="8.8.8.8",
+                )
+            )
+            node.world_state = WorldState()
+
+            with patch("genesis.main.time.time", return_value=1_200):
+                endpoint = node._build_peer_endpoint()
+
+            self.assertEqual(endpoint["p2p_capabilities"], {"relay": True})
+
+    def test_build_peer_endpoint_does_not_auto_enable_relay_for_private_address(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.identity = SimpleNamespace(node_id="self-node")
+            node.server = SimpleNamespace(
+                has_route_to_peer=lambda peer_id: False,
+                has_recent_public_inbound=lambda: True,
+            )
+            node.config = SimpleNamespace(
+                network=SimpleNamespace(
+                    listen_port=19841,
+                    peer_endpoint_ttl=600,
+                    relay_capable=False,
+                    max_relay_hints=2,
+                    advertise_address="192.168.1.8",
+                )
+            )
+            node.world_state = WorldState()
+
+            with patch("genesis.main.time.time", return_value=1_200):
+                endpoint = node._build_peer_endpoint()
+
+            self.assertEqual(endpoint["p2p_capabilities"], {"relay": False})
+
+    def test_resolve_advertise_address_prefers_public_candidate(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.config = SimpleNamespace(network=SimpleNamespace(advertise_address=""))
+
+            with patch(
+                "genesis.main.socket.getaddrinfo",
+                return_value=[
+                    (socket.AF_INET, 0, 0, "", ("192.168.1.8", 0)),
+                    (socket.AF_INET, 0, 0, "", ("8.8.8.8", 0)),
+                ],
+            ):
+                with patch("genesis.main.socket.socket", side_effect=OSError("skip")):
+                    self.assertEqual(node._resolve_advertise_address(), "8.8.8.8")
 
 
 class BeingTaskDedupTests(unittest.TestCase):

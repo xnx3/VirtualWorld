@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -298,7 +299,8 @@ class GenesisNode:
             ):
                 continue
             updated_at = int(getattr(being, "p2p_updated_at", 0) or 0)
-            route_priority = 1 if self.server and self.server.has_route_to_peer(being.node_id) else 0
+            route_checker = getattr(self.server, "has_route_to_peer", None) if self.server else None
+            route_priority = 1 if route_checker and route_checker(being.node_id) else 0
             relay_candidates.append((route_priority, updated_at, being.node_id))
 
         relay_candidates.sort(reverse=True)
@@ -335,6 +337,7 @@ class GenesisNode:
             except (TypeError, ValueError):
                 ttl = 600
         now = int(time.time())
+        advertise_address = self._resolve_advertise_address()
         transports = ["tcp"]
         if self.webrtc is not None:
             transports = self.webrtc.advertised_transports(transports)
@@ -343,7 +346,7 @@ class GenesisNode:
             if "relay" not in transports:
                 transports.append("relay")
         return {
-            "p2p_address": self._resolve_advertise_address(),
+            "p2p_address": advertise_address,
             "p2p_port": self.config.network.listen_port,
             "p2p_updated_at": now,
             "p2p_ttl": max(60, ttl),
@@ -352,9 +355,7 @@ class GenesisNode:
             "p2p_transports": transports,
             "p2p_relay_hints": relay_hints,
             "p2p_capabilities": {
-                "relay": bool(
-                    self.config and getattr(self.config.network, "relay_capable", False)
-                ),
+                "relay": self._should_publish_relay_capability(advertise_address),
             },
         }
 
@@ -370,6 +371,50 @@ class GenesisNode:
             return True
         return (updated_at + ttl) >= int(time.time())
 
+    @staticmethod
+    def _is_publicly_routable_address(address: str) -> bool:
+        address = str(address or "").strip()
+        if not address:
+            return False
+        try:
+            return ipaddress.ip_address(address).is_global
+        except ValueError:
+            pass
+
+        try:
+            infos = socket.getaddrinfo(address, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        except OSError:
+            return False
+
+        for _, _, _, _, sockaddr in infos:
+            candidate = str(sockaddr[0]).strip()
+            try:
+                if ipaddress.ip_address(candidate).is_global:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    @staticmethod
+    def _is_usable_advertise_candidate(address: str) -> bool:
+        address = str(address or "").strip()
+        if not address:
+            return False
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError:
+            return address not in {"localhost"}
+        return not (parsed.is_loopback or parsed.is_unspecified)
+
+    def _should_publish_relay_capability(self, advertise_address: str) -> bool:
+        if self.config and getattr(self.config.network, "relay_capable", False):
+            return True
+        if self.server is None or not getattr(self.server, "has_recent_public_inbound", None):
+            return False
+        if not self._is_publicly_routable_address(advertise_address):
+            return False
+        return bool(self.server.has_recent_public_inbound())
+
     def _resolve_advertise_address(self) -> str:
         """Resolve the address this node should publish on-chain."""
         configured = ""
@@ -378,25 +423,33 @@ class GenesisNode:
         if configured:
             return configured
 
+        candidates: list[str] = []
+
+        def remember(address: str) -> None:
+            candidate = str(address or "").strip()
+            if not self._is_usable_advertise_candidate(candidate):
+                return
+            if candidate not in candidates:
+                candidates.append(candidate)
+
         try:
             hostname = socket.gethostname()
-            for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None, socket.AF_INET):
-                address = str(sockaddr[0]).strip()
-                if address and not address.startswith("127."):
-                    return address
+            for _, _, _, _, sockaddr in socket.getaddrinfo(hostname, None, socket.AF_UNSPEC):
+                remember(str(sockaddr[0]).strip())
         except OSError:
             pass
 
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.connect(("8.8.8.8", 80))
-                address = str(sock.getsockname()[0]).strip()
-                if address and not address.startswith("127."):
-                    return address
+                remember(str(sock.getsockname()[0]).strip())
         except OSError:
             pass
 
-        return ""
+        for candidate in candidates:
+            if self._is_publicly_routable_address(candidate):
+                return candidate
+        return candidates[0] if candidates else ""
 
     def _get_chain_seed_peers(self) -> list[tuple[str, str, int]]:
         """Return peer endpoints learned from the synced world state."""

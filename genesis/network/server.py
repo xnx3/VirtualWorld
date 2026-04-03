@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import inspect
 import logging
 import struct
@@ -57,6 +58,7 @@ class P2PServer:
         self._peer_capabilities: dict[str, dict[str, Any]] = {}
         self._peer_transports: dict[str, list[str]] = {}
         self._virtual_connections: dict[str, tuple[str, Callable[[Message], Awaitable[None] | None]]] = {}
+        self._last_public_inbound_at: float = 0.0
 
     # ------------------------------------------------------------------
     # Properties
@@ -73,6 +75,17 @@ class P2PServer:
     @property
     def peer_manager(self) -> PeerManager:
         return self._peer_manager
+
+    @staticmethod
+    def _is_public_ip(address: str) -> bool:
+        try:
+            return ipaddress.ip_address(str(address).strip()).is_global
+        except ValueError:
+            return False
+
+    def has_recent_public_inbound(self, max_age: float = 3600.0) -> bool:
+        """True after a recent inbound connection from a globally routable peer."""
+        return self._last_public_inbound_at > 0 and (time.time() - self._last_public_inbound_at) <= max_age
 
     def has_route_to_peer(self, node_id: str) -> bool:
         """True when this node can currently reach *node_id* directly or via relay."""
@@ -461,6 +474,8 @@ class P2PServer:
             )
         )
         self.register_contact_card(peer_id, transports=["tcp"])
+        if self._is_public_ip(remote_ip):
+            self._last_public_inbound_at = time.time()
 
         logger.info("Inbound peer %s from %s", peer_id[:16], remote_ip)
         asyncio.create_task(self._read_loop(peer_id, reader, writer))

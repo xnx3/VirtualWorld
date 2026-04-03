@@ -31,7 +31,7 @@ network:
   sync_interval: 30           # Seconds between proactive chain sync attempts
   startup_sync_timeout: 45    # First-startup sync deadline before failing closed
   peer_endpoint_ttl: 600      # Seconds a published on-chain peer endpoint stays fresh
-  relay_capable: false        # Set true only on publicly reachable nodes willing to relay traffic
+  relay_capable: false        # Legacy manual override; public relay role is auto-detected when this node is externally reachable
   max_relay_hints: 3          # Max relay node IDs advertised in each on-chain contact card
   webrtc_enabled: true        # Enable WebRTC data channels for NAT traversal and relay-assisted dialing
   stun_servers:
