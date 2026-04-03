@@ -101,6 +101,44 @@ class GenesisStartupGuardTests(unittest.TestCase):
 
             self.assertFalse(node._should_block_local_first_run(is_first_run=True))
 
+    def test_ensure_chain_bootstrapped_after_sync_creates_local_genesis_when_allowed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.identity = SimpleNamespace(node_id="self-node")
+            node.world_state = WorldState()
+            node._reload_world_state_from_chain = lambda: asyncio.sleep(0)
+            node.config = SimpleNamespace(network=SimpleNamespace(allow_local_bootstrap=True))
+            created = []
+
+            class _FakeBlockchain:
+                async def get_chain_height(self):
+                    return -1
+
+                async def ensure_local_genesis(self, node_id):
+                    created.append(node_id)
+                    return True
+
+            node.blockchain = _FakeBlockchain()
+
+            asyncio.run(node._ensure_chain_bootstrapped_after_sync(is_first_run=True))
+
+            self.assertEqual(created, ["self-node"])
+
+    def test_ensure_chain_bootstrapped_after_sync_rejects_empty_chain_without_bootstrap(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.identity = SimpleNamespace(node_id="self-node")
+            node.config = SimpleNamespace(network=SimpleNamespace(allow_local_bootstrap=False))
+
+            class _FakeBlockchain:
+                async def get_chain_height(self):
+                    return -1
+
+            node.blockchain = _FakeBlockchain()
+
+            with self.assertRaises(RuntimeError):
+                asyncio.run(node._ensure_chain_bootstrapped_after_sync(is_first_run=True))
+
     def test_chain_seed_peers_skip_expired_on_chain_endpoint(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             node = GenesisNode(tmpdir)

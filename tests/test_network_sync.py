@@ -1,15 +1,19 @@
+from __future__ import annotations
+
 import asyncio
 import unittest
 from struct import unpack
 from unittest.mock import patch
 
 from genesis.chain.block import Block
+from genesis.chain.chain import Blockchain
+from genesis.chain.mempool import Mempool
 from genesis.chain.transaction import Transaction, TxType
 from genesis.network.discovery import PeerDiscovery
 from genesis.network.peer import PeerInfo, PeerManager
 from genesis.network.protocol import LENGTH_PREFIX_SIZE, Message, MessageType
 from genesis.network.server import P2PServer
-from genesis.network.sync import ChainSync
+from genesis.network.sync import ChainSync, GenesisMismatchError
 from genesis.node.identity import NodeIdentity
 
 
@@ -31,27 +35,89 @@ class DummyServer:
 
 
 class DummyBlockchain:
-    def __init__(self, height: int = 0) -> None:
+    def __init__(self, height: int = 0, genesis_hash: str = "hash-genesis-local") -> None:
         self.height = height
         self.blocks = []
         self.pending_txs = []
+        self.genesis_hash = genesis_hash
+        self.reset_calls = 0
 
     async def get_chain_height(self) -> int:
         return self.height
 
+    async def get_block(self, height: int) -> Block | None:
+        if height != 0 or self.height < 0:
+            return None
+        return Block(
+            index=0,
+            timestamp=0.0,
+            previous_hash="0" * 64,
+            merkle_root="",
+            proposer="local-node",
+            signature="0" * 128,
+            transactions=[],
+            nonce=0,
+            hash=self.genesis_hash,
+        )
+
     async def add_block(self, block: Block) -> bool:
         self.blocks.append(block)
         self.height = block.index
+        if block.index == 0:
+            self.genesis_hash = block.hash
         return True
 
     async def add_pending_tx(self, tx_data: dict) -> bool:
         self.pending_txs.append(tx_data)
         return True
 
+    async def has_only_genesis(self) -> bool:
+        return self.height == 0
+
+    async def reset_to_empty(self) -> None:
+        self.height = -1
+        self.blocks.clear()
+        self.reset_calls += 1
+
 
 class DummyStorage:
     async def get_chain_height(self) -> int:
         return 0
+
+
+class FakeChainStorage:
+    def __init__(self) -> None:
+        self.blocks = []
+
+    async def initialize(self) -> None:
+        return None
+
+    async def save_block(self, block: Block) -> None:
+        self.blocks = [item for item in self.blocks if item.index != block.index]
+        self.blocks.append(block)
+        self.blocks.sort(key=lambda item: item.index)
+
+    async def get_chain_height(self) -> int:
+        if not self.blocks:
+            return -1
+        return self.blocks[-1].index
+
+    async def get_latest_block(self) -> Block | None:
+        if not self.blocks:
+            return None
+        return self.blocks[-1]
+
+    async def get_block(self, height: int) -> Block | None:
+        for block in self.blocks:
+            if block.index == height:
+                return block
+        return None
+
+    async def get_blocks_range(self, start: int, end: int) -> list[Block]:
+        return [block for block in self.blocks if start <= block.index <= end]
+
+    async def clear_chain(self) -> None:
+        self.blocks.clear()
 
 
 class FakeWriter:
@@ -78,12 +144,25 @@ class ChainSyncTests(unittest.IsolatedAsyncioTestCase):
         peer_manager = PeerManager()
         peer_manager.add_peer(PeerInfo("peer-1", "127.0.0.1", 19841, chain_height=2))
         sync = ChainSync(server, peer_manager)
-        blockchain = DummyBlockchain(height=0)
+        blockchain = DummyBlockchain(height=0, genesis_hash="hash-genesis-peer")
 
         requested = []
+        peer_genesis = Block(
+            index=0,
+            timestamp=0.0,
+            previous_hash="0" * 64,
+            merkle_root="",
+            proposer="peer-1",
+            signature="0" * 128,
+            transactions=[],
+            nonce=0,
+            hash="hash-genesis-peer",
+        )
 
         async def fake_request_blocks(peer_id: str, start: int, end: int):
             requested.append((peer_id, start, end))
+            if (start, end) == (0, 0):
+                return [peer_genesis.to_dict()]
             return [
                 {
                     "index": 1,
@@ -114,8 +193,69 @@ class ChainSyncTests(unittest.IsolatedAsyncioTestCase):
         advanced = await sync.sync_chain(blockchain)
 
         self.assertTrue(advanced)
-        self.assertEqual(requested, [("peer-1", 1, 2)])
+        self.assertEqual(requested, [("peer-1", 0, 0), ("peer-1", 1, 2)])
         self.assertEqual([block.index for block in blockchain.blocks], [1, 2])
+
+    async def test_sync_chain_bootstraps_empty_chain_from_peer_genesis(self):
+        server = DummyServer()
+        peer_manager = PeerManager()
+        peer_manager.add_peer(PeerInfo("peer-1", "127.0.0.1", 19841, chain_height=0))
+        sync = ChainSync(server, peer_manager)
+        blockchain = DummyBlockchain(height=-1)
+
+        peer_genesis = Block.genesis_block("peer-1")
+
+        async def fake_request_blocks(peer_id: str, start: int, end: int):
+            self.assertEqual((peer_id, start, end), ("peer-1", 0, 0))
+            return [peer_genesis.to_dict()]
+
+        sync.request_blocks = fake_request_blocks
+
+        advanced = await sync.sync_chain(blockchain)
+
+        self.assertTrue(advanced)
+        self.assertEqual(blockchain.height, 0)
+        self.assertEqual(blockchain.blocks[0].hash, peer_genesis.hash)
+
+    async def test_sync_chain_resets_local_stub_genesis_when_peer_differs(self):
+        server = DummyServer()
+        peer_manager = PeerManager()
+        peer_manager.add_peer(PeerInfo("peer-1", "127.0.0.1", 19841, chain_height=0))
+        sync = ChainSync(server, peer_manager)
+        blockchain = DummyBlockchain(height=0, genesis_hash="local-genesis")
+
+        peer_genesis = Block.genesis_block("peer-1")
+
+        async def fake_request_blocks(peer_id: str, start: int, end: int):
+            self.assertEqual((peer_id, start, end), ("peer-1", 0, 0))
+            return [peer_genesis.to_dict()]
+
+        sync.request_blocks = fake_request_blocks
+
+        advanced = await sync.sync_chain(blockchain)
+
+        self.assertTrue(advanced)
+        self.assertEqual(blockchain.reset_calls, 1)
+        self.assertEqual(blockchain.height, 0)
+        self.assertEqual(blockchain.blocks[0].hash, peer_genesis.hash)
+
+    async def test_sync_chain_rejects_genesis_mismatch_after_real_blocks(self):
+        server = DummyServer()
+        peer_manager = PeerManager()
+        peer_manager.add_peer(PeerInfo("peer-1", "127.0.0.1", 19841, chain_height=3))
+        sync = ChainSync(server, peer_manager)
+        blockchain = DummyBlockchain(height=2, genesis_hash="local-genesis")
+
+        peer_genesis = Block.genesis_block("peer-1")
+
+        async def fake_request_blocks(peer_id: str, start: int, end: int):
+            self.assertEqual((peer_id, start, end), ("peer-1", 0, 0))
+            return [peer_genesis.to_dict()]
+
+        sync.request_blocks = fake_request_blocks
+
+        with self.assertRaises(GenesisMismatchError):
+            await sync.sync_chain(blockchain)
 
     async def test_handle_new_tx_adds_to_blockchain_and_rebroadcasts(self):
         server = DummyServer()
@@ -273,10 +413,25 @@ class P2PServerAccessorTests(unittest.IsolatedAsyncioTestCase):
 
 
 class BlockchainPendingTxTests(unittest.IsolatedAsyncioTestCase):
-    async def test_add_pending_tx_accepts_serialized_transaction(self):
-        from genesis.chain.chain import Blockchain
-        from genesis.chain.mempool import Mempool
+    async def test_blockchain_initialize_leaves_chain_empty_until_bootstrap(self):
+        storage = FakeChainStorage()
+        blockchain = Blockchain(storage, Mempool())
 
+        await blockchain.initialize("local-node")
+
+        self.assertEqual(await blockchain.get_chain_height(), -1)
+
+    async def test_blockchain_can_create_local_genesis_explicitly(self):
+        storage = FakeChainStorage()
+        blockchain = Blockchain(storage, Mempool())
+
+        await blockchain.initialize("local-node")
+        created = await blockchain.ensure_local_genesis()
+
+        self.assertTrue(created)
+        self.assertEqual(await blockchain.get_chain_height(), 0)
+
+    async def test_add_pending_tx_accepts_serialized_transaction(self):
         identity = NodeIdentity.generate()
         blockchain = Blockchain(DummyStorage(), Mempool())
 

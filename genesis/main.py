@@ -453,6 +453,29 @@ class GenesisNode:
                 return candidate
         return candidates[0] if candidates else ""
 
+    async def _ensure_chain_bootstrapped_after_sync(self, is_first_run: bool) -> None:
+        """Ensure the local chain has a genesis block after startup sync completes."""
+        if self.blockchain is None or self.identity is None:
+            return
+
+        height = await self.blockchain.get_chain_height()
+        if height >= 0:
+            return
+
+        allow_local_bootstrap = bool(
+            self.config and getattr(self.config.network, "allow_local_bootstrap", False)
+        )
+        if is_first_run and allow_local_bootstrap:
+            if await self.blockchain.ensure_local_genesis(self.identity.node_id):
+                logger.info("Created local genesis after startup sync found no compatible chain")
+            await self._reload_world_state_from_chain()
+            return
+
+        raise RuntimeError(
+            "No compatible blockchain genesis was found during startup sync. "
+            "Connect to an existing civilization or enable network.allow_local_bootstrap for a deliberate new world."
+        )
+
     @staticmethod
     def _peer_endpoint_signature_from_dict(endpoint: dict[str, object]) -> tuple[object, ...]:
         caps = endpoint.get("p2p_capabilities", {}) or {}
@@ -818,6 +841,7 @@ class GenesisNode:
             await self.server.start()
             await self.discovery.start()
             await self._sync_until_current(is_first_run)
+            await self._ensure_chain_bootstrapped_after_sync(is_first_run)
             logger.info("P2P network started on port %d", self.config.network.listen_port)
             if self._should_block_local_first_run(is_first_run):
                 raise RuntimeError(

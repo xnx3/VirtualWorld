@@ -29,15 +29,24 @@ class Blockchain:
     # ------------------------------------------------------------------
 
     async def initialize(self, node_id: str) -> None:
-        """Initialize storage and create the genesis block if the chain is empty."""
+        """Initialize storage without creating a local genesis block."""
         self._node_id = node_id
         await self.storage.initialize()
 
+    async def ensure_local_genesis(self, node_id: str | None = None) -> bool:
+        """Create a local genesis block if the chain is still empty."""
+        creator_id = node_id or self._node_id
+        if not creator_id:
+            raise RuntimeError("Node ID must be set before creating a local genesis block")
+
         height = await self.storage.get_chain_height()
-        if height < 0:
-            genesis = Block.genesis_block(node_id)
-            await self.storage.save_block(genesis)
-            logger.info("Genesis block created by node %s", node_id)
+        if height >= 0:
+            return False
+
+        genesis = Block.genesis_block(creator_id)
+        await self.storage.save_block(genesis)
+        logger.info("Genesis block created by node %s", creator_id)
+        return True
 
     # ------------------------------------------------------------------
     # Block operations
@@ -144,11 +153,24 @@ class Blockchain:
             raise RuntimeError("Chain is empty")
         return block
 
+    async def get_block(self, height: int) -> Block | None:
+        """Return the block at *height*, or None when absent."""
+        return await self.storage.get_block(height)
+
     async def get_chain_height(self) -> int:
         return await self.storage.get_chain_height()
 
     async def get_blocks_range(self, start: int, end: int) -> list[Block]:
         return await self.storage.get_blocks_range(start, end)
+
+    async def has_only_genesis(self) -> bool:
+        """True when the chain consists solely of the genesis block."""
+        return await self.storage.get_chain_height() == 0
+
+    async def reset_to_empty(self) -> None:
+        """Clear all persisted chain data and pending transactions."""
+        await self.storage.clear_chain()
+        self.mempool.clear()
 
     async def add_pending_tx(self, tx: Transaction | dict[str, Any]) -> bool:
         """Validate and add a transaction to the local mempool."""

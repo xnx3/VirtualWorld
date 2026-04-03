@@ -20,6 +20,10 @@ _BATCH_SIZE: int = 100
 _REQUEST_TIMEOUT: float = 30.0
 
 
+class GenesisMismatchError(RuntimeError):
+    """Raised when a peer belongs to a different blockchain genesis."""
+
+
 class ChainSync:
     """Coordinates chain synchronization between this node and its peers.
 
@@ -59,21 +63,38 @@ class ChainSync:
             logger.info("No peers available for sync")
             return False
 
-        local_height = await blockchain.get_chain_height()
-        remote_height = peers[0].chain_height
-
-        if remote_height <= local_height:
-            logger.info(
-                "Chain is up to date (local=%d, best_peer=%d)",
-                local_height,
-                remote_height,
-            )
-            return False
-
         advanced = False
-        target_height = remote_height
+        best_compatible_height: int | None = None
+        last_mismatch: GenesisMismatchError | None = None
 
         for peer in peers:
+            try:
+                compatible = await self._ensure_peer_compatible(
+                    blockchain,
+                    peer.node_id,
+                    peer.chain_height,
+                )
+            except GenesisMismatchError as exc:
+                last_mismatch = exc
+                logger.warning("%s", exc)
+                continue
+            except (asyncio.TimeoutError, OSError) as exc:
+                logger.warning(
+                    "Failed to verify genesis compatibility with %s: %s",
+                    peer.node_id[:16],
+                    exc,
+                )
+                continue
+
+            if not compatible:
+                continue
+
+            best_compatible_height = (
+                peer.chain_height
+                if best_compatible_height is None
+                else max(best_compatible_height, peer.chain_height)
+            )
+
             current_height = await blockchain.get_chain_height()
             if peer.chain_height <= current_height:
                 continue
@@ -89,15 +110,69 @@ class ChainSync:
                 advanced = True
 
             synced_height = await blockchain.get_chain_height()
-            if synced_height >= target_height:
+            if synced_height >= peer.chain_height:
                 break
+
+        if best_compatible_height is None:
+            if last_mismatch is not None:
+                raise last_mismatch
+            logger.info("No compatible peers available for sync")
+            return False
 
         if advanced:
             logger.info(
                 "Sync complete: chain advanced to height %d",
                 await blockchain.get_chain_height(),
             )
+        else:
+            logger.info(
+                "Chain is up to date (local=%d, best_peer=%d)",
+                await blockchain.get_chain_height(),
+                best_compatible_height,
+            )
         return advanced
+
+    async def _ensure_peer_compatible(
+        self,
+        blockchain: Any,
+        peer_id: str,
+        remote_height: int,
+    ) -> bool:
+        """Verify that a peer shares the same genesis block, resetting a local stub when safe."""
+        if remote_height < 0:
+            return False
+
+        remote_blocks = await self.request_blocks(peer_id, 0, 0)
+        if not remote_blocks:
+            raise OSError(f"peer {peer_id[:16]} returned no genesis block")
+
+        try:
+            remote_genesis = Block.from_dict(remote_blocks[0])
+        except Exception as exc:
+            raise OSError(f"peer {peer_id[:16]} returned invalid genesis block") from exc
+
+        local_height = await blockchain.get_chain_height()
+        if local_height < 0:
+            return True
+
+        local_genesis = await blockchain.get_block(0)
+        if local_genesis is None or local_genesis.hash == remote_genesis.hash:
+            return True
+
+        if await blockchain.has_only_genesis():
+            logger.warning(
+                "Resetting local genesis %s to adopt peer %s genesis %s",
+                local_genesis.hash[:16],
+                peer_id[:16],
+                remote_genesis.hash[:16],
+            )
+            await blockchain.reset_to_empty()
+            return True
+
+        raise GenesisMismatchError(
+            "Genesis mismatch with peer "
+            f"{peer_id[:16]} (local={local_genesis.hash[:16]}, remote={remote_genesis.hash[:16]})"
+        )
 
     async def _sync_from_peer(
         self,

@@ -231,6 +231,14 @@ class ChainStorage:
             blocks.append(await self._block_from_row(row, db))
         return blocks
 
+    async def clear_chain(self) -> None:
+        """Delete all persisted blocks, transactions, and derived world state."""
+        db = self._ensure_db()
+        await db.execute("DELETE FROM transactions")
+        await db.execute("DELETE FROM blocks")
+        await db.execute("DELETE FROM world_state")
+        await db.commit()
+
     # ------------------------------------------------------------------
     # World state
     # ------------------------------------------------------------------
