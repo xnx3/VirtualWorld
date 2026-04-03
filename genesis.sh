@@ -294,6 +294,7 @@ start() {
     : > "$CONSOLE_LOG_FILE"
     echo $$ > "$PID_FILE"
     export GENESIS_CONSOLE_LOG="$CONSOLE_LOG_FILE"
+    export GENESIS_CONFIG_FILE="$CONFIG_FILE"
     exec "$PYTHON" -m genesis.main start --data-dir "$DATA_DIR" $API_ARGS
     rm -f "$PID_FILE"
 }

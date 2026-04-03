@@ -894,7 +894,8 @@ class GenesisNode:
         from genesis.chronicle import console as con
         from genesis.i18n import t
         if not has_llm:
-            config_path = self.data_dir / "config.yaml"
+            # 优先使用环境变量指定的配置路径（genesis.sh 传递），否则显示根目录配置
+            config_path = os.environ.get("GENESIS_CONFIG_FILE") or str(self.data_dir.parent / "config.yaml")
             con.separator("─")
             con._write(f"  {con.C.YELLOW}{con.C.BOLD}⚠ {t('llm_warning_title')}{con.C.RESET}")
             con._write(f"  {con.C.YELLOW}{t('llm_warning_desc')}{con.C.RESET}")
