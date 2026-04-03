@@ -207,6 +207,20 @@ class P2PServerAccessorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outbound.payload["target_id"], "peer-1")
         self.assertEqual(outbound.payload["message"]["msg_type"], MessageType.PING.value)
 
+    async def test_send_to_peer_uses_virtual_connection_when_available(self):
+        identity = NodeIdentity.generate()
+        server = P2PServer("local-node", identity.private_key)
+        sent = []
+
+        async def fake_send(message: Message) -> None:
+            sent.append(message)
+
+        server.register_virtual_connection("peer-1", transport="webrtc", send_func=fake_send)
+
+        await server.send_to_peer("peer-1", Message.ping("local-node"))
+
+        self.assertEqual([message.msg_type for message in sent], [MessageType.PING])
+
     async def test_relay_envelope_delivers_inner_message_as_original_sender(self):
         identity = NodeIdentity.generate()
         server = P2PServer("local-node", identity.private_key)
@@ -224,6 +238,20 @@ class P2PServerAccessorTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(delivered, [(MessageType.PING, "peer-1", "peer-1")])
+
+    async def test_inject_message_dispatches_to_handlers(self):
+        identity = NodeIdentity.generate()
+        server = P2PServer("local-node", identity.private_key)
+        delivered = []
+
+        async def handler(message: Message, peer_id: str) -> None:
+            delivered.append((message.msg_type, peer_id))
+
+        server.on_message(handler)
+
+        await server.inject_message("peer-1", Message.ping("peer-1"), transport="webrtc")
+
+        self.assertEqual(delivered, [(MessageType.PING, "peer-1")])
 
 
 class BlockchainPendingTxTests(unittest.IsolatedAsyncioTestCase):

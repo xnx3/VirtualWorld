@@ -56,6 +56,7 @@ class P2PServer:
         self._relay_routes: dict[str, list[str]] = {}
         self._peer_capabilities: dict[str, dict[str, Any]] = {}
         self._peer_transports: dict[str, list[str]] = {}
+        self._virtual_connections: dict[str, tuple[str, Callable[[Message], Awaitable[None] | None]]] = {}
 
     # ------------------------------------------------------------------
     # Properties
@@ -72,6 +73,12 @@ class P2PServer:
     @property
     def peer_manager(self) -> PeerManager:
         return self._peer_manager
+
+    def has_route_to_peer(self, node_id: str) -> bool:
+        """True when this node can currently reach *node_id* directly or via relay."""
+        if node_id in self._connections or node_id in self._virtual_connections:
+            return True
+        return any(relay_id in self._connections for relay_id in self._relay_routes.get(node_id, []))
 
     def set_chain_accessors(
         self,
@@ -95,23 +102,88 @@ class P2PServer:
         if not node_id or node_id == self._node_id:
             return
         if transports is not None:
-            self._peer_transports[node_id] = list(transports)
+            merged_transports = list(self._peer_transports.get(node_id, []))
+            for transport in transports:
+                transport_str = str(transport).strip()
+                if transport_str and transport_str not in merged_transports:
+                    merged_transports.append(transport_str)
+            self._peer_transports[node_id] = merged_transports
         elif node_id not in self._peer_transports:
             self._peer_transports[node_id] = []
 
         if relay_hints is not None:
-            self._relay_routes[node_id] = [
-                str(relay_id).strip()
-                for relay_id in relay_hints
-                if str(relay_id).strip() and str(relay_id).strip() != node_id
-            ]
+            merged_relays = list(self._relay_routes.get(node_id, []))
+            for relay_id in relay_hints:
+                relay_id_str = str(relay_id).strip()
+                if relay_id_str and relay_id_str != node_id and relay_id_str not in merged_relays:
+                    merged_relays.append(relay_id_str)
+            self._relay_routes[node_id] = merged_relays
         elif node_id not in self._relay_routes:
             self._relay_routes[node_id] = []
 
         if capabilities is not None:
-            self._peer_capabilities[node_id] = dict(capabilities)
+            merged_capabilities = dict(self._peer_capabilities.get(node_id, {}))
+            merged_capabilities.update(dict(capabilities))
+            self._peer_capabilities[node_id] = merged_capabilities
         elif node_id not in self._peer_capabilities:
             self._peer_capabilities[node_id] = {}
+
+    def register_virtual_connection(
+        self,
+        node_id: str,
+        *,
+        transport: str,
+        send_func: Callable[[Message], Awaitable[None] | None],
+    ) -> None:
+        """Register a non-TCP connection, such as a WebRTC data channel."""
+        node_id = str(node_id).strip()
+        transport = str(transport).strip()
+        if not node_id or not transport or node_id == self._node_id:
+            return
+
+        self._virtual_connections[node_id] = (transport, send_func)
+
+        existing = self._peer_manager.get_peer(node_id)
+        if existing is None:
+            self._peer_manager.add_peer(
+                PeerInfo(
+                    node_id=node_id,
+                    address="",
+                    port=0,
+                    last_seen=time.time(),
+                    status="active",
+                    chain_height=0,
+                    transports=[transport],
+                )
+            )
+        else:
+            transports = list(existing.transports or [])
+            if transport not in transports:
+                transports.append(transport)
+            self._peer_manager.update_peer(
+                node_id,
+                last_seen=time.time(),
+                status="active",
+                transports=transports,
+            )
+        self.register_contact_card(node_id, transports=[transport])
+
+    def unregister_virtual_connection(self, node_id: str, *, transport: str | None = None) -> None:
+        """Remove a previously registered non-TCP connection."""
+        existing = self._virtual_connections.get(node_id)
+        if existing is None:
+            return
+        current_transport, _ = existing
+        if transport is not None and current_transport != transport:
+            return
+        self._virtual_connections.pop(node_id, None)
+
+        peer = self._peer_manager.get_peer(node_id)
+        if peer is None:
+            return
+
+        transports = [item for item in peer.transports if item != current_transport]
+        self._peer_manager.update_peer(node_id, transports=transports)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -140,6 +212,7 @@ class P2PServer:
             except OSError:
                 pass
         self._connections.clear()
+        self._virtual_connections.clear()
         self._relay_routes.clear()
         self._peer_capabilities.clear()
         self._peer_transports.clear()
@@ -259,6 +332,17 @@ class P2PServer:
         """Send a message to a specific connected peer."""
         conn = self._connections.get(node_id)
         if conn is None:
+            virtual_conn = self._virtual_connections.get(node_id)
+            if virtual_conn is not None:
+                transport_name, send_func = virtual_conn
+                try:
+                    result = send_func(message)
+                    if asyncio.iscoroutine(result):
+                        await result
+                    return
+                except OSError:
+                    self.unregister_virtual_connection(node_id, transport=transport_name)
+
             for relay_id in self._relay_routes.get(node_id, []):
                 relay_conn = self._connections.get(relay_id)
                 if relay_conn is None:
@@ -422,24 +506,11 @@ class P2PServer:
                 if msg is None:
                     break
 
-                # Update last_seen.
-                self._peer_manager.update_peer(peer_id, last_seen=time.time())
-
                 if msg.msg_type == MessageType.RELAY_ENVELOPE:
                     await self._handle_relay_envelope(msg, peer_id)
                     continue
 
-                # Handle built-in message types.
-                await self._handle_builtin(msg, peer_id)
-
-                # Fire user callbacks.
-                for handler in self._message_handlers:
-                    try:
-                        result = handler(msg, peer_id)
-                        if asyncio.iscoroutine(result):
-                            await result
-                    except Exception:
-                        logger.exception("Error in message handler")
+                await self._dispatch_message(msg, peer_id)
 
         except (OSError, asyncio.IncompleteReadError, ValueError) as exc:
             logger.debug("Peer %s read error: %s", peer_id[:16], exc)
@@ -464,6 +535,19 @@ class P2PServer:
             end = int(msg.payload.get("end", -1))
             blocks = await self._get_blocks_payload(start, end)
             await self.send_to_peer(peer_id, Message.blocks(self._node_id, blocks))
+
+    async def _dispatch_message(self, msg: Message, peer_id: str) -> None:
+        """Run built-in handlers then fan out to application handlers."""
+        self._peer_manager.update_peer(peer_id, last_seen=time.time(), status="active")
+        await self._handle_builtin(msg, peer_id)
+
+        for handler in self._message_handlers:
+            try:
+                result = handler(msg, peer_id)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.exception("Error in message handler")
 
     async def _handle_relay_envelope(self, msg: Message, relay_peer_id: str) -> None:
         """Deliver or forward a relayed message."""
@@ -526,14 +610,16 @@ class P2PServer:
                     )
                 )
 
-        await self._handle_builtin(inner, sender_id or relay_peer_id)
-        for handler in self._message_handlers:
-            try:
-                result = handler(inner, sender_id or relay_peer_id)
-                if asyncio.iscoroutine(result):
-                    await result
-            except Exception:
-                logger.exception("Error in relayed message handler")
+        await self._dispatch_message(inner, sender_id or relay_peer_id)
+
+    async def inject_message(self, peer_id: str, message: Message, *, transport: str = "virtual") -> None:
+        """Inject a message received from a non-TCP transport into normal dispatch."""
+        peer_id = str(peer_id).strip()
+        if not peer_id:
+            return
+        self.register_contact_card(peer_id, transports=[transport])
+        self._peer_manager.update_peer(peer_id, last_seen=time.time(), status="active")
+        await self._dispatch_message(message, peer_id)
 
     # ------------------------------------------------------------------
     # Internal: helpers

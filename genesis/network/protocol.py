@@ -75,9 +75,13 @@ class Message:
             "timestamp": self.timestamp,
         }
 
+    def serialize_body(self) -> bytes:
+        """Serialize just the msgpack body without the TCP length prefix."""
+        return msgpack.packb(self.to_dict(), use_bin_type=True)
+
     def serialize(self) -> bytes:
         """Serialize the message: 4-byte big-endian length prefix + msgpack body."""
-        body = msgpack.packb(self.to_dict(), use_bin_type=True)
+        body = self.serialize_body()
         return struct.pack(LENGTH_PREFIX_FMT, len(body)) + body
 
     @classmethod

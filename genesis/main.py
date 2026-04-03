@@ -144,6 +144,7 @@ class GenesisNode:
         self.being = None
         self.chronicle = None
         self.consensus = None
+        self.webrtc = None
 
     def _load_persisted_world_state(self):
         """Load the last locally-saved world snapshot if present."""
@@ -334,9 +335,12 @@ class GenesisNode:
                 ttl = 600
         now = int(time.time())
         transports = ["tcp"]
+        if self.webrtc is not None:
+            transports = self.webrtc.advertised_transports(transports)
         relay_hints = self._select_relay_hints()
         if relay_hints:
-            transports.append("relay")
+            if "relay" not in transports:
+                transports.append("relay")
         return {
             "p2p_address": self._resolve_advertise_address(),
             "p2p_port": self.config.network.listen_port,
@@ -545,6 +549,39 @@ class GenesisNode:
 
         self._refresh_chain_contact_cards()
         self._persist_world_state_snapshot()
+        await self._ensure_webrtc_sessions()
+
+    async def _ensure_webrtc_sessions(self) -> None:
+        """Attempt WebRTC setup for fresh peers that advertise support and are already reachable."""
+        if (
+            self.webrtc is None
+            or not self.webrtc.available
+            or self.server is None
+            or self.world_state is None
+            or self.identity is None
+            or self.peer_manager is None
+        ):
+            return
+
+        for being in self.world_state.beings.values():
+            if being.node_id == self.identity.node_id or being.is_npc:
+                continue
+            if not self._is_peer_endpoint_fresh(being):
+                continue
+            transports = list(getattr(being, "p2p_transports", []) or [])
+            if "webrtc" not in transports:
+                continue
+            if not self.server.has_route_to_peer(being.node_id):
+                continue
+
+            peer = self.peer_manager.get_peer(being.node_id)
+            if peer and "webrtc" in (peer.transports or []):
+                continue
+
+            try:
+                await self.webrtc.ensure_session(being.node_id)
+            except Exception as exc:
+                logger.debug("WebRTC session bootstrap failed for %s: %s", being.node_id[:16], exc)
 
     async def start(self) -> None:
         """Start the virtual world node."""
@@ -592,6 +629,7 @@ class GenesisNode:
         from genesis.network.server import P2PServer
         from genesis.network.discovery import PeerDiscovery
         from genesis.network.sync import ChainSync
+        from genesis.network.webrtc import WebRTCSessionManager
 
         self.peer_manager = PeerManager(max_peers=self.config.network.max_peers)
         self.server = P2PServer(
@@ -612,6 +650,7 @@ class GenesisNode:
             bootstrap_nodes=self.config.network.bootstrap_nodes,
         )
         self.chain_sync = ChainSync(self.server, self.peer_manager)
+        self.webrtc = WebRTCSessionManager(self.identity.node_id, self.server)
         self.discovery.on_peer_discovered(self._handle_discovered_peer)
         self.server.on_message(self._handle_network_message)
 
@@ -1218,6 +1257,11 @@ class GenesisNode:
         self._save_known_peers()
 
         # Stop network (with 2s timeout each to avoid hanging)
+        if self.webrtc:
+            try:
+                await asyncio.wait_for(self.webrtc.close(), timeout=2)
+            except Exception:
+                pass
         if self.discovery:
             try:
                 await asyncio.wait_for(self.discovery.stop(), timeout=2)
@@ -1313,6 +1357,14 @@ class GenesisNode:
     async def _handle_network_message(self, msg, peer_id: str) -> None:
         """Dispatch network messages that affect local chain state."""
         from genesis.network.protocol import MessageType
+
+        if msg.msg_type == MessageType.WEBRTC_SIGNAL:
+            if self.webrtc is not None:
+                try:
+                    await self.webrtc.handle_signal(peer_id, msg.payload)
+                except Exception as exc:
+                    logger.debug("WebRTC signal handling failed from %s: %s", peer_id[:16], exc)
+            return
 
         if (
             self.chain_sync is None

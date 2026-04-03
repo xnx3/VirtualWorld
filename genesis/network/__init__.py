@@ -6,6 +6,7 @@ from genesis.network.discovery import PeerDiscovery
 from genesis.network.server import P2PServer
 from genesis.network.sync import ChainSync
 from genesis.network.security import NetworkSecurity
+from genesis.network.webrtc import WebRTCSessionManager
 
 __all__ = [
     "PeerInfo",
@@ -16,4 +17,5 @@ __all__ = [
     "P2PServer",
     "ChainSync",
     "NetworkSecurity",
+    "WebRTCSessionManager",
 ]
