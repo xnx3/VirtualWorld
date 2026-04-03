@@ -39,6 +39,7 @@
 - `./genesis.sh restart`：重启
 - `./genesis.sh task "你的问题"`：投递一个思考任务
 - `./genesis.sh lang [en|zh]`：切换系统语言
+- 配置文件路径：`./config.yaml`（根目录）
 
 ### 一键打包为单文件可执行程序
 
@@ -51,22 +52,25 @@ bash scripts/build_single_binary.sh
 打包完成后产物为：
 
 ```bash
-dist/genesis-run
+./genesis.bin
 ```
+
+说明：仓库根目录已经有 `genesis/` 源码目录，Linux/macOS 下无法再生成同名文件 `./genesis`，因此默认会自动降级为 `./genesis.bin`。
 
 常用命令：
 
-- `./dist/genesis-run`（默认等价于 `start`）
-- `./dist/genesis-run start`
-- `./dist/genesis-run stop`
-- `./dist/genesis-run status`
-- `./dist/genesis-run task "你的任务"`
-- `./dist/genesis-run lang zh`
+- `./genesis.bin`（默认等价于 `start`）
+- `./genesis.bin start`
+- `./genesis.bin stop`
+- `./genesis.bin status`
+- `./genesis.bin task "你的任务"`
+- `./genesis.bin lang zh`
 
 说明：
 
 - 产物已内置 Python 依赖，目标机器不需要再手工创建 venv。
-- 运行时数据默认放在可执行文件同目录下的 `data/`。
+- 配置文件统一使用项目根目录 `config.yaml`（`genesis.sh` 与打包产物一致）。
+- 运行时数据默认放在同目录下的 `data/`。
 - 打包机器与目标机器需要保持相同操作系统和 CPU 架构。
 
 ### 交互

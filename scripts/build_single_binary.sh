@@ -3,11 +3,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ARTIFACT_NAME="${ARTIFACT_NAME:-genesis-run}"
+ARTIFACT_NAME="${ARTIFACT_NAME:-genesis}"
 BUILD_DIR="${ROOT_DIR}/build"
-DIST_DIR="${ROOT_DIR}/dist"
+OUTPUT_DIR="${ROOT_DIR}"
 ROOT_SPEC_FILE="${ROOT_DIR}/${ARTIFACT_NAME}.spec"
 BUILD_VENV_DIR="${ROOT_DIR}/.build/onefile-venv"
+TARGET_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
 
 detect_python() {
     if command -v python3.11 >/dev/null 2>&1; then
@@ -55,8 +56,26 @@ echo "Installing build dependencies into ${BUILD_VENV_DIR}"
 "${VENV_PIP}" install -q -r "${ROOT_DIR}/requirements.txt" pyinstaller
 
 echo "Cleaning previous build outputs"
-rm -rf "${BUILD_DIR}" "${DIST_DIR}"
+rm -rf "${BUILD_DIR}"
 rm -f "${ROOT_SPEC_FILE}"
+rm -f "${ROOT_DIR}/genesis-run.spec"
+rm -f "${ROOT_DIR}/genesis-run"
+rm -f "${ROOT_DIR}/dist/genesis-run"
+rm -f "${ROOT_DIR}/dist/genesis"
+
+if [[ -d "${TARGET_PATH}" ]]; then
+    if [[ "${ARTIFACT_NAME}" == "genesis" ]]; then
+        ARTIFACT_NAME="genesis.bin"
+        TARGET_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
+        ROOT_SPEC_FILE="${ROOT_DIR}/${ARTIFACT_NAME}.spec"
+        echo "Notice: ${ROOT_DIR}/genesis is an existing source directory."
+        echo "         Output file name switched to ${ARTIFACT_NAME} to avoid path collision."
+    else
+        echo "Error: target path is an existing directory: ${TARGET_PATH}"
+        echo "Set a different file name, e.g. ARTIFACT_NAME=genesis.bin"
+        exit 1
+    fi
+fi
 
 DATA_SEP=":"
 if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* || "${OSTYPE:-}" == win32* ]]; then
@@ -69,7 +88,7 @@ echo "Building one-file executable..."
     --clean \
     --onefile \
     --name "${ARTIFACT_NAME}" \
-    --distpath "${DIST_DIR}" \
+    --distpath "${OUTPUT_DIR}" \
     --specpath "${BUILD_DIR}" \
     --add-data "${ROOT_DIR}/config.yaml.example${DATA_SEP}." \
     "${ROOT_DIR}/genesis/packaged_cli.py"
@@ -79,9 +98,9 @@ rm -f "${ROOT_SPEC_FILE}"
 
 echo ""
 echo "Build completed."
-echo "Executable: ${DIST_DIR}/${ARTIFACT_NAME}"
+echo "Executable: ${TARGET_PATH}"
 echo ""
 echo "Run locally:"
-echo "  ${DIST_DIR}/${ARTIFACT_NAME} start"
+echo "  ${TARGET_PATH} start"
 echo ""
 echo "Share this single file to another machine with the same OS/CPU architecture."

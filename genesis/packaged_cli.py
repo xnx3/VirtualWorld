@@ -21,6 +21,11 @@ COMMANDS = ("start", "stop", "status", "restart", "task", "lang")
 LANG_PATTERN = re.compile(r"^language:\s*.*$", flags=re.MULTILINE)
 
 
+def _command_name() -> str:
+    name = Path(sys.argv[0]).name
+    return name or "genesis"
+
+
 def _resource_path(relative_path: str) -> Path:
     """Return path to bundled resource in source mode or PyInstaller mode."""
     if getattr(sys, "frozen", False):
@@ -35,6 +40,13 @@ def _default_data_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "data"
 
 
+def _default_config_path() -> Path:
+    """Store config in project/executable root (not inside data)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "config.yaml"
+    return Path(__file__).resolve().parents[1] / "config.yaml"
+
+
 def _pid_file(data_dir: Path) -> Path:
     return data_dir / "genesis.pid"
 
@@ -47,7 +59,7 @@ def _console_log_file(data_dir: Path) -> Path:
     return data_dir / "console.log"
 
 
-def _config_file(data_dir: Path) -> Path:
+def _data_config_file(data_dir: Path) -> Path:
     return data_dir / "config.yaml"
 
 
@@ -106,10 +118,28 @@ def _write_language(config_path: Path, language: str) -> None:
 def ensure_data_dir(data_dir: Path) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "chronicle").mkdir(parents=True, exist_ok=True)
-    cfg = _config_file(data_dir)
-    if not cfg.exists():
-        _copy_default_config(cfg)
-        print(f"Created default config at {cfg}")
+
+
+def ensure_config_file(config_path: Path, data_dir: Path | None = None) -> None:
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    if config_path.exists():
+        return
+
+    legacy_config = _data_config_file(data_dir) if data_dir is not None else None
+    if legacy_config is not None and legacy_config.exists():
+        config_path.write_text(legacy_config.read_text(encoding="utf-8"), encoding="utf-8")
+        print(f"Migrated config from {legacy_config} to {config_path}")
+        return
+
+    _copy_default_config(config_path)
+    print(f"Created default config at {config_path}")
+
+
+def sync_config_to_data_dir(config_path: Path, data_dir: Path) -> None:
+    target = _data_config_file(data_dir)
+    src = config_path.read_text(encoding="utf-8")
+    if not target.exists() or target.read_text(encoding="utf-8") != src:
+        target.write_text(src, encoding="utf-8")
 
 
 def ensure_language_set(config_path: Path) -> None:
@@ -258,8 +288,11 @@ def _attach_running_interface(data_dir: Path, running_pid: int) -> int:
 
 def run_start(args: SimpleNamespace) -> int:
     data_dir = Path(args.data_dir).resolve()
+    config_path = Path(args.config_path).resolve()
     ensure_data_dir(data_dir)
-    ensure_language_set(_config_file(data_dir))
+    ensure_config_file(config_path, data_dir)
+    ensure_language_set(config_path)
+    sync_config_to_data_dir(config_path, data_dir)
 
     pid_path = _pid_file(data_dir)
     running_pid = _read_running_pid(pid_path)
@@ -327,37 +360,46 @@ def run_stop(args: SimpleNamespace) -> int:
 
 def run_status(args: SimpleNamespace) -> int:
     data_dir = Path(args.data_dir).resolve()
+    config_path = Path(args.config_path).resolve()
     ensure_data_dir(data_dir)
+    ensure_config_file(config_path, data_dir)
+    sync_config_to_data_dir(config_path, data_dir)
     _run_status(data_dir)
     return 0
 
 
 def run_task(args: SimpleNamespace) -> int:
     data_dir = Path(args.data_dir).resolve()
+    config_path = Path(args.config_path).resolve()
     ensure_data_dir(data_dir)
+    ensure_config_file(config_path, data_dir)
+    sync_config_to_data_dir(config_path, data_dir)
     _run_task(data_dir, list(args.task_text))
     return 0
 
 
 def run_lang(args: SimpleNamespace) -> int:
     data_dir = Path(args.data_dir).resolve()
+    config_path = Path(args.config_path).resolve()
     ensure_data_dir(data_dir)
-    cfg = _config_file(data_dir)
+    ensure_config_file(config_path, data_dir)
+    command_name = _command_name()
 
     language = args.language
     if language is None:
-        current = _read_language(cfg) or "en"
+        current = _read_language(config_path) or "en"
         print(f"Current language: {current}")
-        print("Usage: genesis-run lang [en|zh]")
+        print(f"Usage: {command_name} lang [en|zh]")
         return 0
 
     if language not in {"en", "zh"}:
         print("Supported: en (English), zh (简体中文)")
         return 1
 
-    _write_language(cfg, language)
+    _write_language(config_path, language)
+    sync_config_to_data_dir(config_path, data_dir)
     print(f"Language set to: {language}")
-    print("Run `genesis-run restart` to apply.")
+    print(f"Run `{command_name} restart` to apply.")
     return 0
 
 
@@ -369,6 +411,12 @@ def parse_args(argv: list[str]) -> SimpleNamespace:
         "--data-dir",
         default=str(_default_data_dir()),
         help="Data directory path (default: executable_dir/data)",
+    )
+    parser.add_argument(
+        "--config",
+        dest="config_path",
+        default=str(_default_config_path()),
+        help="Config file path (default: executable_dir/config.yaml)",
     )
     parser.add_argument("command", nargs="?", choices=COMMANDS, default="start", help="Command to execute")
     parser.add_argument("extra", nargs="*", help=argparse.SUPPRESS)
@@ -402,6 +450,7 @@ def parse_args(argv: list[str]) -> SimpleNamespace:
     return SimpleNamespace(
         command=args.command,
         data_dir=str(Path(args.data_dir).expanduser()),
+        config_path=str(Path(args.config_path).expanduser()),
         api=args.api,
         api_host=args.api_host,
         api_port=args.api_port,

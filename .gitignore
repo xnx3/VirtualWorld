@@ -1,6 +1,9 @@
 # Runtime data
 data/
 !data/.gitkeep
+config.yaml
+genesis.bin
+genesis.exe
 
 # Python
 __pycache__/

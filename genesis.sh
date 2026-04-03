@@ -9,9 +9,10 @@ DATA_DIR="${SCRIPT_DIR}/data"
 PID_FILE="${DATA_DIR}/genesis.pid"
 LOG_FILE="${DATA_DIR}/genesis.log"
 CONSOLE_LOG_FILE="${DATA_DIR}/console.log"
+DATA_CONFIG_FILE="${DATA_DIR}/config.yaml"
 VENV_DIR="${SCRIPT_DIR}/venv"
 PYTHON="${VENV_DIR}/bin/python"
-CONFIG_FILE="${DATA_DIR}/config.yaml"
+CONFIG_FILE="${SCRIPT_DIR}/config.yaml"
 
 # Colors
 RED='\033[0;31m'
@@ -75,9 +76,18 @@ ensure_data_dir() {
     mkdir -p "$DATA_DIR"
     mkdir -p "${DATA_DIR}/chronicle"
     if [ ! -f "$CONFIG_FILE" ]; then
-        cp "${SCRIPT_DIR}/config.yaml.example" "$CONFIG_FILE"
-        echo -e "${YELLOW}Created default config at ${CONFIG_FILE}${NC}"
-        echo -e "${YELLOW}Edit it to configure your LLM API endpoint.${NC}"
+        if [ -f "$DATA_CONFIG_FILE" ]; then
+            cp "$DATA_CONFIG_FILE" "$CONFIG_FILE"
+            echo -e "${YELLOW}Migrated config from ${DATA_CONFIG_FILE} to ${CONFIG_FILE}${NC}"
+        else
+            cp "${SCRIPT_DIR}/config.yaml.example" "$CONFIG_FILE"
+            echo -e "${YELLOW}Created default config at ${CONFIG_FILE}${NC}"
+            echo -e "${YELLOW}Edit it to configure your LLM API endpoint.${NC}"
+        fi
+    fi
+
+    if [ ! -f "$DATA_CONFIG_FILE" ] || ! cmp -s "$CONFIG_FILE" "$DATA_CONFIG_FILE"; then
+        cp "$CONFIG_FILE" "$DATA_CONFIG_FILE"
     fi
 }
 
@@ -264,6 +274,7 @@ start() {
 
     # 检测是否已设置语种
     ensure_language_set
+    ensure_data_dir
 
     echo -e "${GREEN}Starting Genesis...${NC}"
     echo -e "${CYAN}Press Ctrl+C to hibernate and stop.${NC}"
@@ -355,6 +366,7 @@ stop() {
 
 status() {
     setup 2>/dev/null
+    ensure_data_dir
     "$PYTHON" -m genesis.main --data-dir "$DATA_DIR" status
 }
 
@@ -396,6 +408,7 @@ case "${1:-}" in
     task)
         shift
         setup 2>/dev/null
+        ensure_data_dir
         "$PYTHON" -m genesis.main --data-dir "$DATA_DIR" task "$@"
         ;;
     lang)
@@ -412,6 +425,7 @@ case "${1:-}" in
             else
                 echo "language: \"$2\"" >> "$CONFIG_FILE"
             fi
+            ensure_data_dir
             echo "Language set to: $2"
             echo "Run genesis.sh restart to apply."
         else

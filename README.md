@@ -24,6 +24,7 @@ When you stop running (i.e., executing `genesis.sh stop`), this intelligent life
 - `genesis.sh stop` - Stop running
 - `genesis.sh status` - Current status
 - `genesis.sh restart` - Restart
+- Config file path: `./config.yaml` (project root)
 
 ### One-Command Single-File Build
 
@@ -36,21 +37,26 @@ bash scripts/build_single_binary.sh
 After build completes, the executable is:
 
 ```bash
-dist/genesis-run
+./genesis.bin
 ```
+
+Note: this repository already contains a `genesis/` source directory. On Linux/macOS,
+`./genesis` cannot be created as a file with the same name, so the build script
+automatically falls back to `./genesis.bin`.
 
 Usage examples:
 
-- `./dist/genesis-run` (defaults to `start`)
-- `./dist/genesis-run start`
-- `./dist/genesis-run stop`
-- `./dist/genesis-run status`
-- `./dist/genesis-run task "your task"`
-- `./dist/genesis-run lang zh`
+- `./genesis.bin` (defaults to `start`)
+- `./genesis.bin start`
+- `./genesis.bin stop`
+- `./genesis.bin status`
+- `./genesis.bin task "your task"`
+- `./genesis.bin lang zh`
 
 Notes:
 
 - The binary embeds Python dependencies and runs without local venv setup on the target machine.
+- Config is unified at project root as `config.yaml` (shared by `genesis.sh` and the packaged binary).
 - Runtime data is stored next to the executable under `data/`.
 - Build and target machines must use the same OS and CPU architecture.
 
