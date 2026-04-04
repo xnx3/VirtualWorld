@@ -11,6 +11,8 @@ Usage:
 
 from __future__ import annotations
 
+import os
+
 _current_language: str = "en"
 
 def set_language(lang: str) -> None:
@@ -19,6 +21,12 @@ def set_language(lang: str) -> None:
 
 def get_language() -> str:
     return _current_language
+
+
+def runtime_command_name(default: str = "genesis.sh") -> str:
+    """Return the active user-facing launcher name."""
+    name = str(os.environ.get("GENESIS_COMMAND_NAME", "") or "").strip()
+    return name or default
 
 def t(key: str, **kwargs) -> str:
     """Get translated string by key. Supports {name} style formatting."""
@@ -173,7 +181,7 @@ EN: dict[str, str] = {
     "llm_warning_example": "Modify the llm section, fill in your API Key, e.g.:",
     "llm_warning_env": "Or set environment variable: GENESIS_OPENAI_KEY",
     "llm_warning_support": "Supports all OpenAI-compatible APIs: GPT/Claude/Deepseek/Ollama etc.",
-    "llm_warning_restart": "After configuration, run genesis.sh restart to apply.",
+    "llm_warning_restart": "After configuration, run {command} restart to apply.",
     "llm_connected": "LLM Connected",
 
     # --- Main: hibernate ---
@@ -188,11 +196,11 @@ EN: dict[str, str] = {
     "task_summary_label": "Summary",
     "task_collaborators_label": "Collaborators",
     "result_label": "Result",
-    "no_tasks": "No tasks. Usage: genesis.sh task 'your thinking question here'",
+    "no_tasks": "No tasks. Usage: {command} task 'your thinking question here'",
     "task_assigned": "Task assigned to your being: {task}",
     "task_deduplicated": "A similar task is already in progress. Reusing the existing task.",
     "task_queued_summary": "Queued. The being will begin planning on the next tick.",
-    "task_check": "It will be processed in the next tick. Check results with: genesis.sh task",
+    "task_check": "It will be processed in the next tick. Check results with: {command} task",
     "interactive_input_hint": "Interactive input ready. Type a line and press Enter to send it to your being. Commands: /help /status /stop",
     "interactive_help": "Interactive commands:\n/help  Show this help\n/status  Show a summary status report\n/stop  Hibernate and stop Genesis\n/task <text>  Send a task explicitly\nAny other text is also sent as a task or message.",
     "interactive_stop_requested": "Stop requested. Genesis will enter hibernation.",
@@ -204,7 +212,7 @@ EN: dict[str, str] = {
     "status_stopped_stale": "Status: STOPPED (stale PID file)",
     "status_stopped": "Status: STOPPED",
     "no_world_state": "No world state available.",
-    "run_start_hint": "Run 'genesis.sh start' to begin.",
+    "run_start_hint": "Run '{command} start' to begin.",
     "population": "Population",
     "active": "Active",
     "hibernating": "Hibernating",
@@ -228,7 +236,7 @@ EN: dict[str, str] = {
     # --- Lang command ---
     "lang_set": "Language set to: {lang}",
     "lang_current": "Current language: {lang}",
-    "lang_usage": "Usage: genesis.sh lang [en|zh]",
+    "lang_usage": "Usage: {command} lang [en|zh]",
 
     # --- LLM prompt language instruction ---
     "llm_lang_instruction": "You MUST respond in English.",
@@ -467,7 +475,7 @@ ZH: dict[str, str] = {
     "llm_warning_example": "修改 llm 部分，填入你的 API Key，例如:",
     "llm_warning_env": "或者设置环境变量: GENESIS_OPENAI_KEY",
     "llm_warning_support": "支持所有 OpenAI 兼容接口: GPT/Claude/Deepseek/Ollama 等",
-    "llm_warning_restart": "配置完成后执行 genesis.sh restart 重启即可",
+    "llm_warning_restart": "配置完成后执行 {command} restart 重启即可",
     "llm_connected": "大模型已连接",
 
     # --- Main: hibernate ---
@@ -482,11 +490,11 @@ ZH: dict[str, str] = {
     "task_summary_label": "摘要",
     "task_collaborators_label": "协作者",
     "result_label": "结果",
-    "no_tasks": "无任务。用法: genesis.sh task '你的思考问题'",
+    "no_tasks": "无任务。用法: {command} task '你的思考问题'",
     "task_assigned": "任务已分配给你的生命体: {task}",
     "task_deduplicated": "检测到相同任务正在进行，已复用已有任务。",
     "task_queued_summary": "任务已排队，将在下一个 tick 开始规划。",
-    "task_check": "将在下一个 tick 处理。查看结果: genesis.sh task",
+    "task_check": "将在下一个 tick 处理。查看结果: {command} task",
     "interactive_input_hint": "交互输入已就绪。直接输入一行文字并回车即可发给硅基生命。命令: /help /status /stop",
     "interactive_help": "交互命令:\n/help  查看帮助\n/status  查看摘要状态\n/stop  让 Genesis 休眠并停止\n/task <内容>  显式发送任务\n其他任意文本也会作为任务或交流内容发给它。",
     "interactive_stop_requested": "已收到停止请求。Genesis 将进入休眠。",
@@ -498,7 +506,7 @@ ZH: dict[str, str] = {
     "status_stopped_stale": "状态: 已停止 (残留 PID 文件)",
     "status_stopped": "状态: 已停止",
     "no_world_state": "暂无世界状态数据。",
-    "run_start_hint": "运行 'genesis.sh start' 开始。",
+    "run_start_hint": "运行 '{command} start' 开始。",
     "population": "人口",
     "active": "活跃",
     "hibernating": "休眠中",
@@ -522,7 +530,7 @@ ZH: dict[str, str] = {
     # --- Lang command ---
     "lang_set": "语言已设置为: {lang}",
     "lang_current": "当前语言: {lang}",
-    "lang_usage": "用法: genesis.sh lang [en|zh]",
+    "lang_usage": "用法: {command} lang [en|zh]",
 
     # --- LLM prompt language instruction ---
     "llm_lang_instruction": "你必须用简体中文回复。",

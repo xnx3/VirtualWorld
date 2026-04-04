@@ -27,6 +27,12 @@ MAX_TASK_IDENTIFIER_LENGTH = 128
 MAX_TASK_TEXT_LENGTH = 2048
 MAX_TASK_RESULT_SUMMARY_LENGTH = 2048
 MAX_TASK_RESULT_ITEM_LENGTH = 512
+MAX_FAILURE_SIGNATURE_LENGTH = 128
+MAX_FAILURE_TEXT_LENGTH = 1024
+
+
+def _task_key(text: object) -> str:
+    return " ".join(str(text or "").strip().lower().split())
 
 
 def calculate_karma(merit: float) -> float:
@@ -134,6 +140,7 @@ class WorldState:
     knowledge_corpus: dict[str, dict] = field(default_factory=dict)  # knowledge_id -> data
     delegated_tasks: dict[str, dict] = field(default_factory=dict)  # assignment_id -> assignment
     delegated_task_results: dict[str, list[dict]] = field(default_factory=dict)  # assignment_id -> results
+    failure_archive: list[dict] = field(default_factory=list)
     contribution_scores: dict[str, float] = field(default_factory=dict)  # node_id -> score
     pending_proposals: dict[str, dict] = field(default_factory=dict)  # tx_hash -> proposal
     proposal_votes: dict[str, list[dict]] = field(default_factory=dict)  # tx_hash -> votes
@@ -227,6 +234,32 @@ class WorldState:
                 results.append(item)
         results.sort(key=lambda item: (int(item.get("tick", 0) or 0), str(item.get("assignment_id", ""))))
         return results
+
+    def get_failure_matches(self, task_text: str, limit: int = 5) -> list[dict]:
+        task_key = _task_key(task_text)
+        if not task_key:
+            return []
+
+        matches: list[dict] = []
+        for entry in self.failure_archive:
+            entry_task_key = str(entry.get("task_key", ""))
+            if entry_task_key == task_key:
+                matches.append(dict(entry))
+                continue
+
+            words = set(task_key.split())
+            entry_words = set(entry_task_key.split())
+            if words and entry_words and len(words & entry_words) >= 2:
+                matches.append(dict(entry))
+
+        matches.sort(
+            key=lambda item: (
+                int(item.get("repeat_count", 1) or 1),
+                int(item.get("last_tick", 0) or 0),
+            ),
+            reverse=True,
+        )
+        return matches[:limit]
 
     # --- 天道查询 ---
 
@@ -593,6 +626,81 @@ class WorldState:
         assignment["status"] = "completed"
         assignment["updated_tick"] = self.current_tick
 
+    def apply_failure_archive(self, sender_id: str, data: dict) -> None:
+        signature = self._validate_failure_identifier(
+            data.get("failure_signature"),
+            "failure_signature",
+        )
+        task_id = self._validate_task_identifier(data.get("task_id"), "task_id")
+        task_text = self._validate_failure_text(data.get("task"), "task", MAX_TASK_TEXT_LENGTH)
+        summary = self._validate_failure_text(data.get("summary"), "summary", MAX_FAILURE_TEXT_LENGTH)
+        conditions = self._validate_failure_text(
+            data.get("conditions", ""),
+            "conditions",
+            MAX_FAILURE_TEXT_LENGTH,
+            allow_empty=True,
+        )
+        symptoms = self._validate_failure_text(
+            data.get("symptoms", ""),
+            "symptoms",
+            MAX_FAILURE_TEXT_LENGTH,
+            allow_empty=True,
+        )
+        recovery = self._validate_failure_text(
+            data.get("recovery", ""),
+            "recovery",
+            MAX_FAILURE_TEXT_LENGTH,
+            allow_empty=True,
+        )
+
+        if (
+            signature is None
+            or task_id is None
+            or task_text is None
+            or summary is None
+            or conditions is None
+            or symptoms is None
+            or recovery is None
+        ):
+            return
+
+        task_key = _task_key(task_text)
+        reproducible = bool(data.get("reproducible", False))
+
+        for entry in self.failure_archive:
+            if entry.get("failure_signature") != signature:
+                continue
+            entry["repeat_count"] = int(entry.get("repeat_count", 1) or 1) + 1
+            entry["last_tick"] = self.current_tick
+            entry["last_reporter_id"] = sender_id
+            if conditions:
+                entry["conditions"] = conditions
+            if symptoms:
+                entry["symptoms"] = symptoms
+            if recovery:
+                entry["recovery"] = recovery
+            entry["reproducible"] = reproducible or bool(entry.get("reproducible", False))
+            entry["degenerative"] = entry["repeat_count"] > 1
+            return
+
+        self.failure_archive.append({
+            "failure_signature": signature,
+            "task_id": task_id,
+            "task": task_text,
+            "task_key": task_key,
+            "summary": summary,
+            "conditions": conditions,
+            "symptoms": symptoms,
+            "recovery": recovery,
+            "reproducible": reproducible,
+            "first_tick": self.current_tick,
+            "last_tick": self.current_tick,
+            "reporter_id": sender_id,
+            "last_reporter_id": sender_id,
+            "repeat_count": 1,
+            "degenerative": False,
+        })
+
 
     def apply_state_update(self, node_id: str, data: dict) -> None:
         """Apply a periodic on-chain state snapshot for a being."""
@@ -917,6 +1025,43 @@ class WorldState:
             return None
         return text
 
+    def _validate_failure_identifier(self, value: object, field_name: str) -> str | None:
+        text = self._sanitize_tao_text(value)
+        if not text:
+            logger.warning("Ignoring failure archive update: %s is empty", field_name)
+            return None
+        if len(text) > MAX_FAILURE_SIGNATURE_LENGTH:
+            logger.warning(
+                "Ignoring failure archive update: %s exceeds %d characters",
+                field_name,
+                MAX_FAILURE_SIGNATURE_LENGTH,
+            )
+            return None
+        return text
+
+    def _validate_failure_text(
+        self,
+        value: object,
+        field_name: str,
+        max_length: int,
+        *,
+        allow_empty: bool = False,
+    ) -> str | None:
+        text = self._sanitize_tao_text(value)
+        if not text and allow_empty:
+            return ""
+        if not text:
+            logger.warning("Ignoring failure archive update: %s is empty", field_name)
+            return None
+        if len(text) > max_length:
+            logger.warning(
+                "Ignoring failure archive update: %s exceeds %d characters",
+                field_name,
+                max_length,
+            )
+            return None
+        return text
+
     def apply_tao_vote_start(self, vote_id: str, proposer_id: str, rule_data: dict,
                               end_tick: int) -> bool:
         """Start a new Tao voting process."""
@@ -1097,6 +1242,7 @@ class WorldState:
             "knowledge_corpus": self.knowledge_corpus,
             "delegated_tasks": self.delegated_tasks,
             "delegated_task_results": self.delegated_task_results,
+            "failure_archive": self.failure_archive,
             "contribution_scores": self.contribution_scores,
             "pending_proposals": self.pending_proposals,
             "proposal_votes": self.proposal_votes,
@@ -1132,6 +1278,7 @@ class WorldState:
         ws.knowledge_corpus = data.get("knowledge_corpus", {})
         ws.delegated_tasks = data.get("delegated_tasks", {})
         ws.delegated_task_results = data.get("delegated_task_results", {})
+        ws.failure_archive = data.get("failure_archive", [])
         ws.contribution_scores = data.get("contribution_scores", {})
         ws.pending_proposals = data.get("pending_proposals", {})
         ws.proposal_votes = data.get("proposal_votes", {})

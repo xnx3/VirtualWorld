@@ -163,6 +163,41 @@ class TaskWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(task["delegated_results"]), 1)
         self.assertIn("blockchain", task["stage_summary"].lower())
 
+    async def test_task_planning_mentions_archived_failures(self):
+        world_state = WorldState()
+        world_state.apply_being_join("self-node", "Aeris", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-1", "Lumis", {"location": "genesis_plains"})
+        world_state.apply_failure_archive(
+            "peer-1",
+            {
+                "failure_signature": "fail-archive-1",
+                "task_id": "legacy-task",
+                "task": "Design a durable civilization archive",
+                "summary": "The plan collapsed to a single branch too early.",
+                "conditions": "Planning with no branch diversity.",
+                "symptoms": "Weak replay resilience.",
+                "recovery": "Keep branch diversity until evidence is strong.",
+                "reproducible": True,
+            },
+        )
+
+        being = SiliconBeing(
+            node_id="self-node",
+            name="Aeris",
+            private_key=b"secret",
+            config={"location": "genesis_plains", "traits": {}},
+            llm_client=None,
+        )
+        being.assign_task({"task_id": "task-3", "task": "Design a durable civilization archive"})
+
+        world_state.current_tick = 1
+        await being._process_user_tasks(world_state)
+        task = being.get_task_statuses()[0]
+
+        self.assertEqual(task["status"], "collaborating")
+        self.assertGreaterEqual(len(task.get("related_failures", [])), 1)
+        self.assertIn("archived failure", task["stage_summary"].lower())
+
 
 class TaskCommandOutputTests(unittest.TestCase):
     def test_run_task_displays_pending_and_completed_sections(self):

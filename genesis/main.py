@@ -952,7 +952,8 @@ class GenesisNode:
                 con._write(f"  {con.C.DIM}  model: {self.config.llm.model}{con.C.RESET}")
             con._write(f"")
             con._write(f"  {con.C.DIM}  环境变量备选: export GENESIS_OPENAI_KEY=\"your-api-key\"{con.C.RESET}")
-            con._write(f"  {con.C.DIM}  修改后重新运行: ./genesis.sh restart{con.C.RESET}")
+            command = os.environ.get("GENESIS_COMMAND_NAME", "genesis.sh")
+            con._write(f"  {con.C.DIM}  修改后重新运行: ./{command} restart{con.C.RESET}")
             con.separator("─")
             con._write("")
         else:
@@ -1648,6 +1649,8 @@ class GenesisNode:
                 sender_id=sender,
                 data=data,
             )
+        elif tx_type == "FAILURE_ARCHIVE":
+            self.world_state.apply_failure_archive(sender, data)
         elif tx_type == "STATE_UPDATE":
             self.world_state.apply_state_update(sender, data)
         elif tx_type == "CONTRIBUTION_PROPOSE":
@@ -2072,12 +2075,13 @@ def run_task(args):
     """Assign a thinking task to the being."""
     import json
     from genesis.node.config import load_config
-    from genesis.i18n import set_language, t
+    from genesis.i18n import runtime_command_name, set_language, t
     data_dir = Path(args.data_dir)
 
     # Load language setting
     config = load_config(str(data_dir))
     set_language(config.language)
+    command = runtime_command_name()
 
     task_text = " ".join(args.task_text) if args.task_text else ""
     if not task_text:
@@ -2144,7 +2148,7 @@ def run_task(args):
                     print("-" * 40)
                 result_file.write_text("[]")
         if not has_output:
-            print(t("no_tasks"))
+            print(t("no_tasks", command=command))
         return
 
     task_record = enqueue_user_task(data_dir, task_text)
@@ -2153,7 +2157,7 @@ def run_task(args):
     else:
         print(t("task_assigned", task=task_text))
     print(f"{t('task_id_label')}: {task_record['task_id']}")
-    print(t("task_check"))
+    print(t("task_check", command=command))
 
 
 def main():

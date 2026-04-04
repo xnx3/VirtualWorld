@@ -460,6 +460,7 @@ def parse_args(argv: list[str]) -> SimpleNamespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    os.environ["GENESIS_COMMAND_NAME"] = _command_name()
     parsed = parse_args(list(argv) if argv is not None else sys.argv[1:])
 
     if parsed.command == "start":

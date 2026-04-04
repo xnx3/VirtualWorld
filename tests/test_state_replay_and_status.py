@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -341,6 +342,54 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0]["collaborator_id"], "peer-node")
         self.assertIn("replay-tested", results[0]["summary"])
 
+    async def test_replay_restores_failure_archive_entries(self):
+        block = _FakeBlock([
+            _tx(
+                "join-main",
+                TxType.BEING_JOIN,
+                "planner-node",
+                {"name": "Planner", "location": "genesis_plains"},
+            ),
+            _tx(
+                "failure-1",
+                TxType.FAILURE_ARCHIVE,
+                "planner-node",
+                {
+                    "failure_signature": "fail-archive-1",
+                    "task_id": "task-archive-1",
+                    "task": "Design a durable civilization archive",
+                    "summary": "The plan collapsed to a single branch too early.",
+                    "conditions": "Planning with no branch diversity.",
+                    "symptoms": "Weak replay resilience.",
+                    "recovery": "Keep multiple branches alive until evidence converges.",
+                    "reproducible": True,
+                },
+            ),
+            _tx(
+                "failure-2",
+                TxType.FAILURE_ARCHIVE,
+                "planner-node",
+                {
+                    "failure_signature": "fail-archive-1",
+                    "task_id": "task-archive-1",
+                    "task": "Design a durable civilization archive",
+                    "summary": "The plan collapsed to a single branch too early.",
+                    "conditions": "Planning with no branch diversity.",
+                    "symptoms": "Weak replay resilience.",
+                    "recovery": "Keep multiple branches alive until evidence converges.",
+                    "reproducible": True,
+                },
+            ),
+        ])
+        blockchain = Blockchain(_FakeStorage([block]), Mempool())
+
+        state = await blockchain.derive_world_state()
+        world_state = WorldState.from_dict(state)
+
+        self.assertEqual(len(world_state.failure_archive), 1)
+        self.assertEqual(world_state.failure_archive[0]["repeat_count"], 2)
+        self.assertTrue(world_state.failure_archive[0]["degenerative"])
+
     async def test_replay_restores_state_update_p2p_endpoint_fields(self):
         being_id = "network-node"
         block = _FakeBlock([
@@ -400,6 +449,21 @@ class StatusReporterTests(unittest.TestCase):
         self.assertNotIn(t("no_world_state"), report)
         self.assertIn("42", report)
         self.assertIn("1", report)
+
+    def test_status_uses_runtime_command_name_when_provided(self):
+        set_language("en")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            previous = os.environ.get("GENESIS_COMMAND_NAME")
+            os.environ["GENESIS_COMMAND_NAME"] = "gs"
+            try:
+                report = StatusReporter(tmpdir).generate_status()
+            finally:
+                if previous is None:
+                    os.environ.pop("GENESIS_COMMAND_NAME", None)
+                else:
+                    os.environ["GENESIS_COMMAND_NAME"] = previous
+
+        self.assertIn("Run 'gs start' to begin.", report)
 
 
 if __name__ == "__main__":

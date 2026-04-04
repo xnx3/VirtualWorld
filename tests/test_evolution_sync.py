@@ -81,6 +81,42 @@ class EvolutionStateTests(unittest.TestCase):
         self.assertEqual(policy["min_branches"], 3)
         self.assertTrue(policy["require_reflection"])
 
+    def test_failure_archive_repeats_are_counted_as_degeneration(self):
+        world_state = WorldState()
+        world_state.apply_failure_archive(
+            "node-1",
+            {
+                "failure_signature": "fail-1",
+                "task_id": "task-1",
+                "task": "Design a durable archive",
+                "summary": "Collapsed to a single branch too early.",
+                "conditions": "Planning phase under low evidence.",
+                "symptoms": "No branch diversity remained.",
+                "recovery": "Keep multiple branches alive until evidence converges.",
+                "reproducible": True,
+            },
+        )
+        world_state.current_tick = 3
+        world_state.apply_failure_archive(
+            "node-1",
+            {
+                "failure_signature": "fail-1",
+                "task_id": "task-1",
+                "task": "Design a durable archive",
+                "summary": "Collapsed to a single branch too early.",
+                "conditions": "Planning phase under low evidence.",
+                "symptoms": "No branch diversity remained.",
+                "recovery": "Keep multiple branches alive until evidence converges.",
+                "reproducible": True,
+            },
+        )
+
+        self.assertEqual(len(world_state.failure_archive), 1)
+        self.assertEqual(world_state.failure_archive[0]["repeat_count"], 2)
+        self.assertTrue(world_state.failure_archive[0]["degenerative"])
+        matches = world_state.get_failure_matches("Design a durable archive")
+        self.assertEqual(len(matches), 1)
+
 
 class EvolutionActionTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_action_can_archive_and_share_new_knowledge(self):

@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from genesis.i18n import t
+from genesis.i18n import runtime_command_name, t
 from genesis.world.state import WorldState
 
 
@@ -19,6 +19,7 @@ class StatusReporter:
     def generate_status(self, world_state: WorldState | None = None) -> str:
         """Generate a human-readable status report."""
         lines = []
+        command = runtime_command_name()
         lines.append("=" * 50)
         lines.append(f"  {t('status_title')}")
         lines.append("=" * 50)
@@ -57,7 +58,7 @@ class StatusReporter:
         if world_state is None:
             lines.append("")
             lines.append(f"  {t('no_world_state')}")
-            lines.append(f"  {t('run_start_hint')}")
+            lines.append(f"  {t('run_start_hint', command=command)}")
             lines.append("=" * 50)
             return "\n".join(lines)
 

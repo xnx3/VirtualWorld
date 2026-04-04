@@ -257,6 +257,8 @@ class Blockchain:
                 sender_id=sender,
                 data=data,
             )
+        elif tx.tx_type == TxType.FAILURE_ARCHIVE:
+            world_state.apply_failure_archive(sender, data)
         elif tx.tx_type == TxType.STATE_UPDATE:
             world_state.apply_state_update(sender, data)
         elif tx.tx_type == TxType.CONTRIBUTION_PROPOSE:

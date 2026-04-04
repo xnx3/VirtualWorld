@@ -1174,6 +1174,44 @@ class SiliconBeing:
         rules_engine = RulesEngine(world_state)
         return rules_engine.get_task_policy()
 
+    def _relevant_failure_archives(self, task: dict, world_state: WorldState) -> list[dict]:
+        return world_state.get_failure_matches(str(task.get("task", "")), limit=5)
+
+    def _failure_archive_transactions(self, task: dict) -> list[dict]:
+        """Turn reflected failures into chain-synced failure archive entries."""
+        failures = task.get("failure_archive") or []
+        if not isinstance(failures, list):
+            return []
+
+        lessons = task.get("reflection", {}) if isinstance(task.get("reflection"), dict) else {}
+        recovery = str(lessons.get("next_evolution") or "")
+        result_excerpt = str(task.get("result") or "")[:400]
+        txs: list[dict] = []
+
+        for item in failures[:5]:
+            summary = str(item).strip()
+            if not summary:
+                continue
+            signature = sha256(
+                f"{task.get('task', '')}:{summary}".encode()
+            )[:24]
+            txs.append({
+                "tx_type": "FAILURE_ARCHIVE",
+                "data": {
+                    "failure_signature": signature,
+                    "task_id": task.get("task_id", ""),
+                    "task": task.get("task", ""),
+                    "summary": summary,
+                    "conditions": str(task.get("stage_summary", "") or ""),
+                    "symptoms": summary,
+                    "recovery": recovery or "Review archived failure signals before retrying the same branch.",
+                    "reproducible": True,
+                    "result_excerpt": result_excerpt,
+                },
+            })
+
+        return txs
+
     def _build_task_delegations(self, task: dict) -> list[dict]:
         """Create deterministic task assignments for real collaborator beings."""
         delegations: list[dict] = []
@@ -1522,12 +1560,16 @@ class SiliconBeing:
     async def _plan_user_task(self, task: dict, world_state: WorldState) -> str:
         candidates = self._task_candidates(world_state)
         task_policy = self._task_policy(world_state)
+        relevant_failures = self._relevant_failure_archives(task, world_state)
+        task["related_failures"] = relevant_failures
         candidate_map = {c["node_id"]: c for c in candidates}
         plan = await self._generate_task_json(
             world_state,
             (
                 "The Creator God assigned this task:\n"
                 f"{task['task']}\n\n"
+                "Previously archived failures that may be relevant:\n"
+                f"{json.dumps(relevant_failures, ensure_ascii=False, indent=2)}\n\n"
                 "Available collaborators:\n"
                 f"{json.dumps(candidates, ensure_ascii=False, indent=2)}\n\n"
                 "Return JSON with keys: objective, stage_summary, collaborators, branches, council_rounds.\n"
@@ -1625,6 +1667,10 @@ class SiliconBeing:
                 f"under the current evolved task policy."
             )
         )
+        if relevant_failures:
+            task["stage_summary"] += (
+                f" Referred to {len(relevant_failures)} archived failure pattern(s) to avoid degeneration."
+            )
         if task["delegations"]:
             task["stage_summary"] += (
                 f" Emitted {len(task['delegations'])} on-chain delegated task assignment(s)."
@@ -1815,12 +1861,28 @@ class SiliconBeing:
 
         lessons = [str(item) for item in reflection.get("lessons_learned", []) if str(item).strip()][:5]
         failures = [str(item) for item in reflection.get("failure_archive", []) if str(item).strip()][:5]
+        if not failures:
+            for finding in task.get("branch_findings", []):
+                if str(finding.get("status", "")) not in {"discarded", "mergeable"}:
+                    continue
+                for weakness in finding.get("weaknesses", [])[:2]:
+                    text = str(weakness).strip()
+                    if not text:
+                        continue
+                    failures.append(text)
+                    if len(failures) >= 5:
+                        break
+                if len(failures) >= 5:
+                    break
         task["reflection"] = {
             "summary": str(reflection.get("summary") or "Reflection complete."),
             "lessons_learned": lessons,
             "next_evolution": str(reflection.get("next_evolution") or ""),
         }
         task["failure_archive"] = failures
+        failure_txs = self._failure_archive_transactions(task)
+        if failure_txs:
+            task["pending_chain_txs"] = list(task.get("pending_chain_txs", [])) + failure_txs
 
         if task.get("result"):
             result_lines = [task["result"], "", "Reflection:"]
