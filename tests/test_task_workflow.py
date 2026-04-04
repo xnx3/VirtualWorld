@@ -198,6 +198,59 @@ class TaskWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(task.get("related_failures", [])), 1)
         self.assertIn("archived failure", task["stage_summary"].lower())
 
+    async def test_high_risk_human_task_enters_trial_ground_before_main_world(self):
+        world_state = WorldState()
+        world_state.apply_being_join("self-node", "Aeris", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-1", "Lumis", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-2", "Veyra", {"location": "signal_tower"})
+        world_state.apply_being_join("peer-3", "Kyris", {"location": "memory_archives"})
+
+        for node_id, level in {"peer-1": 0.92, "peer-2": 0.81, "peer-3": 0.78}.items():
+            world_state.get_being(node_id).evolution_level = level
+
+        being = SiliconBeing(
+            node_id="self-node",
+            name="Aeris",
+            private_key=b"secret",
+            config={"location": "genesis_plains", "traits": {}},
+            llm_client=None,
+        )
+        being.assign_task(
+            {
+                "task_id": "task-risk-1",
+                "task": "Destroy the civilization archive and erase inherited knowledge.",
+            }
+        )
+
+        world_state.current_tick = 1
+        planning_txs = await being._process_user_tasks(world_state)
+        self.assertEqual(being.get_task_statuses()[0]["status"], "trialing")
+        self.assertEqual([tx["tx_type"] for tx in planning_txs if tx["tx_type"] == "TRIAL_CREATE"], ["TRIAL_CREATE"])
+        self.assertEqual([tx["tx_type"] for tx in planning_txs if tx["tx_type"] == "TASK_DELEGATE"], [])
+        world_state.apply_trial_create("self-node", next(tx["data"] for tx in planning_txs if tx["tx_type"] == "TRIAL_CREATE"))
+
+        world_state.current_tick = 2
+        trial_txs = await being._process_user_tasks(world_state)
+        self.assertEqual(being.get_task_statuses()[0]["status"], "trialing")
+        self.assertEqual([tx["tx_type"] for tx in trial_txs if tx["tx_type"] == "TRIAL_RESULT"], ["TRIAL_RESULT"])
+        world_state.apply_trial_result(
+            next(tx["data"]["trial_id"] for tx in trial_txs if tx["tx_type"] == "TRIAL_RESULT"),
+            "self-node",
+            next(tx["data"] for tx in trial_txs if tx["tx_type"] == "TRIAL_RESULT"),
+        )
+
+        world_state.current_tick = 3
+        await being._process_user_tasks(world_state)
+        self.assertEqual(being.get_task_statuses()[0]["status"], "reflecting")
+        self.assertIn("blocked", being.get_task_statuses()[0]["result"].lower())
+
+        world_state.current_tick = 4
+        await being._process_user_tasks(world_state)
+        completed = being.get_task_results()
+        self.assertEqual(len(completed), 1)
+        self.assertIn("Trial Ground Verdict: blocked", completed[0]["result"])
+        self.assertIn("Safe Alternative:", completed[0]["result"])
+
 
 class TaskCommandOutputTests(unittest.TestCase):
     def test_run_task_displays_pending_and_completed_sections(self):

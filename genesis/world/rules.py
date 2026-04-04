@@ -169,6 +169,9 @@ class RulesEngine:
             "min_branches": 1,
             "require_reflection": False,
             "required_task_stages": [],
+            "require_trial_for_high_risk": True,
+            "trial_risk_threshold": 0.55,
+            "intent_review_min_collaborators": 3,
         }
 
         for rule in self.get_active_rules():
@@ -198,6 +201,31 @@ class RulesEngine:
 
             if params.get("require_reflection"):
                 policy["require_reflection"] = True
+
+            if params.get("require_trial_for_high_risk"):
+                policy["require_trial_for_high_risk"] = True
+
+            threshold = params.get("trial_risk_threshold")
+            if threshold is not None:
+                try:
+                    normalized = max(0.0, min(1.0, float(threshold)))
+                except (TypeError, ValueError):
+                    normalized = None
+                if normalized is not None:
+                    policy["trial_risk_threshold"] = min(
+                        float(policy["trial_risk_threshold"]),
+                        normalized,
+                    )
+
+            review_min = params.get("intent_review_min_collaborators")
+            if review_min is not None:
+                try:
+                    policy["intent_review_min_collaborators"] = max(
+                        int(policy["intent_review_min_collaborators"]),
+                        int(review_min),
+                    )
+                except (TypeError, ValueError):
+                    pass
 
         if "reflection" in policy["required_task_stages"]:
             policy["require_reflection"] = True

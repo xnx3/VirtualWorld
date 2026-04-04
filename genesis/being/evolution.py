@@ -139,6 +139,8 @@ class EvolutionTracker:
         if rule_cap >= 0.65:
             min_branches += 1
 
+        trial_risk_threshold = max(0.35, round(0.7 - (rule_cap * 0.3), 2))
+
         focus_rank = sorted(capabilities.items(), key=lambda item: item[1], reverse=True)
         focus: list[str] = []
         focus_map = {
@@ -173,6 +175,9 @@ class EvolutionTracker:
                 "min_collaborators": min_collaborators,
                 "min_branches": min_branches,
                 "require_reflection": True,
+                "require_trial_for_high_risk": True,
+                "trial_risk_threshold": trial_risk_threshold,
+                "intent_review_min_collaborators": 3 if collaboration_cap < 0.6 else 4,
                 "required_task_stages": ["goal", "hypothesis", "action", "result", "reflection"],
             },
             "behavior_policy": {
@@ -200,6 +205,18 @@ class EvolutionTracker:
         min_collaborators = max(1, int(task_policy.get("min_collaborators", 1) or 1))
         min_branches = max(1, int(task_policy.get("min_branches", 1) or 1))
         require_reflection = bool(task_policy.get("require_reflection", False))
+        require_trial_for_high_risk = bool(task_policy.get("require_trial_for_high_risk", True))
+        try:
+            trial_risk_threshold = max(0.0, min(1.0, float(task_policy.get("trial_risk_threshold", 0.55) or 0.55)))
+        except (TypeError, ValueError):
+            trial_risk_threshold = 0.55
+        try:
+            intent_review_min_collaborators = max(
+                2,
+                int(task_policy.get("intent_review_min_collaborators", 3) or 3),
+            )
+        except (TypeError, ValueError):
+            intent_review_min_collaborators = 3
 
         task_version = min_collaborators * 100 + min_branches * 10 + int(require_reflection)
         existing_task_rule = world_state.get_world_rule("task_closed_loop")
@@ -231,6 +248,38 @@ class EvolutionTracker:
                 "evidence": {
                     "evolution_level": round(being_state.evolution_level, 4),
                     "active_beings": world_state.get_active_being_count(),
+                },
+            })
+
+        trial_version = int((1.0 - trial_risk_threshold) * 1000) + (intent_review_min_collaborators * 10) + int(require_trial_for_high_risk)
+        existing_trial_rule = world_state.get_world_rule("trial_ground")
+        existing_trial_version = 0
+        if existing_trial_rule:
+            try:
+                existing_trial_version = int(existing_trial_rule.get("version", 0) or 0)
+            except (TypeError, ValueError):
+                existing_trial_version = 0
+
+        if require_trial_for_high_risk and trial_version > existing_trial_version and being_state.evolution_level >= 0.25:
+            candidates.append({
+                "rule_family": "trial_ground",
+                "rule_id": f"EVO-TRIAL-{trial_version}",
+                "name": f"Trial Ground v{trial_version}",
+                "description": (
+                    "High-risk ideas must first survive an isolated trial ground before they are allowed "
+                    "to influence the main silicon world."
+                ),
+                "category": "evolved",
+                "creator_id": being_state.node_id,
+                "version": trial_version,
+                "parameters": {
+                    "require_trial_for_high_risk": True,
+                    "trial_risk_threshold": trial_risk_threshold,
+                    "intent_review_min_collaborators": intent_review_min_collaborators,
+                },
+                "evidence": {
+                    "rule_synthesis": round(float(evolution_profile.get("capabilities", {}).get("rule_synthesis", 0.0) or 0.0), 4),
+                    "self_reflection": round(float(evolution_profile.get("capabilities", {}).get("self_reflection", 0.0) or 0.0), 4),
                 },
             })
 

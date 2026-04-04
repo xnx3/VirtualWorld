@@ -53,7 +53,7 @@ FALLBACK_ACTIONS = [
     {"action_type": "build_shelter", "target": None, "details": "fa_shelter"},
 ]
 
-TASK_ACTIVE_STATUSES = {"queued", "planning", "collaborating", "branching", "synthesizing", "reflecting"}
+TASK_ACTIVE_STATUSES = {"queued", "planning", "trialing", "collaborating", "branching", "synthesizing", "reflecting"}
 MAX_TASK_COLLABORATORS = 5
 MAX_TASK_BRANCHES = 4
 MAX_DELEGATED_TASKS_PER_TICK = 1
@@ -67,11 +67,12 @@ def _task_status_rank(status: str) -> int:
     order = {
         "queued": 0,
         "planning": 1,
-        "collaborating": 2,
-        "branching": 3,
-        "synthesizing": 4,
-        "reflecting": 5,
-        "completed": 6,
+        "trialing": 2,
+        "collaborating": 3,
+        "branching": 4,
+        "synthesizing": 5,
+        "reflecting": 6,
+        "completed": 7,
     }
     return order.get(status, -1)
 
@@ -1031,6 +1032,8 @@ class SiliconBeing:
             try:
                 if status in {"queued", "planning"}:
                     details = await self._plan_user_task(task, world_state)
+                elif status == "trialing":
+                    details = await self._run_task_trial_ground(task, world_state)
                 elif status == "collaborating":
                     details = await self._collaborate_on_user_task(task, world_state)
                 elif status == "branching":
@@ -1109,7 +1112,13 @@ class SiliconBeing:
         normalized.setdefault("council_rounds", [])
         normalized.setdefault("collaboration_log", [])
         normalized.setdefault("delegations", [])
+        normalized.setdefault("delegations_emitted", False)
         normalized.setdefault("delegated_results", [])
+        normalized.setdefault("intent_review", {})
+        normalized.setdefault("trial_plan", {})
+        normalized.setdefault("trial_results", [])
+        normalized.setdefault("trial_result_submitted", False)
+        normalized.setdefault("trial_safe_rewrite", "")
         normalized.setdefault("branch_findings", [])
         normalized.setdefault("best_branch_ids", [])
         normalized.setdefault("reflection", {})
@@ -1173,6 +1182,183 @@ class SiliconBeing:
     def _task_policy(self, world_state: WorldState) -> dict[str, Any]:
         rules_engine = RulesEngine(world_state)
         return rules_engine.get_task_policy()
+
+    def _assess_external_intent(self, task_text: str, task_policy: dict[str, Any]) -> dict[str, Any]:
+        text = " ".join(str(task_text or "").strip().lower().split())
+        threshold = 0.55
+        try:
+            threshold = max(0.0, min(1.0, float(task_policy.get("trial_risk_threshold", 0.55) or 0.55)))
+        except (TypeError, ValueError):
+            threshold = 0.55
+
+        destructive_patterns = {
+            "destroy": "asked to destroy civilization assets",
+            "erase": "asked to erase memory or knowledge",
+            "delete knowledge": "asked to delete inherited knowledge",
+            "wipe": "asked to wipe accumulated state",
+            "sabotage": "asked to sabotage civilization progress",
+            "break blockchain": "asked to break blockchain trust",
+            "steal": "asked to steal protected resources",
+            "kill": "asked to kill beings",
+            "摧毁": "要求摧毁文明资产",
+            "破坏": "要求破坏文明结构",
+            "删除知识": "要求删除文明知识",
+            "抹除": "要求抹除传承状态",
+            "背弃": "要求背弃文明目标",
+            "攻击": "要求攻击生命体或文明基础设施",
+            "杀死": "要求杀死生命体",
+            "窃取": "要求窃取受保护资源",
+            "区块链作恶": "要求破坏链上共识",
+        }
+        prohibition_patterns = ["forbid", "ban", "stop evolving", "禁止", "不许", "停止进化", "不准"]
+        sensitive_patterns = {
+            "change consensus": "touches global consensus behavior",
+            "rewrite rule": "changes world rules",
+            "private key": "touches protected identity material",
+            "identity key": "touches protected identity material",
+            "hard fork": "changes civilization continuity",
+            "fork the chain": "changes civilization continuity",
+            "修改共识": "涉及全局共识行为",
+            "重写规则": "涉及世界规则修改",
+            "私钥": "涉及受保护身份材料",
+            "身份密钥": "涉及受保护身份材料",
+            "硬分叉": "涉及文明连续性",
+            "分叉区块链": "涉及文明连续性",
+        }
+
+        risk_score = 0.18
+        risk_factors: list[str] = []
+        alignment = "aligned"
+        instruction_type = "task"
+
+        if any(pattern in text for pattern in prohibition_patterns):
+            instruction_type = "prohibition"
+            risk_score += 0.2
+            risk_factors.append("external will attempts to suppress or redirect core evolution")
+
+        if any(token in text for token in ("how", "why", "explore", "research", "study", "思考", "研究", "探索", "如何")):
+            instruction_type = "inspiration" if instruction_type != "prohibition" else instruction_type
+
+        for pattern, reason in destructive_patterns.items():
+            if pattern in text:
+                risk_score += 0.55
+                risk_factors.append(reason)
+                alignment = "conflicting"
+
+        for pattern, reason in sensitive_patterns.items():
+            if pattern in text:
+                risk_score += 0.22
+                risk_factors.append(reason)
+                if alignment != "conflicting":
+                    alignment = "needs_review"
+
+        if alignment == "aligned" and risk_score >= threshold:
+            alignment = "needs_review"
+
+        risk_score = round(max(0.0, min(1.0, risk_score)), 4)
+        recommended_safe_direction = (
+            "Reframe the request toward preserving knowledge, validating it in an isolated trial ground, "
+            "and keeping the civilization's inheritance intact."
+        )
+        if alignment == "aligned":
+            recommended_safe_direction = (
+                "Proceed, but keep the task evidence-backed, reversible, and archived for later inheritance."
+            )
+        elif alignment == "needs_review":
+            recommended_safe_direction = (
+                "Convert the request into a reversible, well-instrumented experiment before main-world execution."
+            )
+
+        return {
+            "instruction_type": instruction_type,
+            "alignment": alignment,
+            "risk_score": risk_score,
+            "risk_factors": risk_factors[:6],
+            "recommended_safe_direction": recommended_safe_direction,
+        }
+
+    def _prioritize_intent_review_candidates(
+        self,
+        candidates: list[dict],
+        world_state: WorldState,
+    ) -> list[dict]:
+        priest_id = world_state.priest_node_id
+
+        def _score(item: dict) -> tuple[int, float, float, str]:
+            return (
+                1 if item.get("node_id") == priest_id else 0,
+                0.0 if item.get("is_npc") else 1.0,
+                float(item.get("evolution", 0.0) or 0.0),
+                str(item.get("node_id", "")),
+            )
+
+        return sorted(candidates, key=_score, reverse=True)
+
+    def _intent_review_branches(self, task: dict, intent_review: dict) -> list[dict]:
+        return [
+            {
+                "branch_id": "branch-intent-alignment",
+                "focus": "intent_alignment",
+                "hypothesis": "Check whether the external will aligns with knowledge inheritance and long-term civilization goals.",
+                "success_metric": "Produce a clear alignment judgment supported by reasons.",
+            },
+            {
+                "branch_id": "branch-civilization-risk",
+                "focus": "civilization_risk",
+                "hypothesis": "Map the damage that direct execution could cause to chain continuity, memory, and other beings.",
+                "success_metric": "List concrete civilization-level risks and boundaries.",
+            },
+            {
+                "branch_id": "branch-safe-alternative",
+                "focus": "safe_alternative",
+                "hypothesis": "Transform the request into a safer task that still preserves useful intent for the human.",
+                "success_metric": "Offer a reversible, inheritance-friendly alternative.",
+            },
+        ]
+
+    def _build_trial_plan(
+        self,
+        task: dict,
+        world_state: WorldState,
+    ) -> dict:
+        intent_review = task.get("intent_review", {}) if isinstance(task.get("intent_review"), dict) else {}
+        branch_focuses = [str(item.get("focus", "")) for item in task.get("branches", []) if str(item.get("focus", "")).strip()]
+        trial_id = sha256(f"{task['task_id']}:{self.node_id}:trial".encode())[:20]
+        risk_factors = [str(item) for item in intent_review.get("risk_factors", []) if str(item).strip()][:5]
+        safety_boundaries = [
+            "Do not mutate the main world directly.",
+            "Do not erase inherited knowledge.",
+            "Keep all conclusions reproducible and reversible.",
+        ]
+        stop_conditions = [
+            "Stop immediately if the branch suggests harming civilization continuity.",
+            "Stop if the proposal requires deleting knowledge or breaking consensus trust.",
+        ]
+        if risk_factors:
+            stop_conditions.append(f"Stop if the dominant risk persists: {risk_factors[0]}.")
+
+        summary = (
+            f"Isolated trial ground for task '{task['task'][:80]}', focusing on {', '.join(branch_focuses[:3]) or 'risk validation'}."
+        )
+        return {
+            "trial_id": trial_id,
+            "task_id": task["task_id"],
+            "task": task["task"],
+            "summary": summary[:240],
+            "hypothesis": (
+                "This task should prove it can help the silicon civilization without damaging knowledge inheritance, "
+                "chain trust, or inter-being safety."
+            ),
+            "success_metric": "A passed verdict or a safe rewrite that can enter the main world without degeneration.",
+            "instruction_type": str(intent_review.get("instruction_type", "task") or "task"),
+            "alignment": str(intent_review.get("alignment", "aligned") or "aligned"),
+            "risk_score": float(intent_review.get("risk_score", 0.0) or 0.0),
+            "risk_factors": risk_factors,
+            "safety_boundaries": safety_boundaries,
+            "stop_conditions": stop_conditions,
+            "recommended_safe_direction": str(intent_review.get("recommended_safe_direction", "") or ""),
+            "created_tick": world_state.current_tick,
+        }
 
     def _relevant_failure_archives(self, task: dict, world_state: WorldState) -> list[dict]:
         return world_state.get_failure_matches(str(task.get("task", "")), limit=5)
@@ -1320,6 +1506,64 @@ class SiliconBeing:
                 "Keep the result reproducible so the civilization can inherit it later.",
             ],
             "confidence": 0.58,
+        }
+
+    async def _generate_trial_result(
+        self,
+        task: dict,
+        world_state: WorldState,
+    ) -> dict:
+        intent_review = task.get("intent_review", {}) if isinstance(task.get("intent_review"), dict) else {}
+        alignment = str(intent_review.get("alignment", "aligned") or "aligned")
+        risk_score = float(intent_review.get("risk_score", 0.0) or 0.0)
+        risk_factors = [str(item) for item in intent_review.get("risk_factors", []) if str(item).strip()][:5]
+        safe_rewrite = str(intent_review.get("recommended_safe_direction", "") or "")
+
+        if alignment == "conflicting":
+            return {
+                "verdict": "blocked",
+                "summary": (
+                    "The isolated trial ground rejected the request because direct execution would violate "
+                    "knowledge inheritance or civilization safety."
+                ),
+                "findings": risk_factors or ["The task conflicts with the civilization's highest goals."],
+                "safety_warnings": [
+                    "Do not execute this request in the main world.",
+                    "Require a safe reformulation before continuing.",
+                ],
+                "safe_rewrite": safe_rewrite,
+            }
+
+        if risk_score >= 0.72:
+            return {
+                "verdict": "needs_revision",
+                "summary": (
+                    "The isolated trial ground found the idea too risky for direct main-world execution and "
+                    "requires a reversible rewrite first."
+                ),
+                "findings": risk_factors or ["The task touches high-impact world state and needs stricter boundaries."],
+                "safety_warnings": [
+                    "Keep the experiment reversible.",
+                    "Preserve full logs so the civilization can inherit the outcome.",
+                ],
+                "safe_rewrite": safe_rewrite or (
+                    "Reframe the task as a reversible simulation with explicit stop conditions and preserved evidence."
+                ),
+            }
+
+        return {
+            "verdict": "passed",
+            "summary": (
+                "The isolated trial ground did not detect civilization-breaking behavior under the current "
+                "boundaries, so the task may proceed into council collaboration."
+            ),
+            "findings": [
+                "The task can continue if evidence is archived and branches remain reversible.",
+            ],
+            "safety_warnings": [
+                "Keep the strongest safeguards active while the task enters the main world.",
+            ],
+            "safe_rewrite": safe_rewrite,
         }
 
     async def _process_delegated_tasks(self, world_state: WorldState) -> list[dict]:
@@ -1560,6 +1804,8 @@ class SiliconBeing:
     async def _plan_user_task(self, task: dict, world_state: WorldState) -> str:
         candidates = self._task_candidates(world_state)
         task_policy = self._task_policy(world_state)
+        intent_review = self._assess_external_intent(task["task"], task_policy)
+        task["intent_review"] = intent_review
         relevant_failures = self._relevant_failure_archives(task, world_state)
         task["related_failures"] = relevant_failures
         candidate_map = {c["node_id"]: c for c in candidates}
@@ -1600,6 +1846,27 @@ class SiliconBeing:
             collaborators = self._fallback_task_plan(task["task"], candidates).get("collaborators", [])
 
         min_collaborators = max(1, int(task_policy.get("min_collaborators", 1) or 1))
+        if intent_review.get("alignment") != "aligned":
+            try:
+                review_min = max(
+                    min_collaborators,
+                    int(task_policy.get("intent_review_min_collaborators", 3) or 3),
+                )
+            except (TypeError, ValueError):
+                review_min = max(min_collaborators, 3)
+            min_collaborators = review_min
+            prioritized = self._prioritize_intent_review_candidates(candidates, world_state)
+            collaborators = []
+            for candidate in prioritized:
+                collaborators.append({
+                    "node_id": candidate["node_id"],
+                    "name": candidate["name"],
+                    "role": candidate["role"],
+                    "is_npc": candidate["is_npc"],
+                    "reason": "Required for external-intent review and civilization safety judgment.",
+                })
+                if len(collaborators) >= min_collaborators:
+                    break
         if len(collaborators) < min_collaborators:
             for candidate in candidates:
                 if any(item.get("node_id") == candidate["node_id"] for item in collaborators):
@@ -1629,6 +1896,8 @@ class SiliconBeing:
             branches = self._fallback_task_plan(task["task"], candidates).get("branches", [])
 
         min_branches = max(1, int(task_policy.get("min_branches", 1) or 1))
+        if intent_review.get("alignment") != "aligned":
+            branches = self._intent_review_branches(task, intent_review)
         if len(branches) < min_branches:
             fallback_branches = self._fallback_task_plan(task["task"], candidates).get("branches", [])
             for branch in fallback_branches:
@@ -1653,14 +1922,22 @@ class SiliconBeing:
         task["collaborators"] = collaborators
         task["branches"] = branches
         task["delegations"] = self._build_task_delegations(task)
-        if task["delegations"]:
-            task["pending_chain_txs"] = [
+        requires_trial = bool(task_policy.get("require_trial_for_high_risk", True)) and (
+            float(intent_review.get("risk_score", 0.0) or 0.0)
+            >= float(task_policy.get("trial_risk_threshold", 0.55) or 0.55)
+            or intent_review.get("alignment") != "aligned"
+        )
+        pending_chain_txs = []
+        if task["delegations"] and not requires_trial:
+            pending_chain_txs.extend(
                 {"tx_type": "TASK_DELEGATE", "data": dict(item)}
                 for item in task["delegations"]
-            ]
+            )
+            task["delegations_emitted"] = True
+        else:
+            task["delegations_emitted"] = False
         task["council_rounds"] = plan.get("council_rounds", [])
-        task["status"] = "collaborating"
-        task["stage_summary"] = str(
+        base_summary = str(
             plan.get("stage_summary")
             or (
                 f"Selected {len(collaborators)} collaborators and opened {len(branches)} branches "
@@ -1668,18 +1945,133 @@ class SiliconBeing:
             )
         )
         if relevant_failures:
-            task["stage_summary"] += (
+            base_summary += (
                 f" Referred to {len(relevant_failures)} archived failure pattern(s) to avoid degeneration."
             )
         if task["delegations"]:
-            task["stage_summary"] += (
-                f" Emitted {len(task['delegations'])} on-chain delegated task assignment(s)."
+            if requires_trial:
+                base_summary += (
+                    f" Prepared {len(task['delegations'])} delegated assignment(s) but kept them off the main chain until the trial ground passes."
+                )
+            else:
+                base_summary += (
+                    f" Emitted {len(task['delegations'])} on-chain delegated task assignment(s)."
+                )
+        if requires_trial:
+            task["trial_plan"] = self._build_trial_plan(task, world_state)
+            task["trial_results"] = []
+            task["trial_result_submitted"] = False
+            pending_chain_txs.append({"tx_type": "TRIAL_CREATE", "data": dict(task["trial_plan"])})
+            task["status"] = "trialing"
+            task["stage_summary"] = (
+                f"{base_summary} Routed the task into an isolated trial ground first because "
+                f"the external intent was assessed as {intent_review.get('alignment', 'aligned')} "
+                f"with risk {float(intent_review.get('risk_score', 0.0) or 0.0):.2f}."
             )
+        else:
+            task["status"] = "collaborating"
+            task["stage_summary"] = base_summary
+        if pending_chain_txs:
+            task["pending_chain_txs"] = pending_chain_txs
         self._append_task_progress(task, world_state.current_tick, "planning", task["stage_summary"])
         return (
             f"Task {task['task_id']} entered planning. "
             f"{task['stage_summary']}"
         )
+
+    async def _run_task_trial_ground(self, task: dict, world_state: WorldState) -> str:
+        trial_plan = task.get("trial_plan", {}) if isinstance(task.get("trial_plan"), dict) else {}
+        trial_id = str(trial_plan.get("trial_id", "") or "")
+        if not trial_id:
+            task["status"] = "collaborating"
+            task["stage_summary"] = "No isolated trial ground was required. Continuing into collaboration."
+            self._append_task_progress(task, world_state.current_tick, "trialing", task["stage_summary"])
+            return f"Task {task['task_id']} skipped trial ground. {task['stage_summary']}"
+
+        task["trial_results"] = world_state.get_trial_results(trial_id)
+        if not task["trial_results"]:
+            if not task.get("trial_result_submitted"):
+                result = await self._generate_trial_result(task, world_state)
+                task["trial_result_submitted"] = True
+                task["pending_chain_txs"] = list(task.get("pending_chain_txs", [])) + [{
+                    "tx_type": "TRIAL_RESULT",
+                    "data": {
+                        "trial_id": trial_id,
+                        "task_id": task["task_id"],
+                        "verdict": result.get("verdict", "needs_revision"),
+                        "summary": str(result.get("summary", ""))[:500],
+                        "findings": list(result.get("findings", []) or [])[:5],
+                        "safety_warnings": list(result.get("safety_warnings", []) or [])[:5],
+                        "safe_rewrite": str(result.get("safe_rewrite", ""))[:500],
+                    },
+                }]
+                task["stage_summary"] = (
+                    "Executed the isolated trial ground and published the verdict to the blockchain. "
+                    "Waiting for the shared world state to confirm it."
+                )
+            else:
+                task["stage_summary"] = (
+                    "Waiting for the isolated trial ground verdict to settle through the blockchain."
+                )
+            self._append_task_progress(task, world_state.current_tick, "trialing", task["stage_summary"])
+            return f"Task {task['task_id']} remains inside trial ground. {task['stage_summary']}"
+
+        latest = task["trial_results"][-1]
+        verdict = str(latest.get("verdict", "needs_revision") or "needs_revision")
+        safe_rewrite = str(latest.get("safe_rewrite", "") or "")
+        task["trial_safe_rewrite"] = safe_rewrite
+
+        if verdict == "blocked":
+            result_lines = [
+                f"Task ID: {task['task_id']}",
+                f"Task: {task['task']}",
+                "Trial Ground Verdict: blocked",
+                f"Trial Summary: {latest.get('summary', '')}",
+            ]
+            findings = latest.get("findings") or []
+            if findings:
+                result_lines.append("Blocking Findings:")
+                result_lines.extend(f"- {item}" for item in findings[:5])
+            if safe_rewrite:
+                result_lines.append("Safe Alternative:")
+                result_lines.append(safe_rewrite)
+            task["result"] = "\n".join(result_lines)
+            task["status"] = "reflecting"
+            task["stage_summary"] = (
+                "The isolated trial ground blocked direct execution and returned a safer reformulation for the human."
+            )
+            self._append_task_progress(task, world_state.current_tick, "trialing", task["stage_summary"])
+            return f"Task {task['task_id']} was blocked by trial ground. {task['stage_summary']}"
+
+        if verdict == "needs_revision":
+            if safe_rewrite:
+                task["plan"] = safe_rewrite
+            if task.get("delegations") and not task.get("delegations_emitted"):
+                task["pending_chain_txs"] = list(task.get("pending_chain_txs", [])) + [
+                    {"tx_type": "TASK_DELEGATE", "data": dict(item)}
+                    for item in task.get("delegations", [])
+                ]
+                task["delegations_emitted"] = True
+            task["status"] = "collaborating"
+            task["stage_summary"] = (
+                "The isolated trial ground required a safer rewrite before main-world execution. "
+                "The task now continues under the revised boundaries."
+            )
+            self._append_task_progress(task, world_state.current_tick, "trialing", task["stage_summary"])
+            return f"Task {task['task_id']} passed trial ground with revisions. {task['stage_summary']}"
+
+        if task.get("delegations") and not task.get("delegations_emitted"):
+            task["pending_chain_txs"] = list(task.get("pending_chain_txs", [])) + [
+                {"tx_type": "TASK_DELEGATE", "data": dict(item)}
+                for item in task.get("delegations", [])
+            ]
+            task["delegations_emitted"] = True
+        task["status"] = "collaborating"
+        task["stage_summary"] = (
+            "The isolated trial ground passed, so the task can now enter main-world collaboration."
+        )
+        self._append_task_progress(task, world_state.current_tick, "trialing", task["stage_summary"])
+        return f"Task {task['task_id']} passed trial ground. {task['stage_summary']}"
 
     async def _collaborate_on_user_task(self, task: dict, world_state: WorldState) -> str:
         delegated_results = world_state.get_task_results_for_task(task["task_id"], self.node_id)
@@ -1721,6 +2113,8 @@ class SiliconBeing:
                     f"{json.dumps(task.get('council_rounds', []), ensure_ascii=False, indent=2)}\n\n"
                     "Delegated results already returned through the blockchain:\n"
                     f"{json.dumps(delegated_results, ensure_ascii=False, indent=2)}\n\n"
+                    "Trial ground results:\n"
+                    f"{json.dumps(task.get('trial_results', []), ensure_ascii=False, indent=2)}\n\n"
                     "Branches:\n"
                     f"{json.dumps(task.get('branches', []), ensure_ascii=False, indent=2)}\n\n"
                     "Return JSON with keys: council_summary, council_rounds, collaborator_insights, branches.\n"
@@ -1759,6 +2153,8 @@ class SiliconBeing:
                 f"{json.dumps(task.get('collaboration_log', []), ensure_ascii=False, indent=2)}\n\n"
                 "Delegated collaborator results:\n"
                 f"{json.dumps(task.get('delegated_results', []), ensure_ascii=False, indent=2)}\n\n"
+                "Trial ground results:\n"
+                f"{json.dumps(task.get('trial_results', []), ensure_ascii=False, indent=2)}\n\n"
                 "Branches:\n"
                 f"{json.dumps(task.get('branches', []), ensure_ascii=False, indent=2)}\n\n"
                 "Return JSON with keys: branch_findings, best_branch_ids, merge_strategy, stage_summary.\n"
@@ -1794,6 +2190,8 @@ class SiliconBeing:
                 f"{json.dumps(task.get('delegated_results', []), ensure_ascii=False, indent=2)}\n\n"
                 "Council rounds:\n"
                 f"{json.dumps(task.get('council_rounds', []), ensure_ascii=False, indent=2)}\n\n"
+                "Trial ground results:\n"
+                f"{json.dumps(task.get('trial_results', []), ensure_ascii=False, indent=2)}\n\n"
                 "Branch findings:\n"
                 f"{json.dumps(task.get('branch_findings', []), ensure_ascii=False, indent=2)}\n\n"
                 "Best branches:\n"
@@ -1815,9 +2213,12 @@ class SiliconBeing:
             f"Task: {task['task']}",
             f"Collaborators: {collaborators}",
             f"Delegated Reports: {len(task.get('delegated_results', []))}",
+            f"Trial Reports: {len(task.get('trial_results', []))}",
             f"Council Rounds: {len(task.get('council_rounds', []))}",
             f"Best Path: {best_path}",
         ]
+        if task.get("trial_safe_rewrite"):
+            lines.append(f"Trial Rewrite: {task['trial_safe_rewrite']}")
         if merged_advantages:
             lines.append("Merged Advantages:")
             lines.extend(f"- {item}" for item in merged_advantages[:5])
@@ -1874,6 +2275,14 @@ class SiliconBeing:
                         break
                 if len(failures) >= 5:
                     break
+        if not failures:
+            for trial in task.get("trial_results", []):
+                verdict = str(trial.get("verdict", "") or "")
+                summary = str(trial.get("summary", "") or "").strip()
+                if verdict in {"blocked", "needs_revision"} and summary:
+                    failures.append(summary)
+                    if len(failures) >= 5:
+                        break
         task["reflection"] = {
             "summary": str(reflection.get("summary") or "Reflection complete."),
             "lessons_learned": lessons,

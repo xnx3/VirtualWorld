@@ -50,10 +50,12 @@ def _task_status_rank(status: str) -> int:
     order = {
         "queued": 0,
         "planning": 1,
-        "collaborating": 2,
-        "branching": 3,
-        "synthesizing": 4,
-        "completed": 5,
+        "trialing": 2,
+        "collaborating": 3,
+        "branching": 4,
+        "synthesizing": 5,
+        "reflecting": 6,
+        "completed": 7,
     }
     return order.get(status, -1)
 
@@ -75,7 +77,7 @@ def enqueue_user_task(data_dir: str | Path, task_text: str) -> dict:
             tasks = []
 
     normalized_key = _task_text_key(task_text)
-    active_statuses = {"queued", "planning", "collaborating", "branching", "synthesizing"}
+    active_statuses = {"queued", "planning", "trialing", "collaborating", "branching", "synthesizing", "reflecting"}
 
     for existing in tasks:
         if not isinstance(existing, dict):
@@ -1646,6 +1648,14 @@ class GenesisNode:
         elif tx_type == "TASK_RESULT":
             self.world_state.apply_task_result(
                 assignment_id=data.get("assignment_id", ""),
+                sender_id=sender,
+                data=data,
+            )
+        elif tx_type == "TRIAL_CREATE":
+            self.world_state.apply_trial_create(sender, data)
+        elif tx_type == "TRIAL_RESULT":
+            self.world_state.apply_trial_result(
+                trial_id=data.get("trial_id", ""),
                 sender_id=sender,
                 data=data,
             )

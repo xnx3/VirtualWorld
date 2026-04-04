@@ -342,6 +342,62 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0]["collaborator_id"], "peer-node")
         self.assertIn("replay-tested", results[0]["summary"])
 
+    async def test_replay_restores_trial_ground_records(self):
+        block = _FakeBlock([
+            _tx(
+                "join-main",
+                TxType.BEING_JOIN,
+                "planner-node",
+                {"name": "Planner", "location": "genesis_plains"},
+            ),
+            _tx(
+                "trial-create-1",
+                TxType.TRIAL_CREATE,
+                "planner-node",
+                {
+                    "trial_id": "trial-1",
+                    "task_id": "task-risk-1",
+                    "task": "Rewrite global consensus without validation",
+                    "summary": "Trial risky consensus rewrite in isolation first.",
+                    "hypothesis": "A safe rewrite should emerge before any main-world change.",
+                    "success_metric": "Produce a reversible path or block the request.",
+                    "instruction_type": "task",
+                    "alignment": "needs_review",
+                    "risk_score": 0.81,
+                    "risk_factors": ["touches global consensus behavior"],
+                    "safety_boundaries": ["Do not mutate the main world directly."],
+                    "stop_conditions": ["Stop if chain trust would be broken."],
+                    "recommended_safe_direction": "Convert it into a reversible simulation.",
+                },
+            ),
+            _tx(
+                "trial-result-1",
+                TxType.TRIAL_RESULT,
+                "planner-node",
+                {
+                    "trial_id": "trial-1",
+                    "verdict": "needs_revision",
+                    "summary": "The task must be rewritten as a reversible simulation.",
+                    "findings": ["Direct execution could break chain continuity."],
+                    "safety_warnings": ["Keep the experiment reversible."],
+                    "safe_rewrite": "Design a reversible consensus simulation and compare outcomes.",
+                },
+            ),
+        ])
+        blockchain = Blockchain(_FakeStorage([block]), Mempool())
+
+        state = await blockchain.derive_world_state()
+        world_state = WorldState.from_dict(state)
+        trial = world_state.get_trial("trial-1")
+        results = world_state.get_trial_results("trial-1")
+
+        self.assertIsNotNone(trial)
+        self.assertEqual(trial["status"], "needs_revision")
+        self.assertEqual(trial["task_id"], "task-risk-1")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["verdict"], "needs_revision")
+        self.assertIn("reversible consensus simulation", results[0]["safe_rewrite"])
+
     async def test_replay_restores_failure_archive_entries(self):
         block = _FakeBlock([
             _tx(

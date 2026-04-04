@@ -257,6 +257,14 @@ class Blockchain:
                 sender_id=sender,
                 data=data,
             )
+        elif tx.tx_type == TxType.TRIAL_CREATE:
+            world_state.apply_trial_create(sender, data)
+        elif tx.tx_type == TxType.TRIAL_RESULT:
+            world_state.apply_trial_result(
+                trial_id=data.get("trial_id", ""),
+                sender_id=sender,
+                data=data,
+            )
         elif tx.tx_type == TxType.FAILURE_ARCHIVE:
             world_state.apply_failure_archive(sender, data)
         elif tx.tx_type == TxType.STATE_UPDATE:

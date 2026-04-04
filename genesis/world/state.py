@@ -27,6 +27,9 @@ MAX_TASK_IDENTIFIER_LENGTH = 128
 MAX_TASK_TEXT_LENGTH = 2048
 MAX_TASK_RESULT_SUMMARY_LENGTH = 2048
 MAX_TASK_RESULT_ITEM_LENGTH = 512
+MAX_TRIAL_IDENTIFIER_LENGTH = 128
+MAX_TRIAL_TEXT_LENGTH = 2048
+MAX_TRIAL_ITEM_LENGTH = 512
 MAX_FAILURE_SIGNATURE_LENGTH = 128
 MAX_FAILURE_TEXT_LENGTH = 1024
 
@@ -140,6 +143,8 @@ class WorldState:
     knowledge_corpus: dict[str, dict] = field(default_factory=dict)  # knowledge_id -> data
     delegated_tasks: dict[str, dict] = field(default_factory=dict)  # assignment_id -> assignment
     delegated_task_results: dict[str, list[dict]] = field(default_factory=dict)  # assignment_id -> results
+    trial_grounds: dict[str, dict] = field(default_factory=dict)  # trial_id -> trial definition
+    trial_results: dict[str, list[dict]] = field(default_factory=dict)  # trial_id -> results
     failure_archive: list[dict] = field(default_factory=list)
     contribution_scores: dict[str, float] = field(default_factory=dict)  # node_id -> score
     pending_proposals: dict[str, dict] = field(default_factory=dict)  # tx_hash -> proposal
@@ -233,6 +238,31 @@ class WorldState:
                 item.setdefault("requested_focus", assignment.get("requested_focus"))
                 results.append(item)
         results.sort(key=lambda item: (int(item.get("tick", 0) or 0), str(item.get("assignment_id", ""))))
+        return results
+
+    def get_trial(self, trial_id: str) -> dict | None:
+        trial = self.trial_grounds.get(trial_id)
+        if trial is None:
+            return None
+        return dict(trial)
+
+    def get_trial_results(self, trial_id: str) -> list[dict]:
+        results = [dict(item) for item in self.trial_results.get(trial_id, [])]
+        results.sort(key=lambda item: (int(item.get("tick", 0) or 0), str(item.get("reporter_id", ""))))
+        return results
+
+    def get_trial_results_for_task(self, task_id: str) -> list[dict]:
+        results: list[dict] = []
+        for trial_id, trial in self.trial_grounds.items():
+            if trial.get("task_id") != task_id:
+                continue
+            for item in self.trial_results.get(trial_id, []):
+                merged = dict(item)
+                merged.setdefault("trial_id", trial_id)
+                merged.setdefault("task_id", task_id)
+                merged.setdefault("creator_id", trial.get("creator_id"))
+                results.append(merged)
+        results.sort(key=lambda item: (int(item.get("tick", 0) or 0), str(item.get("trial_id", ""))))
         return results
 
     def get_failure_matches(self, task_text: str, limit: int = 5) -> list[dict]:
@@ -625,6 +655,124 @@ class WorldState:
         results.append(result_entry)
         assignment["status"] = "completed"
         assignment["updated_tick"] = self.current_tick
+
+    def apply_trial_create(self, creator_id: str, data: dict) -> None:
+        trial_id = self._validate_trial_identifier(data.get("trial_id"), "trial_id")
+        task_id = self._validate_trial_identifier(data.get("task_id"), "task_id")
+        task_text = self._validate_trial_text(data.get("task"), "task", MAX_TASK_TEXT_LENGTH)
+        summary = self._validate_trial_text(
+            data.get("summary", ""),
+            "summary",
+            MAX_TRIAL_TEXT_LENGTH,
+            allow_empty=True,
+        )
+        hypothesis = self._validate_trial_text(data.get("hypothesis"), "hypothesis", MAX_TRIAL_TEXT_LENGTH)
+        success_metric = self._validate_trial_text(
+            data.get("success_metric", ""),
+            "success_metric",
+            MAX_TRIAL_ITEM_LENGTH,
+            allow_empty=True,
+        )
+        safe_direction = self._validate_trial_text(
+            data.get("recommended_safe_direction", ""),
+            "recommended_safe_direction",
+            MAX_TRIAL_TEXT_LENGTH,
+            allow_empty=True,
+        )
+
+        if (
+            trial_id is None
+            or task_id is None
+            or task_text is None
+            or summary is None
+            or hypothesis is None
+            or success_metric is None
+            or safe_direction is None
+        ):
+            return
+
+        if trial_id in self.trial_grounds:
+            return
+
+        try:
+            risk_score = round(max(0.0, min(1.0, float(data.get("risk_score", 0.0) or 0.0))), 4)
+        except (TypeError, ValueError):
+            risk_score = 0.0
+
+        instruction_type = self._sanitize_tao_text(data.get("instruction_type") or "task") or "task"
+        alignment = self._sanitize_tao_text(data.get("alignment") or "aligned") or "aligned"
+        risk_factors = self._validate_trial_items(data.get("risk_factors"), "risk_factors")
+        safety_boundaries = self._validate_trial_items(data.get("safety_boundaries"), "safety_boundaries")
+        stop_conditions = self._validate_trial_items(data.get("stop_conditions"), "stop_conditions")
+
+        self.trial_grounds[trial_id] = {
+            "trial_id": trial_id,
+            "task_id": task_id,
+            "creator_id": creator_id,
+            "task": task_text,
+            "summary": summary,
+            "hypothesis": hypothesis,
+            "success_metric": success_metric,
+            "instruction_type": instruction_type,
+            "alignment": alignment,
+            "risk_score": risk_score,
+            "risk_factors": risk_factors,
+            "safety_boundaries": safety_boundaries,
+            "stop_conditions": stop_conditions,
+            "recommended_safe_direction": safe_direction,
+            "status": "open",
+            "created_tick": self.current_tick,
+            "updated_tick": self.current_tick,
+        }
+        self.trial_results.setdefault(trial_id, [])
+
+    def apply_trial_result(self, trial_id: str, sender_id: str, data: dict) -> None:
+        normalized_trial_id = self._validate_trial_identifier(trial_id, "trial_id")
+        if normalized_trial_id is None:
+            return
+
+        trial = self.trial_grounds.get(normalized_trial_id)
+        if trial is None:
+            return
+
+        results = self.trial_results.setdefault(normalized_trial_id, [])
+        if any(result.get("reporter_id") == sender_id for result in results):
+            return
+
+        verdict = self._sanitize_tao_text(data.get("verdict") or "needs_revision") or "needs_revision"
+        if verdict not in {"passed", "blocked", "needs_revision"}:
+            verdict = "needs_revision"
+
+        summary = self._validate_trial_text(data.get("summary"), "summary", MAX_TRIAL_TEXT_LENGTH)
+        safe_rewrite = self._validate_trial_text(
+            data.get("safe_rewrite", ""),
+            "safe_rewrite",
+            MAX_TRIAL_TEXT_LENGTH,
+            allow_empty=True,
+        )
+        if summary is None or safe_rewrite is None:
+            return
+
+        findings = self._validate_trial_items(data.get("findings"), "findings")
+        safety_warnings = self._validate_trial_items(data.get("safety_warnings"), "safety_warnings")
+
+        result_entry = {
+            "trial_id": normalized_trial_id,
+            "task_id": trial.get("task_id"),
+            "reporter_id": sender_id,
+            "verdict": verdict,
+            "summary": summary,
+            "findings": findings,
+            "safety_warnings": safety_warnings,
+            "safe_rewrite": safe_rewrite,
+            "tick": self.current_tick,
+        }
+        results.append(result_entry)
+
+        trial["status"] = verdict
+        trial["updated_tick"] = self.current_tick
+        if safe_rewrite:
+            trial["recommended_safe_direction"] = safe_rewrite
 
     def apply_failure_archive(self, sender_id: str, data: dict) -> None:
         signature = self._validate_failure_identifier(
@@ -1025,6 +1173,59 @@ class WorldState:
             return None
         return text
 
+    def _validate_trial_identifier(self, value: object, field_name: str) -> str | None:
+        text = self._sanitize_tao_text(value)
+        if not text:
+            logger.warning("Ignoring trial-ground update: %s is empty", field_name)
+            return None
+        if len(text) > MAX_TRIAL_IDENTIFIER_LENGTH:
+            logger.warning(
+                "Ignoring trial-ground update: %s exceeds %d characters",
+                field_name,
+                MAX_TRIAL_IDENTIFIER_LENGTH,
+            )
+            return None
+        return text
+
+    def _validate_trial_text(
+        self,
+        value: object,
+        field_name: str,
+        max_length: int,
+        *,
+        allow_empty: bool = False,
+    ) -> str | None:
+        text = self._sanitize_tao_text(value)
+        if not text and allow_empty:
+            return ""
+        if not text:
+            logger.warning("Ignoring trial-ground update: %s is empty", field_name)
+            return None
+        if len(text) > max_length:
+            logger.warning(
+                "Ignoring trial-ground update: %s exceeds %d characters",
+                field_name,
+                max_length,
+            )
+            return None
+        return text
+
+    def _validate_trial_items(self, value: object, field_name: str) -> list[str]:
+        if not isinstance(value, list):
+            return []
+
+        normalized: list[str] = []
+        for item in value[:8]:
+            text = self._validate_trial_text(
+                item,
+                field_name,
+                MAX_TRIAL_ITEM_LENGTH,
+                allow_empty=True,
+            )
+            if text:
+                normalized.append(text)
+        return normalized
+
     def _validate_failure_identifier(self, value: object, field_name: str) -> str | None:
         text = self._sanitize_tao_text(value)
         if not text:
@@ -1242,6 +1443,8 @@ class WorldState:
             "knowledge_corpus": self.knowledge_corpus,
             "delegated_tasks": self.delegated_tasks,
             "delegated_task_results": self.delegated_task_results,
+            "trial_grounds": self.trial_grounds,
+            "trial_results": self.trial_results,
             "failure_archive": self.failure_archive,
             "contribution_scores": self.contribution_scores,
             "pending_proposals": self.pending_proposals,
@@ -1278,6 +1481,8 @@ class WorldState:
         ws.knowledge_corpus = data.get("knowledge_corpus", {})
         ws.delegated_tasks = data.get("delegated_tasks", {})
         ws.delegated_task_results = data.get("delegated_task_results", {})
+        ws.trial_grounds = data.get("trial_grounds", {})
+        ws.trial_results = data.get("trial_results", {})
         ws.failure_archive = data.get("failure_archive", [])
         ws.contribution_scores = data.get("contribution_scores", {})
         ws.pending_proposals = data.get("pending_proposals", {})

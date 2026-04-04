@@ -81,6 +81,27 @@ class EvolutionStateTests(unittest.TestCase):
         self.assertEqual(policy["min_branches"], 3)
         self.assertTrue(policy["require_reflection"])
 
+    def test_trial_ground_rule_updates_risk_policy(self):
+        world_state = WorldState()
+        world_state.apply_world_rule({
+            "rule_family": "trial_ground",
+            "rule_id": "EVO-TRIAL-691",
+            "name": "Trial Ground v691",
+            "description": "High-risk ideas must first survive an isolated trial ground.",
+            "category": "evolved",
+            "version": 691,
+            "parameters": {
+                "require_trial_for_high_risk": True,
+                "trial_risk_threshold": 0.42,
+                "intent_review_min_collaborators": 4,
+            },
+        })
+
+        policy = RulesEngine(world_state).get_task_policy()
+        self.assertTrue(policy["require_trial_for_high_risk"])
+        self.assertAlmostEqual(policy["trial_risk_threshold"], 0.42)
+        self.assertEqual(policy["intent_review_min_collaborators"], 4)
+
     def test_failure_archive_repeats_are_counted_as_degeneration(self):
         world_state = WorldState()
         world_state.apply_failure_archive(
