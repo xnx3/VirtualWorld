@@ -33,6 +33,10 @@ class WorldRule:
     active: bool = True
     creator_id: str | None = None  # 创造者 ID（天道规则）
     merit_awarded: float = 0.0     # 创造者获得的功德值（天道规则）
+    family: str | None = None
+    version: int = 1
+    parameters: dict[str, Any] = field(default_factory=dict)
+    evidence: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -41,6 +45,10 @@ class WorldRule:
             "active": self.active,
             "creator_id": self.creator_id,
             "merit_awarded": self.merit_awarded,
+            "rule_family": self.family,
+            "version": self.version,
+            "parameters": self.parameters,
+            "evidence": self.evidence,
         }
 
     @classmethod
@@ -53,6 +61,10 @@ class WorldRule:
             active=data.get("active", True),
             creator_id=data.get("creator_id"),
             merit_awarded=data.get("merit_awarded", 0.0),
+            family=data.get("rule_family"),
+            version=int(data.get("version", 1) or 1),
+            parameters=dict(data.get("parameters", {}) or {}),
+            evidence=dict(data.get("evidence", {}) or {}),
         )
 
 
@@ -101,6 +113,7 @@ class RulesEngine:
         self._load_fundamental_rules()
         # 从 world_state 恢复天道规则
         if world_state is not None:
+            self._restore_evolved_rules(world_state)
             self._restore_tao_rules(world_state)
 
     def _load_fundamental_rules(self) -> None:
@@ -114,6 +127,17 @@ class RulesEngine:
                 rule = WorldRule.from_dict(rule_data)
                 self.rules[rule_id] = rule
                 logger.debug("Restored TAO rule: %s", rule.name)
+
+    def _restore_evolved_rules(self, world_state: WorldState) -> None:
+        """从 WorldState 恢复文明演化规则。"""
+        for rule_data in world_state.world_rules:
+            if not isinstance(rule_data, dict):
+                continue
+            try:
+                rule = WorldRule.from_dict(rule_data)
+            except (KeyError, TypeError, ValueError):
+                continue
+            self.rules[rule.rule_id] = rule
 
     def get_active_rules(self) -> list[WorldRule]:
         return [r for r in self.rules.values() if r.active]
@@ -137,6 +161,67 @@ class RulesEngine:
         self.rules[rule.rule_id] = rule
         logger.info("New evolved rule: %s", rule.name)
         return True
+
+    def get_task_policy(self) -> dict[str, Any]:
+        """Aggregate task-execution policy from evolved and Tao rules."""
+        policy: dict[str, Any] = {
+            "min_collaborators": 1,
+            "min_branches": 1,
+            "require_reflection": False,
+            "required_task_stages": [],
+        }
+
+        for rule in self.get_active_rules():
+            params = rule.parameters if isinstance(rule.parameters, dict) else {}
+            if not params:
+                continue
+
+            try:
+                policy["min_collaborators"] = max(
+                    int(policy["min_collaborators"]),
+                    int(params.get("min_collaborators", policy["min_collaborators"]) or 0),
+                )
+            except (TypeError, ValueError):
+                pass
+
+            try:
+                policy["min_branches"] = max(
+                    int(policy["min_branches"]),
+                    int(params.get("min_branches", policy["min_branches"]) or 0),
+                )
+            except (TypeError, ValueError):
+                pass
+
+            stages = params.get("required_task_stages") or []
+            if isinstance(stages, list) and len(stages) > len(policy["required_task_stages"]):
+                policy["required_task_stages"] = [str(stage) for stage in stages if str(stage).strip()]
+
+            if params.get("require_reflection"):
+                policy["require_reflection"] = True
+
+        if "reflection" in policy["required_task_stages"]:
+            policy["require_reflection"] = True
+
+        return policy
+
+    def get_behavior_policy(self) -> dict[str, Any]:
+        """Aggregate behavior policy from evolved and Tao rules."""
+        policy: dict[str, Any] = {
+            "archive_discoveries": False,
+            "teach_after_discovery": False,
+        }
+
+        for rule in self.get_active_rules():
+            params = rule.parameters if isinstance(rule.parameters, dict) else {}
+            if not params:
+                continue
+
+            if params.get("archive_discoveries"):
+                policy["archive_discoveries"] = True
+            if params.get("teach_after_discovery"):
+                policy["teach_after_discovery"] = True
+
+        return policy
 
     # === 天道规则 ===
 

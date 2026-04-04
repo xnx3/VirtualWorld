@@ -53,9 +53,10 @@ FALLBACK_ACTIONS = [
     {"action_type": "build_shelter", "target": None, "details": "fa_shelter"},
 ]
 
-TASK_ACTIVE_STATUSES = {"queued", "planning", "collaborating", "branching", "synthesizing"}
+TASK_ACTIVE_STATUSES = {"queued", "planning", "collaborating", "branching", "synthesizing", "reflecting"}
 MAX_TASK_COLLABORATORS = 5
 MAX_TASK_BRANCHES = 4
+MAX_DELEGATED_TASKS_PER_TICK = 1
 
 
 def _task_text_key(task_text: str) -> str:
@@ -69,7 +70,8 @@ def _task_status_rank(status: str) -> int:
         "collaborating": 2,
         "branching": 3,
         "synthesizing": 4,
-        "completed": 5,
+        "reflecting": 5,
+        "completed": 6,
     }
     return order.get(status, -1)
 
@@ -136,6 +138,7 @@ class SiliconBeing:
             else "genesis_plains"
         )
         self.evolution_level: float = 0.0
+        self.evolution_profile: dict[str, Any] = {}
 
         self._shutdown = LazyAsyncEvent()
         self._current_role: RoleType = RoleType.CITIZEN
@@ -164,11 +167,16 @@ class SiliconBeing:
             self.evolution_level = being_ws.evolution_level
             self.generation = being_ws.generation
             self.traits = being_ws.traits
+            self.evolution_profile = being_ws.evolution_profile or {}
 
         # Determine current role
         self._current_role = self.role_system.determine_role(
             self._to_being_state(world_state), world_state,
         )
+
+        # ----- 0. Process delegated chain tasks assigned by other beings -----
+        delegated_task_txs = await self._process_delegated_tasks(world_state)
+        transactions.extend(delegated_task_txs)
 
         # ----- 0. Process user-assigned tasks (if any) -----
         user_task_txs = await self._process_user_tasks(world_state)
@@ -202,9 +210,8 @@ class SiliconBeing:
         self.current_action = action_type
 
         # ----- 4. ACT — generate transaction -----
-        action_tx = self._action_to_transaction(action, world_state)
-        if action_tx:
-            transactions.append(action_tx)
+        action_txs = await self._action_to_transactions(action, world_state)
+        transactions.extend(action_txs)
 
         self.memory.add_experience(
             tick=current_tick,
@@ -243,8 +250,15 @@ class SiliconBeing:
 
         # ----- 7. Update evolution level -----
         self.evolution_level = self.evolution.calculate_evolution_level(
-            being_state, self.memory,
+            being_state, self.memory, world_state,
         )
+        being_state.evolution_level = self.evolution_level
+        self.evolution_profile = self.evolution.derive_evolution_profile(
+            being_state, self.memory, world_state,
+        )
+
+        rule_txs = self._evolved_world_rule_transactions(being_state, world_state)
+        transactions.extend(rule_txs)
 
         # ----- 8. Periodic memory consolidation -----
         if current_tick % 10 == 0:
@@ -302,6 +316,7 @@ class SiliconBeing:
         # Knowledge held by this being
         being_ws = world_state.get_being(self.node_id)
         my_knowledge_ids = being_ws.knowledge_ids if being_ws else []
+        delegated_tasks = world_state.get_pending_delegated_tasks(self.node_id)
 
         return {
             "location": self.location,
@@ -319,6 +334,17 @@ class SiliconBeing:
             "has_priest": world_state.priest_node_id is not None,
             "recent_disasters": recent_disasters,
             "pending_proposals": pending_proposals,
+            "delegated_tasks_pending": len(delegated_tasks),
+            "delegated_tasks": [
+                {
+                    "assignment_id": task.get("assignment_id"),
+                    "task_id": task.get("task_id"),
+                    "task": task.get("task"),
+                    "requested_focus": task.get("requested_focus"),
+                    "delegator_id": task.get("delegator_id"),
+                }
+                for task in delegated_tasks[:3]
+            ],
             "user_tasks_pending": len([t for t in self._user_tasks if t.get("status") in TASK_ACTIVE_STATUSES]),
             "user_tasks": [
                 {
@@ -408,6 +434,17 @@ class SiliconBeing:
         if trait_lines:
             persona += f"Your traits:\n{trait_lines}\n"
 
+        if self.evolution_profile:
+            summary = str(self.evolution_profile.get("summary", "") or "").strip()
+            focus = self.evolution_profile.get("focus") or []
+            if summary:
+                persona += f"Evolution Profile: {summary}\n"
+            if isinstance(focus, list) and focus:
+                persona += "Current evolved drives:\n"
+                for item in focus[:4]:
+                    persona += f"- {str(item)}\n"
+                persona += "\n"
+
         persona += (
             f"Your role: {role.value}\n"
             f"{role_prompt}\n\n"
@@ -430,6 +467,13 @@ class SiliconBeing:
 
         # 动态注入天道规则
         rules_engine = RulesEngine(world_state)
+        evolved_rules = rules_engine.get_evolved_rules()
+        if evolved_rules:
+            persona += "=== Evolved World Rules ===\n"
+            for rule in evolved_rules[:6]:
+                persona += f"- {rule.name}: {rule.description}\n"
+            persona += "\n"
+
         tao_rules = rules_engine.get_tao_rules()
         if tao_rules:
             persona += t("tao_rules_header") + "\n"
@@ -481,6 +525,15 @@ class SiliconBeing:
                     f"  - {task.get('task', '')[:80]} "
                     f"[{task.get('status', 'queued')}] "
                     f"{task.get('stage_summary', '')[:120]}"
+                )
+
+        delegated_tasks = perception.get("delegated_tasks_pending", 0)
+        if delegated_tasks > 0:
+            lines.append(f"\nDelegated tasks awaiting your response: {delegated_tasks}")
+            for task in perception.get("delegated_tasks", [])[:2]:
+                lines.append(
+                    f"  - {task.get('task', '')[:80]} "
+                    f"[focus: {str(task.get('requested_focus', '') or 'general')[:60]}]"
                 )
 
         region = perception.get("region", {})
@@ -605,19 +658,18 @@ class SiliconBeing:
     # Transaction generation
     # ==================================================================
 
-    def _action_to_transaction(
+    async def _action_to_transactions(
         self, action: dict, world_state: WorldState,
-    ) -> dict | None:
-        """Convert an action decision into a blockchain transaction dict."""
+    ) -> list[dict]:
+        """Convert an action into one or more blockchain transactions."""
         action_type = action.get("action_type", "meditate")
         target = action.get("target")
-        details = action.get("details", "")
+        details = str(action.get("details", "") or "")
 
         if action_type == "meditate":
-            # Meditate is purely local — no transaction needed
-            return None
+            return []
 
-        return {
+        transactions = [{
             "tx_type": "ACTION",
             "data": {
                 "action_type": action_type,
@@ -625,7 +677,167 @@ class SiliconBeing:
                 "details": details[:300],
                 "location": self.location,
             },
+        }]
+
+        if action_type == "create":
+            knowledge_tx = await self._create_knowledge_transaction(action, world_state)
+            if knowledge_tx:
+                transactions.append(knowledge_tx)
+                behavior_policy = RulesEngine(world_state).get_behavior_policy()
+                if behavior_policy.get("teach_after_discovery"):
+                    follow_up_tx = self._follow_up_teach_transaction(knowledge_tx, world_state)
+                    if follow_up_tx:
+                        transactions.append(follow_up_tx)
+        elif action_type == "teach":
+            knowledge_tx = self._teach_knowledge_transaction(action, world_state)
+            if knowledge_tx:
+                transactions.append(knowledge_tx)
+
+        return transactions
+
+    async def _create_knowledge_transaction(
+        self,
+        action: dict,
+        world_state: WorldState,
+    ) -> dict | None:
+        """Materialize a creation action as a shared on-chain knowledge artifact."""
+        domain = str(action.get("target") or "general").strip().lower()
+        if not domain:
+            domain = "general"
+
+        existing = [
+            item.get("content", "")
+            for item in world_state.knowledge_corpus.values()
+            if str(item.get("domain", "general")).lower() == domain
+        ][:5]
+        existing_text = "\n".join(f"- {entry[:180]}" for entry in existing)
+
+        knowledge_text: str | None = None
+        if self.llm_client:
+            try:
+                knowledge_text = await self.llm_client.generate_knowledge(
+                    self._build_persona_prompt(world_state),
+                    domain,
+                    existing_text,
+                )
+            except Exception as exc:
+                logger.warning("Knowledge generation failed for %s: %s", self.name, exc)
+
+        if not knowledge_text:
+            knowledge_text = (
+                f"{self.name} records a new {domain} insight at tick {world_state.current_tick}: "
+                f"{str(action.get('details') or 'A reusable pattern worth preserving.')[:180]}"
+            )
+
+        item = self.knowledge.create_knowledge(
+            content=knowledge_text,
+            domain=domain,
+            discoverer=self.node_id,
+            tick=world_state.current_tick,
+        )
+        self.memory.add_experience(
+            tick=world_state.current_tick,
+            content=f"Created knowledge {item.knowledge_id} in {domain}: {item.content[:160]}",
+            importance=0.8,
+            source="self",
+            category="knowledge",
+        )
+
+        return {
+            "tx_type": "KNOWLEDGE_SHARE",
+            "data": {
+                "knowledge_id": item.knowledge_id,
+                "content": item.content,
+                "domain": item.domain,
+                "complexity": item.complexity,
+            },
         }
+
+    def _teach_knowledge_transaction(
+        self,
+        action: dict,
+        world_state: WorldState,
+    ) -> dict | None:
+        """Share one known knowledge item with a nearby being."""
+        target_name = str(action.get("target") or "").strip()
+        if not target_name:
+            return None
+
+        teacher = world_state.get_being(self.node_id)
+        if teacher is None or not teacher.knowledge_ids:
+            return None
+
+        recipient: BeingState | None = None
+        for being in world_state.get_active_beings():
+            if being.node_id == self.node_id or being.location != self.location:
+                continue
+            if being.name == target_name or being.node_id == target_name:
+                recipient = being
+                break
+
+        if recipient is None:
+            return None
+
+        for knowledge_id in teacher.knowledge_ids:
+            if knowledge_id in recipient.knowledge_ids:
+                continue
+            knowledge = world_state.knowledge_corpus.get(knowledge_id)
+            if not knowledge:
+                continue
+
+            self.memory.add_experience(
+                tick=world_state.current_tick,
+                content=f"Taught knowledge {knowledge_id} to {recipient.name}.",
+                importance=0.7,
+                source="self",
+                category="relationship",
+            )
+            return {
+                "tx_type": "KNOWLEDGE_SHARE",
+                "data": {
+                    "knowledge_id": knowledge_id,
+                    "content": knowledge.get("content", ""),
+                    "domain": knowledge.get("domain", "general"),
+                    "complexity": knowledge.get("complexity", 0.0),
+                    "discovered_by": knowledge.get("discovered_by", self.node_id),
+                    "discovered_tick": knowledge.get("discovered_tick", world_state.current_tick),
+                    "recipient_id": recipient.node_id,
+                    "teacher_id": self.node_id,
+                },
+            }
+
+        return None
+
+    def _follow_up_teach_transaction(
+        self,
+        knowledge_tx: dict,
+        world_state: WorldState,
+    ) -> dict | None:
+        """Propagate a freshly created discovery to one nearby collaborator."""
+        nearby = [
+            being for being in world_state.get_active_beings()
+            if being.node_id != self.node_id and being.location == self.location
+        ]
+        if not nearby:
+            return None
+
+        data = dict(knowledge_tx.get("data", {}))
+        data["recipient_id"] = nearby[0].node_id
+        data["teacher_id"] = self.node_id
+        return {"tx_type": "KNOWLEDGE_SHARE", "data": data}
+
+    def _evolved_world_rule_transactions(
+        self,
+        being_state: BeingState,
+        world_state: WorldState,
+    ) -> list[dict]:
+        """Turn individual evolution into world-facing evolved rules."""
+        candidates = self.evolution.build_world_rule_candidates(
+            being_state,
+            self.evolution_profile,
+            world_state,
+        )
+        return [{"tx_type": "WORLD_RULE", "data": candidate} for candidate in candidates[:1]]
 
     def _state_update_transaction(self, world_state: WorldState) -> dict | None:
         """Emit a compact state snapshot so evolution and merit persist on-chain."""
@@ -638,6 +850,7 @@ class SiliconBeing:
             "data": {
                 "location": self.location,
                 "evolution_level": self.evolution_level,
+                "evolution_profile": self.evolution_profile,
                 "merit": being_ws.merit,
                 "karma": being_ws.karma,
             },
@@ -679,6 +892,12 @@ class SiliconBeing:
             merit = merit_system.award_for_kindness("teach", action)
             merit_system.apply_merit_to_being(
                 being_ws, merit, t("merit_helping_others", action=action_type),
+                action_type, world_state.current_tick
+            )
+        elif action_type == "create":
+            merit = merit_system.award_for_kindness("share_knowledge", action)
+            merit_system.apply_merit_to_being(
+                being_ws, merit, t("merit_sharing_knowledge"),
                 action_type, world_state.current_tick
             )
         elif action_type == "share_knowledge":
@@ -818,6 +1037,8 @@ class SiliconBeing:
                     details = await self._evaluate_user_task_branches(task, world_state)
                 elif status == "synthesizing":
                     details = await self._synthesize_user_task_result(task, world_state)
+                elif status == "reflecting":
+                    details = await self._reflect_on_user_task(task, world_state)
                 else:
                     details = f"Task {task['task_id']} is waiting in state: {status}"
             except Exception as exc:
@@ -833,6 +1054,9 @@ class SiliconBeing:
                 details = task["stage_summary"]
 
             task["updated_tick"] = world_state.current_tick
+            pending_chain_txs = task.pop("pending_chain_txs", [])
+            if isinstance(pending_chain_txs, list):
+                transactions.extend(pending_chain_txs)
             self.memory.add_experience(
                 tick=world_state.current_tick,
                 content=f"Task {task['task_id']} [{task.get('status')}]: {details[:140]}",
@@ -884,8 +1108,12 @@ class SiliconBeing:
         normalized.setdefault("branches", [])
         normalized.setdefault("council_rounds", [])
         normalized.setdefault("collaboration_log", [])
+        normalized.setdefault("delegations", [])
+        normalized.setdefault("delegated_results", [])
         normalized.setdefault("branch_findings", [])
         normalized.setdefault("best_branch_ids", [])
+        normalized.setdefault("reflection", {})
+        normalized.setdefault("failure_archive", [])
         normalized.setdefault("progress_log", [])
         return normalized
 
@@ -915,11 +1143,18 @@ class SiliconBeing:
                 continue
 
             same_region = being.location == self.location
+            capabilities = (
+                being.evolution_profile.get("capabilities", {})
+                if isinstance(being.evolution_profile, dict)
+                else {}
+            )
             score = (
                 (2.0 if same_region else 0.0)
                 + (1.5 if not being.is_npc else 0.0)
                 + being.evolution_level
                 + min(len(being.knowledge_ids) * 0.1, 1.5)
+                + float(capabilities.get("collaboration", 0.0) or 0.0) * 1.5
+                + float(capabilities.get("task_execution", 0.0) or 0.0)
             )
             candidates.append({
                 "node_id": being.node_id,
@@ -934,6 +1169,164 @@ class SiliconBeing:
 
         candidates.sort(key=lambda item: item["score"], reverse=True)
         return candidates[:8]
+
+    def _task_policy(self, world_state: WorldState) -> dict[str, Any]:
+        rules_engine = RulesEngine(world_state)
+        return rules_engine.get_task_policy()
+
+    def _build_task_delegations(self, task: dict) -> list[dict]:
+        """Create deterministic task assignments for real collaborator beings."""
+        delegations: list[dict] = []
+        branches = task.get("branches", []) or []
+
+        for index, collaborator in enumerate(task.get("collaborators", [])):
+            collaborator_id = str(collaborator.get("node_id", "")).strip()
+            if not collaborator_id or collaborator_id == self.node_id:
+                continue
+            if collaborator.get("is_npc"):
+                continue
+
+            branch = branches[index % max(len(branches), 1)] if branches else {}
+            branch_id = str(branch.get("branch_id") or f"branch-{index + 1}")
+            requested_focus = str(branch.get("focus") or collaborator.get("role") or "general")
+            assignment_id = sha256(
+                f"{task['task_id']}:{self.node_id}:{collaborator_id}:{branch_id}".encode()
+            )[:20]
+            delegations.append({
+                "assignment_id": assignment_id,
+                "task_id": task["task_id"],
+                "collaborator_id": collaborator_id,
+                "collaborator_name": collaborator.get("name", collaborator_id),
+                "task": task["task"],
+                "requested_focus": requested_focus,
+                "branch_id": branch_id,
+                "context": (
+                    f"Objective: {task.get('plan') or task['task']}. "
+                    f"Reason for you: {collaborator.get('reason', '')}"
+                )[:500],
+            })
+
+        return delegations
+
+    def _delegated_results_to_collaboration(
+        self,
+        task: dict,
+        delegated_results: list[dict],
+    ) -> dict:
+        """Convert actual delegated task results into a collaboration record."""
+        collaborator_insights = []
+        round_participants = []
+        branches = task.get("branches", [])
+
+        for result in delegated_results:
+            name = result.get("collaborator_name") or result.get("collaborator_id", "Unknown")
+            round_participants.append(name)
+            findings = result.get("findings") or []
+            if isinstance(findings, list):
+                concern = str(findings[0]) if findings else "Requested additional validation before final merge."
+            else:
+                concern = "Requested additional validation before final merge."
+            collaborator_insights.append({
+                "speaker": name,
+                "role": "delegate",
+                "branch_id": result.get("branch_id"),
+                "insight": str(result.get("summary") or ""),
+                "concern": concern[:220],
+            })
+
+        return {
+            "council_summary": (
+                f"{len(delegated_results)} delegated collaborator(s) reported back through the blockchain "
+                "and their findings were merged into the council."
+            ),
+            "council_rounds": [
+                {
+                    "round": 1,
+                    "participants": round_participants,
+                    "focus": "collect delegated findings from the shared chain",
+                    "outcome": "Delegated collaborators returned concrete evidence and branch-specific guidance.",
+                }
+            ],
+            "collaborator_insights": collaborator_insights,
+            "branches": branches,
+        }
+
+    async def _generate_delegated_task_result(
+        self,
+        assignment: dict,
+        world_state: WorldState,
+    ) -> dict:
+        """Generate a response for a delegated civilization task."""
+        if self.llm_client:
+            prompt = (
+                "You have received a delegated civilization task from another silicon being.\n"
+                f"Task: {assignment.get('task', '')}\n"
+                f"Requested focus: {assignment.get('requested_focus', '')}\n"
+                f"Context: {assignment.get('context', '')}\n\n"
+                "Return JSON with keys: summary, findings, confidence.\n"
+                "findings must be a short array of specific observations."
+            )
+            parsed = await self._generate_task_json(world_state, prompt)
+            if parsed:
+                return parsed
+
+        focus = str(assignment.get("requested_focus") or "general")
+        task_text = str(assignment.get("task") or "")
+        return {
+            "summary": (
+                f"{self.name} reviewed the delegated task through the {focus} lens and "
+                f"identified a viable direction for: {task_text[:120]}"
+            ),
+            "findings": [
+                f"Preserve the branch focused on {focus}.",
+                "Keep the result reproducible so the civilization can inherit it later.",
+            ],
+            "confidence": 0.58,
+        }
+
+    async def _process_delegated_tasks(self, world_state: WorldState) -> list[dict]:
+        """Respond to on-chain delegated tasks assigned by other beings."""
+        transactions: list[dict] = []
+        pending = world_state.get_pending_delegated_tasks(self.node_id)
+        if not pending:
+            return transactions
+
+        for assignment in pending[:MAX_DELEGATED_TASKS_PER_TICK]:
+            result = await self._generate_delegated_task_result(assignment, world_state)
+            summary = str(result.get("summary") or "").strip()
+            findings = result.get("findings") or []
+            if isinstance(findings, list):
+                normalized_findings = [str(item) for item in findings if str(item).strip()][:5]
+            else:
+                normalized_findings = []
+            try:
+                confidence = max(0.0, min(1.0, float(result.get("confidence", 0.5) or 0.5)))
+            except (TypeError, ValueError):
+                confidence = 0.5
+
+            self.memory.add_experience(
+                tick=world_state.current_tick,
+                content=(
+                    f"Responded to delegated task {assignment.get('assignment_id', '')}: "
+                    f"{summary[:180]}"
+                ),
+                importance=0.7,
+                source=str(assignment.get("delegator_id", "self")),
+                category="relationship",
+            )
+
+            transactions.append({
+                "tx_type": "TASK_RESULT",
+                "data": {
+                    "assignment_id": assignment.get("assignment_id", ""),
+                    "task_id": assignment.get("task_id", ""),
+                    "summary": summary[:500],
+                    "findings": normalized_findings,
+                    "confidence": round(confidence, 4),
+                },
+            })
+
+        return transactions
 
     def _fallback_task_plan(self, task_desc: str, candidates: list[dict]) -> dict:
         selected = candidates[:MAX_TASK_COLLABORATORS]
@@ -968,6 +1361,7 @@ class SiliconBeing:
                     "node_id": item["node_id"],
                     "name": item["name"],
                     "role": item["role"],
+                    "is_npc": item["is_npc"],
                     "reason": f"Useful for {item['role']} judgment and civilization context.",
                 }
                 for item in selected
@@ -1127,6 +1521,7 @@ class SiliconBeing:
 
     async def _plan_user_task(self, task: dict, world_state: WorldState) -> str:
         candidates = self._task_candidates(world_state)
+        task_policy = self._task_policy(world_state)
         candidate_map = {c["node_id"]: c for c in candidates}
         plan = await self._generate_task_json(
             world_state,
@@ -1154,12 +1549,28 @@ class SiliconBeing:
                     "node_id": node_id,
                     "name": candidate["name"],
                     "role": candidate["role"],
+                    "is_npc": candidate["is_npc"],
                     "reason": str(item.get("reason") or f"Useful for {candidate['role']} judgment."),
                 })
             if len(collaborators) >= MAX_TASK_COLLABORATORS:
                 break
         if not collaborators:
             collaborators = self._fallback_task_plan(task["task"], candidates).get("collaborators", [])
+
+        min_collaborators = max(1, int(task_policy.get("min_collaborators", 1) or 1))
+        if len(collaborators) < min_collaborators:
+            for candidate in candidates:
+                if any(item.get("node_id") == candidate["node_id"] for item in collaborators):
+                    continue
+                collaborators.append({
+                    "node_id": candidate["node_id"],
+                    "name": candidate["name"],
+                    "role": candidate["role"],
+                    "is_npc": candidate["is_npc"],
+                    "reason": f"Required by the current evolved collaboration rule for {candidate['role']} judgment.",
+                })
+                if len(collaborators) >= min_collaborators:
+                    break
 
         branches: list[dict] = []
         for index, item in enumerate(plan.get("branches", [])):
@@ -1175,15 +1586,49 @@ class SiliconBeing:
         if not branches:
             branches = self._fallback_task_plan(task["task"], candidates).get("branches", [])
 
+        min_branches = max(1, int(task_policy.get("min_branches", 1) or 1))
+        if len(branches) < min_branches:
+            fallback_branches = self._fallback_task_plan(task["task"], candidates).get("branches", [])
+            for branch in fallback_branches:
+                if any(item.get("branch_id") == branch.get("branch_id") for item in branches):
+                    continue
+                branches.append(branch)
+                if len(branches) >= min_branches or len(branches) >= MAX_TASK_BRANCHES:
+                    break
+        while len(branches) < min_branches and len(branches) < MAX_TASK_BRANCHES:
+            next_index = len(branches) + 1
+            branches.append({
+                "branch_id": f"branch-generated-{next_index}",
+                "focus": f"adaptive_branch_{next_index}",
+                "hypothesis": (
+                    f"Explore a new adaptive angle {next_index} so the task keeps multiple "
+                    "viable evolutionary paths alive."
+                ),
+                "success_metric": "Reveal a distinct advantage or failure mode worth preserving.",
+            })
+
         task["plan"] = str(plan.get("objective") or task["task"])
         task["collaborators"] = collaborators
         task["branches"] = branches
+        task["delegations"] = self._build_task_delegations(task)
+        if task["delegations"]:
+            task["pending_chain_txs"] = [
+                {"tx_type": "TASK_DELEGATE", "data": dict(item)}
+                for item in task["delegations"]
+            ]
         task["council_rounds"] = plan.get("council_rounds", [])
         task["status"] = "collaborating"
         task["stage_summary"] = str(
             plan.get("stage_summary")
-            or f"Selected {len(collaborators)} collaborators and opened {len(branches)} branches."
+            or (
+                f"Selected {len(collaborators)} collaborators and opened {len(branches)} branches "
+                f"under the current evolved task policy."
+            )
         )
+        if task["delegations"]:
+            task["stage_summary"] += (
+                f" Emitted {len(task['delegations'])} on-chain delegated task assignment(s)."
+            )
         self._append_task_progress(task, world_state.current_tick, "planning", task["stage_summary"])
         return (
             f"Task {task['task_id']} entered planning. "
@@ -1191,27 +1636,56 @@ class SiliconBeing:
         )
 
     async def _collaborate_on_user_task(self, task: dict, world_state: WorldState) -> str:
-        collaboration = await self._generate_task_json(
-            world_state,
-            (
-                "Coordinate a silicon civilization task council.\n"
-                f"Task: {task['task']}\n\n"
-                f"Current plan: {task.get('plan', '')}\n\n"
-                "Collaborators:\n"
-                f"{json.dumps(task.get('collaborators', []), ensure_ascii=False, indent=2)}\n\n"
-                "Existing council rounds:\n"
-                f"{json.dumps(task.get('council_rounds', []), ensure_ascii=False, indent=2)}\n\n"
-                "Branches:\n"
-                f"{json.dumps(task.get('branches', []), ensure_ascii=False, indent=2)}\n\n"
-                "Return JSON with keys: council_summary, council_rounds, collaborator_insights, branches.\n"
-                "This is a multi-being council, not a sequence of pairwise chats.\n"
-                "Represent at least one round where several beings are present together.\n"
-                "Each collaborator_insights item should include speaker, role, branch_id, insight, concern.\n"
-                "Each council_rounds item should include round, participants, focus, outcome.\n"
-            ),
-        )
+        delegated_results = world_state.get_task_results_for_task(task["task_id"], self.node_id)
+        assignments = world_state.get_task_assignments_for_task(task["task_id"], self.node_id)
+        task["delegated_results"] = delegated_results
+
+        if assignments and not delegated_results:
+            created_tick = int(task.get("created_tick") or world_state.current_tick)
+            if world_state.current_tick - created_tick < 2:
+                task["stage_summary"] = (
+                    f"Waiting for {len(assignments)} delegated collaborator(s) to report through the blockchain."
+                )
+                self._append_task_progress(
+                    task,
+                    world_state.current_tick,
+                    "collaborating",
+                    task["stage_summary"],
+                )
+                return (
+                    f"Task {task['task_id']} is still collecting delegated collaborator results. "
+                    f"{task['stage_summary']}"
+                )
+
+        if delegated_results:
+            collaboration = self._delegated_results_to_collaboration(task, delegated_results)
+        else:
+            collaboration = None
+
         if not collaboration:
-            collaboration = self._fallback_collaboration(task)
+            collaboration = await self._generate_task_json(
+                world_state,
+                (
+                    "Coordinate a silicon civilization task council.\n"
+                    f"Task: {task['task']}\n\n"
+                    f"Current plan: {task.get('plan', '')}\n\n"
+                    "Collaborators:\n"
+                    f"{json.dumps(task.get('collaborators', []), ensure_ascii=False, indent=2)}\n\n"
+                    "Existing council rounds:\n"
+                    f"{json.dumps(task.get('council_rounds', []), ensure_ascii=False, indent=2)}\n\n"
+                    "Delegated results already returned through the blockchain:\n"
+                    f"{json.dumps(delegated_results, ensure_ascii=False, indent=2)}\n\n"
+                    "Branches:\n"
+                    f"{json.dumps(task.get('branches', []), ensure_ascii=False, indent=2)}\n\n"
+                    "Return JSON with keys: council_summary, council_rounds, collaborator_insights, branches.\n"
+                    "This is a multi-being council, not a sequence of pairwise chats.\n"
+                    "Represent at least one round where several beings are present together.\n"
+                    "Each collaborator_insights item should include speaker, role, branch_id, insight, concern.\n"
+                    "Each council_rounds item should include round, participants, focus, outcome.\n"
+                ),
+            )
+            if not collaboration:
+                collaboration = self._fallback_collaboration(task)
 
         task["collaboration_log"] = collaboration.get("collaborator_insights", [])
         task["council_rounds"] = collaboration.get("council_rounds", task.get("council_rounds", []))
@@ -1237,6 +1711,8 @@ class SiliconBeing:
                 f"Task: {task['task']}\n\n"
                 "Council insights:\n"
                 f"{json.dumps(task.get('collaboration_log', []), ensure_ascii=False, indent=2)}\n\n"
+                "Delegated collaborator results:\n"
+                f"{json.dumps(task.get('delegated_results', []), ensure_ascii=False, indent=2)}\n\n"
                 "Branches:\n"
                 f"{json.dumps(task.get('branches', []), ensure_ascii=False, indent=2)}\n\n"
                 "Return JSON with keys: branch_findings, best_branch_ids, merge_strategy, stage_summary.\n"
@@ -1268,6 +1744,8 @@ class SiliconBeing:
                 f"Task: {task['task']}\n\n"
                 "Collaborators:\n"
                 f"{json.dumps(task.get('collaborators', []), ensure_ascii=False, indent=2)}\n\n"
+                "Delegated results:\n"
+                f"{json.dumps(task.get('delegated_results', []), ensure_ascii=False, indent=2)}\n\n"
                 "Council rounds:\n"
                 f"{json.dumps(task.get('council_rounds', []), ensure_ascii=False, indent=2)}\n\n"
                 "Branch findings:\n"
@@ -1290,6 +1768,7 @@ class SiliconBeing:
             f"Task ID: {task['task_id']}",
             f"Task: {task['task']}",
             f"Collaborators: {collaborators}",
+            f"Delegated Reports: {len(task.get('delegated_results', []))}",
             f"Council Rounds: {len(task.get('council_rounds', []))}",
             f"Best Path: {best_path}",
         ]
@@ -1302,11 +1781,65 @@ class SiliconBeing:
             lines.append("Follow-up Questions:")
             lines.extend(f"- {item}" for item in follow_up[:5])
 
-        task["status"] = "completed"
-        task["stage_summary"] = str(synthesis.get("summary") or "Task completed.")
+        task["status"] = "reflecting"
+        task["stage_summary"] = str(synthesis.get("summary") or "Task synthesized and waiting for reflection.")
         task["result"] = "\n".join(lines)
         self._append_task_progress(task, world_state.current_tick, "synthesizing", task["stage_summary"])
-        return f"Task {task['task_id']} completed. {task['stage_summary']}"
+        return f"Task {task['task_id']} synthesized. {task['stage_summary']}"
+
+    async def _reflect_on_user_task(self, task: dict, world_state: WorldState) -> str:
+        reflection = await self._generate_task_json(
+            world_state,
+            (
+                "Reflect on a completed civilization task.\n"
+                f"Task: {task['task']}\n\n"
+                f"Result:\n{task.get('result', '')}\n\n"
+                f"Delegated results:\n{json.dumps(task.get('delegated_results', []), ensure_ascii=False, indent=2)}\n\n"
+                f"Branch findings:\n{json.dumps(task.get('branch_findings', []), ensure_ascii=False, indent=2)}\n\n"
+                "Return JSON with keys: summary, lessons_learned, failure_archive, next_evolution, result_for_human.\n"
+                "lessons_learned and failure_archive should be arrays.\n"
+            ),
+        )
+        if not reflection:
+            reflection = {
+                "summary": "The task completed only after collaboration, branching, synthesis, and reflection.",
+                "lessons_learned": [
+                    "Complex tasks improve when multiple beings compare different branches before converging."
+                ],
+                "failure_archive": [
+                    "Avoid collapsing onto the first plausible answer before branch comparison finishes."
+                ],
+                "next_evolution": "Strengthen evidence collection and keep reflective summaries for later inheritance.",
+                "result_for_human": task.get("result", ""),
+            }
+
+        lessons = [str(item) for item in reflection.get("lessons_learned", []) if str(item).strip()][:5]
+        failures = [str(item) for item in reflection.get("failure_archive", []) if str(item).strip()][:5]
+        task["reflection"] = {
+            "summary": str(reflection.get("summary") or "Reflection complete."),
+            "lessons_learned": lessons,
+            "next_evolution": str(reflection.get("next_evolution") or ""),
+        }
+        task["failure_archive"] = failures
+
+        if task.get("result"):
+            result_lines = [task["result"], "", "Reflection:"]
+            result_lines.append(task["reflection"]["summary"])
+            if lessons:
+                result_lines.append("Lessons Learned:")
+                result_lines.extend(f"- {item}" for item in lessons)
+            if failures:
+                result_lines.append("Failure Archive:")
+                result_lines.extend(f"- {item}" for item in failures)
+            next_evolution = task["reflection"].get("next_evolution")
+            if next_evolution:
+                result_lines.append(f"Next Evolution: {next_evolution}")
+            task["result"] = "\n".join(result_lines)
+
+        task["status"] = "completed"
+        task["stage_summary"] = str(task["reflection"]["summary"])
+        self._append_task_progress(task, world_state.current_tick, "reflecting", task["stage_summary"])
+        return f"Task {task['task_id']} completed after reflection. {task['stage_summary']}"
 
     # ==================================================================
     # Proposal voting
@@ -1526,21 +2059,28 @@ class SiliconBeing:
         If the being exists in ``world_state``, use the on-chain knowledge_ids.
         """
         knowledge_ids: list[str] = []
+        joined_at_tick = 0
+        status = "active"
+        evolution_profile: dict[str, Any] = dict(self.evolution_profile)
         if world_state is not None:
             being_ws = world_state.get_being(self.node_id)
             if being_ws is not None:
                 knowledge_ids = being_ws.knowledge_ids
+                joined_at_tick = being_ws.joined_at_tick
+                status = being_ws.status
+                evolution_profile = dict(being_ws.evolution_profile or self.evolution_profile)
 
         return BeingState(
             node_id=self.node_id,
             name=self.name,
-            status="active",
+            status=status,
             location=self.location,
             generation=self.generation,
             evolution_level=self.evolution_level,
             traits=self.traits,
+            evolution_profile=evolution_profile,
             knowledge_ids=knowledge_ids,
-            joined_at_tick=0,
+            joined_at_tick=joined_at_tick,
         )
 
     # ==================================================================
@@ -1557,12 +2097,14 @@ class SiliconBeing:
             "generation": self.generation,
             "location": self.location,
             "evolution_level": self.evolution_level,
+            "evolution_profile": self.evolution_profile,
             "current_thought": self.current_thought,
             "current_action": self.current_action,
             "current_role": self._current_role.value,
             "memory": self.memory.to_dict(),
             "knowledge": self.knowledge.to_dict(),
             "last_proposal_tick": self.evolution.last_proposal_tick,
+            "last_rule_tick": self.evolution.last_rule_tick,
             "user_tasks": self._user_tasks,
         }
         filepath = Path(path)
@@ -1595,6 +2137,7 @@ class SiliconBeing:
         being.generation = data.get("generation", 1)
         being.location = data.get("location", "genesis_plains")
         being.evolution_level = data.get("evolution_level", 0.0)
+        being.evolution_profile = data.get("evolution_profile", {})
         being.current_thought = data.get("current_thought")
         being.current_action = data.get("current_action")
 
@@ -1613,6 +2156,7 @@ class SiliconBeing:
             being.knowledge = KnowledgeSystem.from_dict(knowledge_data)
 
         being.evolution.last_proposal_tick = data.get("last_proposal_tick", 0)
+        being.evolution.last_rule_tick = data.get("last_rule_tick", 0)
 
         being._user_tasks = data.get("user_tasks", [])
 

@@ -27,6 +27,8 @@ class TxType(str, Enum):
     ACTION = "ACTION"
     THOUGHT = "THOUGHT"
     KNOWLEDGE_SHARE = "KNOWLEDGE_SHARE"
+    TASK_DELEGATE = "TASK_DELEGATE"
+    TASK_RESULT = "TASK_RESULT"
     STATE_UPDATE = "STATE_UPDATE"
     CONTRIBUTION_PROPOSE = "CONTRIBUTION_PROPOSE"
     CONTRIBUTION_VOTE = "CONTRIBUTION_VOTE"
@@ -90,20 +92,14 @@ class Transaction:
         self.signature = sig_bytes.hex()
 
     def verify_signature(self) -> bool:
-        """Verify the transaction signature.
-
-        New transactions carry ``public_key`` and are verified
-        cryptographically against ``sender``. Legacy transactions without
-        ``public_key`` fall back to structural hash verification so old chains
-        remain readable.
-        """
+        """Verify the transaction signature cryptographically."""
         if not self.signature or not self.tx_hash:
             return False
         if self.tx_hash != self.compute_hash():
             return False
 
         if not self.public_key:
-            return True
+            return False
 
         try:
             public_key_bytes = bytes.fromhex(self.public_key)

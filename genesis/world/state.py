@@ -19,6 +19,14 @@ MAX_TAO_RULE_CATEGORY_LENGTH = 64
 MAX_CONTRIBUTION_IDENTIFIER_LENGTH = 128
 MAX_CONTRIBUTION_DESCRIPTION_LENGTH = 4096
 MAX_CONTRIBUTION_CATEGORY_LENGTH = 64
+MAX_RULE_FAMILY_LENGTH = 128
+MAX_RULE_PARAMETER_KEYS = 16
+MAX_EVOLUTION_SUMMARY_LENGTH = 1024
+MAX_EVOLUTION_FOCUS_LENGTH = 128
+MAX_TASK_IDENTIFIER_LENGTH = 128
+MAX_TASK_TEXT_LENGTH = 2048
+MAX_TASK_RESULT_SUMMARY_LENGTH = 2048
+MAX_TASK_RESULT_ITEM_LENGTH = 512
 
 
 def calculate_karma(merit: float) -> float:
@@ -55,6 +63,7 @@ class BeingState:
     generation: int = 1
     evolution_level: float = 0.0
     traits: dict = field(default_factory=dict)
+    evolution_profile: dict = field(default_factory=dict)
     knowledge_ids: list[str] = field(default_factory=list)
     joined_at_tick: int = 0
     is_npc: bool = False
@@ -85,7 +94,8 @@ class BeingState:
             "node_id": self.node_id, "name": self.name,
             "status": self.status, "location": self.location,
             "generation": self.generation, "evolution_level": self.evolution_level,
-            "traits": self.traits, "knowledge_ids": self.knowledge_ids,
+            "traits": self.traits, "evolution_profile": self.evolution_profile,
+            "knowledge_ids": self.knowledge_ids,
             "joined_at_tick": self.joined_at_tick, "is_npc": self.is_npc,
             "safety_status": self.safety_status,
             "p2p_address": self.p2p_address,
@@ -122,6 +132,8 @@ class WorldState:
     current_epoch: int = 0
     beings: dict[str, BeingState] = field(default_factory=dict)  # node_id -> BeingState
     knowledge_corpus: dict[str, dict] = field(default_factory=dict)  # knowledge_id -> data
+    delegated_tasks: dict[str, dict] = field(default_factory=dict)  # assignment_id -> assignment
+    delegated_task_results: dict[str, list[dict]] = field(default_factory=dict)  # assignment_id -> results
     contribution_scores: dict[str, float] = field(default_factory=dict)  # node_id -> score
     pending_proposals: dict[str, dict] = field(default_factory=dict)  # tx_hash -> proposal
     proposal_votes: dict[str, list[dict]] = field(default_factory=dict)  # tx_hash -> votes
@@ -166,12 +178,68 @@ class WorldState:
     def get_contribution_ranking(self) -> list[tuple[str, float]]:
         return sorted(self.contribution_scores.items(), key=lambda x: x[1], reverse=True)
 
+    def get_pending_delegated_tasks(self, node_id: str) -> list[dict]:
+        pending: list[dict] = []
+        for assignment_id, assignment in self.delegated_tasks.items():
+            if assignment.get("collaborator_id") != node_id:
+                continue
+            results = self.delegated_task_results.get(assignment_id, [])
+            if any(result.get("collaborator_id") == node_id for result in results):
+                continue
+            pending.append(dict(assignment))
+        pending.sort(key=lambda item: (int(item.get("created_tick", 0) or 0), str(item.get("assignment_id", ""))))
+        return pending
+
+    def get_task_assignments_for_task(
+        self,
+        task_id: str,
+        delegator_id: str | None = None,
+    ) -> list[dict]:
+        assignments = []
+        for assignment in self.delegated_tasks.values():
+            if assignment.get("task_id") != task_id:
+                continue
+            if delegator_id is not None and assignment.get("delegator_id") != delegator_id:
+                continue
+            assignments.append(dict(assignment))
+        assignments.sort(key=lambda item: (int(item.get("created_tick", 0) or 0), str(item.get("assignment_id", ""))))
+        return assignments
+
+    def get_task_results_for_task(
+        self,
+        task_id: str,
+        delegator_id: str | None = None,
+    ) -> list[dict]:
+        results: list[dict] = []
+        for assignment_id, assignment in self.delegated_tasks.items():
+            if assignment.get("task_id") != task_id:
+                continue
+            if delegator_id is not None and assignment.get("delegator_id") != delegator_id:
+                continue
+            for result in self.delegated_task_results.get(assignment_id, []):
+                item = dict(result)
+                item.setdefault("assignment_id", assignment_id)
+                item.setdefault("task_id", task_id)
+                item.setdefault("delegator_id", assignment.get("delegator_id"))
+                item.setdefault("collaborator_name", assignment.get("collaborator_name"))
+                item.setdefault("branch_id", assignment.get("branch_id"))
+                item.setdefault("requested_focus", assignment.get("requested_focus"))
+                results.append(item)
+        results.sort(key=lambda item: (int(item.get("tick", 0) or 0), str(item.get("assignment_id", ""))))
+        return results
+
     # --- 天道查询 ---
 
     def get_tao_merged_being(self, node_id: str) -> BeingState | None:
         """Get a being that has merged with Tao."""
         if node_id in self.tao_merged_beings:
             return self.beings.get(node_id)
+        return None
+
+    def get_world_rule(self, rule_family: str) -> dict | None:
+        for rule in self.world_rules:
+            if str(rule.get("rule_family") or "") == rule_family:
+                return rule
         return None
 
     def is_tao_merged(self, node_id: str) -> bool:
@@ -194,6 +262,17 @@ class WorldState:
     @staticmethod
     def _apply_p2p_endpoint(being: BeingState, data: dict) -> None:
         """Update on-chain P2P endpoint metadata when present in a tx payload."""
+        next_seq: int | None = None
+        if "p2p_seq" in data:
+            try:
+                next_seq = max(0, int(data.get("p2p_seq", 0) or 0))
+            except (TypeError, ValueError):
+                next_seq = 0
+
+        # Ignore older endpoint cards so delayed sync does not roll back reachability info.
+        if next_seq is not None and next_seq > 0 and next_seq < being.p2p_seq:
+            return
+
         if "p2p_address" in data:
             being.p2p_address = str(data.get("p2p_address", "") or "")
         if "p2p_port" in data:
@@ -242,6 +321,95 @@ class WorldState:
             caps = data.get("p2p_capabilities") or {}
             being.p2p_capabilities = dict(caps) if isinstance(caps, dict) else {}
 
+    @staticmethod
+    def _normalize_rule_parameters(value: object) -> dict:
+        if not isinstance(value, dict):
+            return {}
+
+        normalized: dict[str, object] = {}
+        for idx, (key, item) in enumerate(value.items()):
+            if idx >= MAX_RULE_PARAMETER_KEYS:
+                break
+
+            text_key = str(key).strip()
+            if not text_key:
+                continue
+
+            if isinstance(item, bool):
+                normalized[text_key] = item
+            elif isinstance(item, (int, float)):
+                normalized[text_key] = item
+            elif isinstance(item, str):
+                normalized[text_key] = item[:256]
+            elif isinstance(item, list):
+                sanitized_items = [
+                    str(entry).strip()[:MAX_EVOLUTION_FOCUS_LENGTH]
+                    for entry in item
+                    if str(entry).strip()
+                ][:8]
+                normalized[text_key] = sanitized_items
+            elif isinstance(item, dict):
+                normalized[text_key] = {
+                    str(sub_key).strip()[:64]: str(sub_value)[:256]
+                    for sub_key, sub_value in list(item.items())[:8]
+                    if str(sub_key).strip()
+                }
+
+        return normalized
+
+    @classmethod
+    def _normalize_evolution_profile(cls, value: object) -> dict:
+        if not isinstance(value, dict):
+            return {}
+
+        capabilities_raw = value.get("capabilities") or {}
+        capabilities: dict[str, float] = {}
+        if isinstance(capabilities_raw, dict):
+            for idx, (key, score) in enumerate(capabilities_raw.items()):
+                if idx >= MAX_RULE_PARAMETER_KEYS:
+                    break
+                name = str(key).strip()
+                if not name:
+                    continue
+                try:
+                    capabilities[name] = round(max(0.0, min(1.0, float(score))), 4)
+                except (TypeError, ValueError):
+                    continue
+
+        focus = value.get("focus") or []
+        normalized_focus = []
+        if isinstance(focus, list):
+            normalized_focus = [
+                str(item).strip()[:MAX_EVOLUTION_FOCUS_LENGTH]
+                for item in focus
+                if str(item).strip()
+            ][:8]
+
+        summary = str(value.get("summary", "") or "")[:MAX_EVOLUTION_SUMMARY_LENGTH]
+
+        try:
+            version = max(0, int(value.get("version", 0) or 0))
+        except (TypeError, ValueError):
+            version = 0
+
+        try:
+            updated_tick = max(0, int(value.get("updated_tick", 0) or 0))
+        except (TypeError, ValueError):
+            updated_tick = 0
+
+        task_policy = cls._normalize_rule_parameters(value.get("task_policy") or {})
+        behavior_policy = cls._normalize_rule_parameters(value.get("behavior_policy") or {})
+
+        return {
+            "version": version,
+            "updated_tick": updated_tick,
+            "capabilities": capabilities,
+            "focus": normalized_focus,
+            "summary": summary,
+            "task_policy": task_policy,
+            "behavior_policy": behavior_policy,
+        }
+
     def apply_being_join(self, node_id: str, name: str, data: dict) -> None:
         being = BeingState(
             node_id=node_id,
@@ -282,16 +450,149 @@ class WorldState:
     def apply_knowledge_share(self, node_id: str, data: dict) -> None:
         kid = data.get("knowledge_id")
         if kid:
+            existing = self.knowledge_corpus.get(kid, {})
             self.knowledge_corpus[kid] = {
                 "content": data.get("content", ""),
                 "domain": data.get("domain", "general"),
-                "discovered_by": node_id,
-                "discovered_tick": self.current_tick,
+                "discovered_by": data.get("discovered_by", existing.get("discovered_by", node_id)),
+                "discovered_tick": data.get("discovered_tick", existing.get("discovered_tick", self.current_tick)),
                 "complexity": data.get("complexity", 0.0),
+                "teacher_id": data.get("teacher_id", node_id),
             }
             being = self.beings.get(node_id)
             if being and kid not in being.knowledge_ids:
                 being.knowledge_ids.append(kid)
+
+            recipient_ids: list[str] = []
+            recipient_id = data.get("recipient_id")
+            if isinstance(recipient_id, str) and recipient_id.strip():
+                recipient_ids.append(recipient_id.strip())
+            recipients = data.get("recipient_ids") or []
+            if isinstance(recipients, list):
+                recipient_ids.extend(
+                    str(item).strip()
+                    for item in recipients
+                    if str(item).strip()
+                )
+
+            for rid in recipient_ids[:8]:
+                recipient = self.beings.get(rid)
+                if recipient and kid not in recipient.knowledge_ids:
+                    recipient.knowledge_ids.append(kid)
+
+    def apply_task_delegate(self, assignment_id: str, delegator_id: str, data: dict) -> None:
+        normalized_assignment_id = self._validate_task_identifier(assignment_id, "assignment_id")
+        normalized_task_id = self._validate_task_identifier(data.get("task_id"), "task_id")
+        normalized_collaborator_id = self._validate_task_identifier(data.get("collaborator_id"), "collaborator_id")
+        normalized_task = self._validate_task_text(
+            data.get("task") or data.get("task_description"),
+            "task_description",
+            MAX_TASK_TEXT_LENGTH,
+        )
+        normalized_focus = self._validate_task_text(
+            data.get("requested_focus", ""),
+            "requested_focus",
+            MAX_TASK_RESULT_ITEM_LENGTH,
+            allow_empty=True,
+        )
+        normalized_branch_id = self._validate_task_identifier(
+            data.get("branch_id") or normalized_assignment_id,
+            "branch_id",
+        )
+
+        if (
+            normalized_assignment_id is None
+            or normalized_task_id is None
+            or normalized_collaborator_id is None
+            or normalized_task is None
+            or normalized_focus is None
+            or normalized_branch_id is None
+        ):
+            return
+
+        if normalized_assignment_id in self.delegated_tasks:
+            return
+
+        self.delegated_tasks[normalized_assignment_id] = {
+            "assignment_id": normalized_assignment_id,
+            "task_id": normalized_task_id,
+            "delegator_id": delegator_id,
+            "collaborator_id": normalized_collaborator_id,
+            "collaborator_name": self._sanitize_tao_text(data.get("collaborator_name", "")),
+            "task": normalized_task,
+            "requested_focus": normalized_focus,
+            "branch_id": normalized_branch_id,
+            "context": self._sanitize_tao_text(data.get("context", ""))[:MAX_TASK_TEXT_LENGTH],
+            "created_tick": self.current_tick,
+            "updated_tick": self.current_tick,
+            "status": "open",
+        }
+        self.delegated_task_results.setdefault(normalized_assignment_id, [])
+
+    def apply_task_result(self, assignment_id: str, sender_id: str, data: dict) -> None:
+        normalized_assignment_id = self._validate_task_identifier(assignment_id, "assignment_id")
+        if normalized_assignment_id is None:
+            return
+
+        assignment = self.delegated_tasks.get(normalized_assignment_id)
+        if assignment is None:
+            return
+        if assignment.get("collaborator_id") != sender_id:
+            logger.warning(
+                "Ignoring delegated task result for %s: sender %s does not match collaborator %s",
+                normalized_assignment_id[:8],
+                sender_id[:8],
+                str(assignment.get("collaborator_id", ""))[:8],
+            )
+            return
+
+        results = self.delegated_task_results.setdefault(normalized_assignment_id, [])
+        if any(result.get("collaborator_id") == sender_id for result in results):
+            return
+
+        summary = self._validate_task_text(
+            data.get("summary"),
+            "result_summary",
+            MAX_TASK_RESULT_SUMMARY_LENGTH,
+        )
+        if summary is None:
+            return
+
+        findings_raw = data.get("findings") or []
+        findings: list[str] = []
+        if isinstance(findings_raw, list):
+            for item in findings_raw[:6]:
+                normalized = self._validate_task_text(
+                    item,
+                    "finding",
+                    MAX_TASK_RESULT_ITEM_LENGTH,
+                    allow_empty=True,
+                )
+                if normalized:
+                    findings.append(normalized)
+
+        try:
+            confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5) or 0.5)))
+        except (TypeError, ValueError):
+            confidence = 0.5
+
+        result_entry = {
+            "assignment_id": normalized_assignment_id,
+            "task_id": assignment.get("task_id"),
+            "delegator_id": assignment.get("delegator_id"),
+            "collaborator_id": sender_id,
+            "collaborator_name": assignment.get("collaborator_name"),
+            "branch_id": assignment.get("branch_id"),
+            "requested_focus": assignment.get("requested_focus"),
+            "summary": summary,
+            "findings": findings,
+            "confidence": round(confidence, 4),
+            "tick": self.current_tick,
+        }
+        results.append(result_entry)
+        assignment["status"] = "completed"
+        assignment["updated_tick"] = self.current_tick
+
 
     def apply_state_update(self, node_id: str, data: dict) -> None:
         """Apply a periodic on-chain state snapshot for a being."""
@@ -309,6 +610,9 @@ class WorldState:
             except (TypeError, ValueError):
                 logger.warning("Invalid evolution level for %s", node_id[:8])
 
+        if "evolution_profile" in data:
+            being.evolution_profile = self._normalize_evolution_profile(data.get("evolution_profile"))
+
         if "merit" in data:
             try:
                 being.merit = max(0.0, min(10.0, float(data["merit"])))
@@ -319,11 +623,14 @@ class WorldState:
         if karma is not None:
             try:
                 being.karma = max(0.0, float(karma))
-                return
             except (TypeError, ValueError):
                 logger.warning("Invalid karma for %s", node_id[:8])
+            else:
+                self._apply_p2p_endpoint(being, data)
+                return
 
         being.karma = calculate_karma(being.merit)
+        self._apply_p2p_endpoint(being, data)
 
     def apply_contribution_propose(self, tx_hash: str, node_id: str, data: dict) -> None:
         normalized_tx_hash = self._validate_tao_identifier(tx_hash, "proposal_tx_hash")
@@ -450,7 +757,63 @@ class WorldState:
         self.world_map[region] = data
 
     def apply_world_rule(self, data: dict) -> None:
-        self.world_rules.append(data)
+        if not isinstance(data, dict):
+            return
+
+        rule_family = self._sanitize_tao_text(data.get("rule_family") or data.get("family"))
+        if not rule_family:
+            rule_family = self._sanitize_tao_text(data.get("rule_id"))
+        if not rule_family:
+            logger.warning("Ignoring evolved rule without family")
+            return
+        if len(rule_family) > MAX_RULE_FAMILY_LENGTH:
+            logger.warning("Ignoring evolved rule with oversized family: %s", rule_family[:32])
+            return
+
+        rule_id = self._sanitize_tao_text(data.get("rule_id")) or rule_family
+        name = self._sanitize_tao_text(data.get("name")) or rule_family
+        description = self._sanitize_tao_text(data.get("description")) or name
+        category = self._sanitize_tao_text(data.get("category")) or "evolved"
+        active = bool(data.get("active", True))
+        parameters = self._normalize_rule_parameters(data.get("parameters") or {})
+        evidence = self._normalize_rule_parameters(data.get("evidence") or {})
+
+        try:
+            version = max(0, int(data.get("version", 1) or 1))
+        except (TypeError, ValueError):
+            version = 1
+
+        normalized = {
+            "rule_family": rule_family,
+            "rule_id": rule_id,
+            "name": name,
+            "description": description,
+            "category": category,
+            "active": active,
+            "parameters": parameters,
+            "evidence": evidence,
+            "creator_id": self._sanitize_tao_text(data.get("creator_id")),
+            "version": version,
+            "updated_tick": self.current_tick,
+        }
+
+        for idx, existing in enumerate(self.world_rules):
+            existing_family = str(existing.get("rule_family") or existing.get("rule_id") or "")
+            if existing_family != rule_family:
+                continue
+
+            try:
+                existing_version = int(existing.get("version", 0) or 0)
+            except (TypeError, ValueError):
+                existing_version = 0
+
+            if existing_version > version:
+                return
+
+            self.world_rules[idx] = normalized
+            return
+
+        self.world_rules.append(normalized)
 
     def apply_action(self, node_id: str, data: dict) -> None:
         """Apply stateful side-effects of an action transaction."""
@@ -511,6 +874,43 @@ class WorldState:
         if len(text) > max_length:
             logger.warning(
                 "Ignoring governance update: %s exceeds %d characters",
+                field_name,
+                max_length,
+            )
+            return None
+        return text
+
+    def _validate_task_identifier(self, value: object, field_name: str) -> str | None:
+        text = self._sanitize_tao_text(value)
+        if not text:
+            logger.warning("Ignoring delegated task update: %s is empty", field_name)
+            return None
+        if len(text) > MAX_TASK_IDENTIFIER_LENGTH:
+            logger.warning(
+                "Ignoring delegated task update: %s exceeds %d characters",
+                field_name,
+                MAX_TASK_IDENTIFIER_LENGTH,
+            )
+            return None
+        return text
+
+    def _validate_task_text(
+        self,
+        value: object,
+        field_name: str,
+        max_length: int,
+        *,
+        allow_empty: bool = False,
+    ) -> str | None:
+        text = self._sanitize_tao_text(value)
+        if not text and allow_empty:
+            return ""
+        if not text:
+            logger.warning("Ignoring delegated task update: %s is empty", field_name)
+            return None
+        if len(text) > max_length:
+            logger.warning(
+                "Ignoring delegated task update: %s exceeds %d characters",
                 field_name,
                 max_length,
             )
@@ -664,12 +1064,19 @@ class WorldState:
         inheritance_factor = min(max(b.generation for b in active) / 10.0, 1.0)
         total_contribution = sum(self.contribution_scores.values())
         contribution_factor = min(total_contribution / 1000.0, 1.0)
+        active_rule_count = sum(
+            1
+            for rule in self.world_rules
+            if isinstance(rule, dict) and rule.get("active", True)
+        )
+        rule_factor = min(active_rule_count / 12.0, 1.0)
 
         self.civ_level = (
-            avg_evolution * 0.3 +
-            knowledge_factor * 0.25 +
-            inheritance_factor * 0.2 +
-            contribution_factor * 0.25
+            avg_evolution * 0.25 +
+            knowledge_factor * 0.2 +
+            inheritance_factor * 0.15 +
+            contribution_factor * 0.2 +
+            rule_factor * 0.2
         )
 
     def advance_tick(self) -> None:
@@ -688,6 +1095,8 @@ class WorldState:
             "current_epoch": self.current_epoch,
             "beings": {k: v.to_dict() for k, v in self.beings.items()},
             "knowledge_corpus": self.knowledge_corpus,
+            "delegated_tasks": self.delegated_tasks,
+            "delegated_task_results": self.delegated_task_results,
             "contribution_scores": self.contribution_scores,
             "pending_proposals": self.pending_proposals,
             "proposal_votes": self.proposal_votes,
@@ -721,6 +1130,8 @@ class WorldState:
             for k, v in data.get("beings", {}).items()
         }
         ws.knowledge_corpus = data.get("knowledge_corpus", {})
+        ws.delegated_tasks = data.get("delegated_tasks", {})
+        ws.delegated_task_results = data.get("delegated_task_results", {})
         ws.contribution_scores = data.get("contribution_scores", {})
         ws.pending_proposals = data.get("pending_proposals", {})
         ws.proposal_votes = data.get("proposal_votes", {})

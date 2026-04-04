@@ -245,6 +245,18 @@ class Blockchain:
             world_state.apply_action(sender, data)
         elif tx.tx_type == TxType.KNOWLEDGE_SHARE:
             world_state.apply_knowledge_share(sender, data)
+        elif tx.tx_type == TxType.TASK_DELEGATE:
+            world_state.apply_task_delegate(
+                assignment_id=data.get("assignment_id", tx.tx_hash),
+                delegator_id=sender,
+                data=data,
+            )
+        elif tx.tx_type == TxType.TASK_RESULT:
+            world_state.apply_task_result(
+                assignment_id=data.get("assignment_id", ""),
+                sender_id=sender,
+                data=data,
+            )
         elif tx.tx_type == TxType.STATE_UPDATE:
             world_state.apply_state_update(sender, data)
         elif tx.tx_type == TxType.CONTRIBUTION_PROPOSE:

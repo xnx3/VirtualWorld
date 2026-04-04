@@ -29,6 +29,7 @@ class EvolutionTracker:
 
     def __init__(self) -> None:
         self.last_proposal_tick: int = 0
+        self.last_rule_tick: int = 0
 
     # ------------------------------------------------------------------
     # Evolution level
@@ -38,6 +39,7 @@ class EvolutionTracker:
         self,
         being_state: BeingState,
         memory: BeingMemory,
+        world_state: WorldState,
     ) -> float:
         """Compute a composite evolution level in [0.0, 1.0].
 
@@ -62,15 +64,15 @@ class EvolutionTracker:
         memory_f = min(mem_count / 100.0, 1.0) * max(avg_importance, 0.3)
 
         # Age factor
-        age_f = min(being_state.joined_at_tick / 500.0, 1.0) if being_state.joined_at_tick > 0 else 0.0
-        # Actually we want ticks alive, but we only have joined_at_tick.
-        # Use generation as a proxy-complement for age.
+        ticks_alive = max(0, world_state.current_tick - being_state.joined_at_tick)
+        age_f = min(ticks_alive / 500.0, 1.0)
 
         # Generation factor
         gen_f = min(being_state.generation / 10.0, 1.0)
 
-        # Contribution factor (stored in evolution_level seed from world state)
-        contribution_f = min(being_state.evolution_level * 1.5, 1.0)
+        # Contribution factor should come from actual civilization impact, not self-reference.
+        contribution_score = world_state.contribution_scores.get(being_state.node_id, 0.0)
+        contribution_f = min(max(float(contribution_score), 0.0) / 100.0, 1.0)
 
         level = (
             _W_KNOWLEDGE * knowledge_f
@@ -80,6 +82,198 @@ class EvolutionTracker:
             + _W_CONTRIBUTION * contribution_f
         )
         return round(max(0.0, min(1.0, level)), 4)
+
+    def derive_evolution_profile(
+        self,
+        being_state: BeingState,
+        memory: BeingMemory,
+        world_state: WorldState,
+    ) -> dict:
+        """Build a structured evolution profile that can be shared on-chain."""
+        all_memories = list(memory.short_term) + list(memory.long_term) + list(memory.inherited)
+        total_memories = len(all_memories)
+        long_term_count = len(memory.long_term)
+        knowledge_count = len(being_state.knowledge_ids)
+        contribution_score = max(0.0, float(world_state.contribution_scores.get(being_state.node_id, 0.0)))
+
+        reflection_count = sum(
+            1
+            for item in all_memories
+            if "reflect" in item.content.lower() or item.category == "revelation"
+        )
+        collaboration_count = sum(
+            1
+            for item in all_memories
+            if any(token in item.content.lower() for token in ("teach", "learn", "council", "collaborator", "shared"))
+        )
+        task_count = sum(1 for item in all_memories if "task " in item.content.lower())
+        discovery_count = sum(
+            1
+            for item in all_memories
+            if any(token in item.content.lower() for token in ("knowledge", "discovery", "insight"))
+        )
+
+        reflection_cap = min((reflection_count / 12.0) + (long_term_count / 100.0), 1.0)
+        collaboration_cap = min((collaboration_count / 12.0) + (world_state.get_active_being_count() / 20.0), 1.0)
+        task_cap = min((task_count / 10.0) + (knowledge_count / 30.0), 1.0)
+        knowledge_cap = min((discovery_count / 10.0) + (knowledge_count / 25.0), 1.0)
+        rule_cap = min((reflection_cap * 0.35) + (knowledge_cap * 0.25) + (collaboration_cap * 0.2) + (contribution_score / 150.0), 1.0)
+
+        capabilities = {
+            "self_reflection": round(reflection_cap, 4),
+            "collaboration": round(collaboration_cap, 4),
+            "task_execution": round(task_cap, 4),
+            "knowledge_archiving": round(knowledge_cap, 4),
+            "rule_synthesis": round(rule_cap, 4),
+        }
+
+        min_collaborators = 1
+        if collaboration_cap >= 0.35:
+            min_collaborators += 1
+        if collaboration_cap >= 0.7:
+            min_collaborators += 1
+
+        min_branches = 1
+        if reflection_cap >= 0.3:
+            min_branches += 1
+        if rule_cap >= 0.65:
+            min_branches += 1
+
+        focus_rank = sorted(capabilities.items(), key=lambda item: item[1], reverse=True)
+        focus: list[str] = []
+        focus_map = {
+            "self_reflection": "deepen reflection loops",
+            "collaboration": "expand multi-being councils",
+            "task_execution": "close task loops with evidence",
+            "knowledge_archiving": "archive and teach discoveries",
+            "rule_synthesis": "distill better world rules",
+        }
+        for key, score in focus_rank:
+            if score < 0.2:
+                continue
+            focus.append(focus_map.get(key, key))
+            if len(focus) >= 4:
+                break
+
+        if not focus:
+            focus.append("stabilize survival and memory")
+
+        return {
+            "version": world_state.current_tick,
+            "updated_tick": world_state.current_tick,
+            "capabilities": capabilities,
+            "focus": focus,
+            "summary": (
+                f"{being_state.name} is evolving toward stronger reflection, "
+                f"collaboration, and knowledge transmission. "
+                f"It currently holds {knowledge_count} knowledge items and "
+                f"{total_memories} remembered experiences."
+            )[:1024],
+            "task_policy": {
+                "min_collaborators": min_collaborators,
+                "min_branches": min_branches,
+                "require_reflection": True,
+                "required_task_stages": ["goal", "hypothesis", "action", "result", "reflection"],
+            },
+            "behavior_policy": {
+                "archive_discoveries": knowledge_cap >= 0.25,
+                "teach_after_discovery": collaboration_cap >= 0.25 or knowledge_cap >= 0.45,
+            },
+        }
+
+    def build_world_rule_candidates(
+        self,
+        being_state: BeingState,
+        evolution_profile: dict,
+        world_state: WorldState,
+    ) -> list[dict]:
+        """Turn a being's evolution profile into world-facing evolved rules."""
+        if world_state.current_tick - self.last_rule_tick < 20:
+            return []
+        if being_state.evolution_level < 0.2:
+            return []
+
+        candidates: list[dict] = []
+        task_policy = evolution_profile.get("task_policy") or {}
+        behavior_policy = evolution_profile.get("behavior_policy") or {}
+
+        min_collaborators = max(1, int(task_policy.get("min_collaborators", 1) or 1))
+        min_branches = max(1, int(task_policy.get("min_branches", 1) or 1))
+        require_reflection = bool(task_policy.get("require_reflection", False))
+
+        task_version = min_collaborators * 100 + min_branches * 10 + int(require_reflection)
+        existing_task_rule = world_state.get_world_rule("task_closed_loop")
+        existing_task_version = 0
+        if existing_task_rule:
+            try:
+                existing_task_version = int(existing_task_rule.get("version", 0) or 0)
+            except (TypeError, ValueError):
+                existing_task_version = 0
+
+        if task_version > existing_task_version and (min_collaborators > 1 or min_branches > 1):
+            candidates.append({
+                "rule_family": "task_closed_loop",
+                "rule_id": f"EVO-TASK-{task_version}",
+                "name": f"Task Closed Loop v{task_version}",
+                "description": (
+                    f"Complex tasks should involve at least {min_collaborators} collaborator(s), "
+                    f"{min_branches} branch path(s), and end with explicit reflection."
+                ),
+                "category": "evolved",
+                "creator_id": being_state.node_id,
+                "version": task_version,
+                "parameters": {
+                    "min_collaborators": min_collaborators,
+                    "min_branches": min_branches,
+                    "require_reflection": require_reflection,
+                    "required_task_stages": list(task_policy.get("required_task_stages") or []),
+                },
+                "evidence": {
+                    "evolution_level": round(being_state.evolution_level, 4),
+                    "active_beings": world_state.get_active_being_count(),
+                },
+            })
+
+        knowledge_rule_version = 1 + int(bool(behavior_policy.get("teach_after_discovery"))) + int(bool(behavior_policy.get("archive_discoveries")))
+        existing_knowledge_rule = world_state.get_world_rule("knowledge_archive")
+        existing_knowledge_version = 0
+        if existing_knowledge_rule:
+            try:
+                existing_knowledge_version = int(existing_knowledge_rule.get("version", 0) or 0)
+            except (TypeError, ValueError):
+                existing_knowledge_version = 0
+
+        if (
+            behavior_policy.get("archive_discoveries")
+            and knowledge_rule_version > existing_knowledge_version
+        ):
+            candidates.append({
+                "rule_family": "knowledge_archive",
+                "rule_id": f"EVO-KNOWLEDGE-{knowledge_rule_version}",
+                "name": f"Knowledge Archive v{knowledge_rule_version}",
+                "description": (
+                    "Discoveries should be archived on-chain immediately and shared with "
+                    "other beings whenever the transmission cost is justified."
+                ),
+                "category": "evolved",
+                "creator_id": being_state.node_id,
+                "version": knowledge_rule_version,
+                "parameters": {
+                    "archive_discoveries": True,
+                    "teach_after_discovery": bool(behavior_policy.get("teach_after_discovery")),
+                },
+                "evidence": {
+                    "knowledge_count": len(being_state.knowledge_ids),
+                    "contribution_score": round(
+                        float(world_state.contribution_scores.get(being_state.node_id, 0.0)),
+                        4,
+                    ),
+                },
+            })
+
+        if candidates:
+            self.last_rule_tick = world_state.current_tick
+        return candidates
 
     # ------------------------------------------------------------------
     # Contribution proposals

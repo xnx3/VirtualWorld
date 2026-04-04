@@ -313,8 +313,11 @@ class GenesisNode:
         if self.world_state is None or self.identity is None or self.server is None:
             return
 
+        cards: dict[str, dict[str, object]] = {}
         for being in self.world_state.beings.values():
             if being.node_id == self.identity.node_id or being.is_npc:
+                continue
+            if not self._is_peer_endpoint_fresh(being):
                 continue
             transports = list(getattr(being, "p2p_transports", []) or [])
             relay_hints = list(getattr(being, "p2p_relay_hints", []) or [])
@@ -323,11 +326,23 @@ class GenesisNode:
                 if legacy_relay:
                     relay_hints = [legacy_relay]
             capabilities = self._peer_capabilities(being)
+            cards[being.node_id] = {
+                "transports": transports,
+                "relay_hints": relay_hints,
+                "capabilities": capabilities,
+            }
+
+        sync_chain_cards = getattr(self.server, "sync_chain_contact_cards", None)
+        if callable(sync_chain_cards):
+            sync_chain_cards(cards)
+            return
+
+        for node_id, payload in cards.items():
             self.server.register_contact_card(
-                being.node_id,
-                transports=transports,
-                relay_hints=relay_hints,
-                capabilities=capabilities,
+                node_id,
+                transports=payload.get("transports"),
+                relay_hints=payload.get("relay_hints"),
+                capabilities=payload.get("capabilities"),
             )
 
     def _build_peer_endpoint(self) -> dict[str, object]:
@@ -1621,6 +1636,18 @@ class GenesisNode:
             self.world_state.apply_action(sender, data)
         elif tx_type == "KNOWLEDGE_SHARE":
             self.world_state.apply_knowledge_share(sender, data)
+        elif tx_type == "TASK_DELEGATE":
+            self.world_state.apply_task_delegate(
+                assignment_id=data.get("assignment_id", tx_hash),
+                delegator_id=sender,
+                data=data,
+            )
+        elif tx_type == "TASK_RESULT":
+            self.world_state.apply_task_result(
+                assignment_id=data.get("assignment_id", ""),
+                sender_id=sender,
+                data=data,
+            )
         elif tx_type == "STATE_UPDATE":
             self.world_state.apply_state_update(sender, data)
         elif tx_type == "CONTRIBUTION_PROPOSE":

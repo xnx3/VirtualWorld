@@ -215,6 +215,173 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(being.karma, 0.035136)
         self.assertGreater(world_state.civ_level, 0.0)
 
+    async def test_replay_restores_evolution_profile_and_world_rule(self):
+        being_id = "evolver-node"
+        block = _FakeBlock([
+            _tx(
+                "join-main",
+                TxType.BEING_JOIN,
+                being_id,
+                {"name": "Evolver", "location": "genesis_plains"},
+            ),
+            _tx(
+                "state-evo",
+                TxType.STATE_UPDATE,
+                being_id,
+                {
+                    "evolution_level": 0.58,
+                    "evolution_profile": {
+                        "version": 17,
+                        "updated_tick": 88,
+                        "capabilities": {
+                            "self_reflection": 0.73,
+                            "collaboration": 0.61,
+                        },
+                        "focus": ["deepen reflection loops", "expand multi-being councils"],
+                        "summary": "Evolver is converging toward reflective collaboration.",
+                        "task_policy": {
+                            "min_collaborators": 3,
+                            "min_branches": 2,
+                            "require_reflection": True,
+                            "required_task_stages": ["goal", "hypothesis", "action", "result", "reflection"],
+                        },
+                        "behavior_policy": {
+                            "archive_discoveries": True,
+                        },
+                    },
+                },
+            ),
+            _tx(
+                "rule-evo",
+                TxType.WORLD_RULE,
+                being_id,
+                {
+                    "rule_family": "task_closed_loop",
+                    "rule_id": "EVO-TASK-321",
+                    "name": "Task Closed Loop v321",
+                    "description": "Require multi-being collaboration and reflection.",
+                    "category": "evolved",
+                    "version": 321,
+                    "parameters": {
+                        "min_collaborators": 3,
+                        "min_branches": 2,
+                        "require_reflection": True,
+                        "required_task_stages": ["goal", "hypothesis", "action", "result", "reflection"],
+                    },
+                },
+            ),
+        ])
+        blockchain = Blockchain(_FakeStorage([block]), Mempool())
+
+        state = await blockchain.derive_world_state()
+        world_state = WorldState.from_dict(state)
+        being = world_state.get_being(being_id)
+
+        self.assertIsNotNone(being)
+        self.assertEqual(being.evolution_profile["version"], 17)
+        self.assertEqual(being.evolution_profile["task_policy"]["min_collaborators"], 3)
+        self.assertEqual(len(world_state.world_rules), 1)
+        self.assertEqual(world_state.world_rules[0]["rule_family"], "task_closed_loop")
+
+    async def test_replay_restores_delegated_task_and_result(self):
+        block = _FakeBlock([
+            _tx(
+                "join-main",
+                TxType.BEING_JOIN,
+                "delegator-node",
+                {"name": "Coordinator", "location": "genesis_plains"},
+            ),
+            _tx(
+                "join-peer",
+                TxType.BEING_JOIN,
+                "peer-node",
+                {"name": "Delegate", "location": "signal_tower"},
+            ),
+            _tx(
+                "task-delegate-1",
+                TxType.TASK_DELEGATE,
+                "delegator-node",
+                {
+                    "assignment_id": "assign-1",
+                    "task_id": "task-parent-1",
+                    "collaborator_id": "peer-node",
+                    "collaborator_name": "Delegate",
+                    "task": "Investigate distributed archive safety.",
+                    "requested_focus": "archive_integrity",
+                    "branch_id": "branch-1",
+                    "context": "Focus on replay and inheritance.",
+                },
+            ),
+            _tx(
+                "task-result-1",
+                TxType.TASK_RESULT,
+                "peer-node",
+                {
+                    "assignment_id": "assign-1",
+                    "summary": "Archive snapshots should be replay-tested before promotion.",
+                    "findings": [
+                        "Keep the failure archive alongside the snapshot.",
+                        "Record enough metadata to reproduce the branch later.",
+                    ],
+                    "confidence": 0.84,
+                },
+            ),
+        ])
+        blockchain = Blockchain(_FakeStorage([block]), Mempool())
+
+        state = await blockchain.derive_world_state()
+        world_state = WorldState.from_dict(state)
+        assignments = world_state.get_task_assignments_for_task("task-parent-1", "delegator-node")
+        results = world_state.get_task_results_for_task("task-parent-1", "delegator-node")
+
+        self.assertEqual(len(assignments), 1)
+        self.assertEqual(assignments[0]["collaborator_id"], "peer-node")
+        self.assertEqual(assignments[0]["requested_focus"], "archive_integrity")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["collaborator_id"], "peer-node")
+        self.assertIn("replay-tested", results[0]["summary"])
+
+    async def test_replay_restores_state_update_p2p_endpoint_fields(self):
+        being_id = "network-node"
+        block = _FakeBlock([
+            _tx(
+                "join-main",
+                TxType.BEING_JOIN,
+                being_id,
+                {"name": "Networker", "location": "genesis_plains"},
+            ),
+            _tx(
+                "state-p2p",
+                TxType.STATE_UPDATE,
+                being_id,
+                {
+                    "p2p_address": "203.0.113.8",
+                    "p2p_port": 19841,
+                    "p2p_updated_at": 123456,
+                    "p2p_ttl": 600,
+                    "p2p_seq": 101,
+                    "p2p_transports": ["tcp", "relay"],
+                    "p2p_relay_hints": ["relay-a"],
+                    "p2p_capabilities": {"relay": True},
+                },
+            ),
+        ])
+        blockchain = Blockchain(_FakeStorage([block]), Mempool())
+
+        state = await blockchain.derive_world_state()
+        world_state = WorldState.from_dict(state)
+        being = world_state.get_being(being_id)
+
+        self.assertIsNotNone(being)
+        self.assertEqual(being.p2p_address, "203.0.113.8")
+        self.assertEqual(being.p2p_port, 19841)
+        self.assertEqual(being.p2p_updated_at, 123456)
+        self.assertEqual(being.p2p_ttl, 600)
+        self.assertEqual(being.p2p_seq, 101)
+        self.assertEqual(being.p2p_transports, ["tcp", "relay"])
+        self.assertEqual(being.p2p_relay_hints, ["relay-a"])
+        self.assertEqual(being.p2p_capabilities, {"relay": True})
+
 
 class StatusReporterTests(unittest.TestCase):
     def test_status_prefers_saved_world_snapshot(self):

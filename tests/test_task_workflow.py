@@ -44,20 +44,20 @@ class TaskWorkflowTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        expected_statuses = ["collaborating", "branching", "synthesizing", "completed"]
+        expected_statuses = ["collaborating", "branching", "synthesizing", "reflecting", "completed"]
         for tick, expected_status in enumerate(expected_statuses, start=1):
             world_state.current_tick = tick
             txs = await being._process_user_tasks(world_state)
-            self.assertEqual(len(txs), 1)
-            self.assertEqual(txs[0]["tx_type"], "ACTION")
-            self.assertEqual(txs[0]["data"]["action_type"], "deep_think")
+            action_txs = [tx for tx in txs if tx["tx_type"] == "ACTION"]
+            self.assertEqual(len(action_txs), 1)
+            self.assertEqual(action_txs[0]["data"]["action_type"], "deep_think")
             self.assertEqual(being._user_tasks[0]["status"], expected_status)
 
         completed = being.get_task_results()
         self.assertEqual(len(completed), 1)
         result = completed[0]
         self.assertEqual(result["task_id"], "task-1")
-        self.assertGreaterEqual(len(result["progress_log"]), 4)
+        self.assertGreaterEqual(len(result["progress_log"]), 5)
         self.assertGreaterEqual(len(result["collaborators"]), 3)
         self.assertGreaterEqual(len(result["council_rounds"]), 1)
         self.assertGreaterEqual(len(result["branch_findings"]), 1)
@@ -65,6 +65,103 @@ class TaskWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Council Rounds:", result["result"])
         self.assertIn("Best Path:", result["result"])
         self.assertIn("Result:", result["result"])
+        self.assertIn("Reflection:", result["result"])
+
+    async def test_task_planning_uses_evolved_world_rule_policy(self):
+        world_state = WorldState()
+        world_state.apply_being_join("self-node", "Aeris", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-1", "Lumis", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-2", "Veyra", {"location": "signal_tower"})
+        world_state.apply_being_join("peer-3", "Archiv", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-4", "Kyris", {"location": "memory_archives"})
+        world_state.apply_world_rule({
+            "rule_family": "task_closed_loop",
+            "rule_id": "EVO-TASK-441",
+            "name": "Task Closed Loop v441",
+            "description": "Use four collaborators and four branches for complex tasks.",
+            "category": "evolved",
+            "version": 441,
+            "parameters": {
+                "min_collaborators": 4,
+                "min_branches": 4,
+                "require_reflection": True,
+                "required_task_stages": ["goal", "hypothesis", "action", "result", "reflection"],
+            },
+        })
+
+        being = SiliconBeing(
+            node_id="self-node",
+            name="Aeris",
+            private_key=b"secret",
+            config={"location": "genesis_plains", "traits": {}},
+            llm_client=None,
+        )
+        being.assign_task({"task_id": "task-2", "task": "Design a robust civilization archive."})
+
+        world_state.current_tick = 1
+        await being._process_user_tasks(world_state)
+        task = being.get_task_statuses()[0]
+
+        self.assertEqual(task["status"], "collaborating")
+        self.assertGreaterEqual(len(task["collaborators"]), 4)
+        self.assertGreaterEqual(len(task["branches"]), 4)
+
+    async def test_chain_delegation_round_trip_between_beings(self):
+        world_state = WorldState()
+        world_state.apply_being_join("self-node", "Aeris", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-1", "Lumis", {"location": "genesis_plains"})
+
+        coordinator = SiliconBeing(
+            node_id="self-node",
+            name="Aeris",
+            private_key=b"secret",
+            config={"location": "genesis_plains", "traits": {}},
+            llm_client=None,
+        )
+        collaborator = SiliconBeing(
+            node_id="peer-1",
+            name="Lumis",
+            private_key=b"secret-2",
+            config={"location": "genesis_plains", "traits": {}},
+            llm_client=None,
+        )
+
+        coordinator.assign_task(
+            {
+                "task_id": "task-chain-1",
+                "task": "Figure out how the silicon civilization should preserve distributed memory.",
+            }
+        )
+
+        world_state.current_tick = 1
+        planning_txs = await coordinator._process_user_tasks(world_state)
+        delegate_txs = [tx for tx in planning_txs if tx["tx_type"] == "TASK_DELEGATE"]
+        self.assertGreaterEqual(len(delegate_txs), 1)
+        for tx in delegate_txs:
+            world_state.apply_task_delegate(
+                tx["data"]["assignment_id"],
+                "self-node",
+                tx["data"],
+            )
+
+        world_state.current_tick = 2
+        result_txs = await collaborator._process_delegated_tasks(world_state)
+        self.assertEqual(len(result_txs), 1)
+        self.assertEqual(result_txs[0]["tx_type"], "TASK_RESULT")
+        world_state.apply_task_result(
+            result_txs[0]["data"]["assignment_id"],
+            "peer-1",
+            result_txs[0]["data"],
+        )
+
+        world_state.current_tick = 3
+        follow_up_txs = await coordinator._process_user_tasks(world_state)
+        self.assertEqual(len(follow_up_txs), 1)
+        task = coordinator.get_task_statuses()[0]
+
+        self.assertEqual(task["status"], "branching")
+        self.assertGreaterEqual(len(task["delegated_results"]), 1)
+        self.assertIn("blockchain", task["stage_summary"].lower())
 
 
 class TaskCommandOutputTests(unittest.TestCase):
