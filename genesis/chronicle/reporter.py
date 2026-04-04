@@ -91,6 +91,10 @@ class StatusReporter:
         # Knowledge
         lines.append("")
         lines.append(f"  {t('knowledge_items')}: {len(world_state.knowledge_corpus)}")
+        lines.append(f"  Mentor Bonds: {len(world_state.mentor_bonds)}")
+        lines.append(f"  Inheritance Bundles: {len(world_state.inheritance_bundles)}")
+        lines.append(f"  Civilization Seeds: {len(world_state.civilization_seeds)}")
+        lines.append(f"  Consensus Cases: {len(world_state.consensus_cases)}")
 
         # Top contributors
         ranking = world_state.get_contribution_ranking()

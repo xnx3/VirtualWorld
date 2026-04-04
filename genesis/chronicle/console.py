@@ -289,6 +289,24 @@ def world_info(phase: str, civ_level: float, active_beings: int,
         _write(f"     {C.DIM}{t('creator_god')}:{C.RESET} {creator_god[:12]}...")
 
 
+def mobile_pairing_ready(
+    payload_path: str,
+    uri_path: str,
+    world_id: str,
+    bind_token: str,
+    qr_lines: list[str] | None = None,
+) -> None:
+    separator("─")
+    _write(f"  📱 {C.BCYAN}{C.BOLD}Mobile pairing ready{C.RESET}")
+    _write(f"     {C.DIM}world_id:{C.RESET} {world_id[:24]}")
+    _write(f"     {C.DIM}bind_token:{C.RESET} {bind_token}")
+    _write(f"     {C.DIM}payload:{C.RESET} {payload_path}")
+    _write(f"     {C.DIM}uri:{C.RESET} {uri_path}")
+    for line in (qr_lines or []):
+        _write(f"     {line}")
+    separator("─")
+
+
 def error(message: str) -> None:
     _write(f"  {ICONS['error']} {C.RED}{message}{C.RESET}")
 

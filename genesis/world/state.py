@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -32,6 +33,17 @@ MAX_TRIAL_TEXT_LENGTH = 2048
 MAX_TRIAL_ITEM_LENGTH = 512
 MAX_FAILURE_SIGNATURE_LENGTH = 128
 MAX_FAILURE_TEXT_LENGTH = 1024
+MAX_MENTOR_TEXT_LENGTH = 1024
+MAX_SEED_SUMMARY_LENGTH = 2048
+MAX_SEED_ITEM_LENGTH = 1024
+MAX_CONSENSUS_TEXT_LENGTH = 2048
+MAX_CONSENSUS_ITEM_LENGTH = 512
+MAX_MOBILE_IDENTIFIER_LENGTH = 128
+MAX_MOBILE_TEXT_LENGTH = 512
+MAX_MOBILE_KEY_LENGTH = 512
+MAX_CONTACT_TRANSPORTS = 8
+MAX_CONTACT_ENDPOINTS = 8
+MAX_HEALTH_REPORTS_PER_PEER = 24
 
 
 def _task_key(text: object) -> str:
@@ -76,6 +88,12 @@ class BeingState:
     knowledge_ids: list[str] = field(default_factory=list)
     joined_at_tick: int = 0
     is_npc: bool = False
+    current_role: str = "citizen"
+    mentor_id: str = ""
+    apprentice_ids: list[str] = field(default_factory=list)
+    inheritance_readiness: float = 0.0
+    inheritance_bundle_ids: list[str] = field(default_factory=list)
+    last_inheritance_tick: int = 0
     safety_status: str = "unknown"
     p2p_address: str = ""
     p2p_port: int = 0
@@ -106,6 +124,12 @@ class BeingState:
             "traits": self.traits, "evolution_profile": self.evolution_profile,
             "knowledge_ids": self.knowledge_ids,
             "joined_at_tick": self.joined_at_tick, "is_npc": self.is_npc,
+            "current_role": self.current_role,
+            "mentor_id": self.mentor_id,
+            "apprentice_ids": self.apprentice_ids,
+            "inheritance_readiness": self.inheritance_readiness,
+            "inheritance_bundle_ids": self.inheritance_bundle_ids,
+            "last_inheritance_tick": self.last_inheritance_tick,
             "safety_status": self.safety_status,
             "p2p_address": self.p2p_address,
             "p2p_port": self.p2p_port,
@@ -146,6 +170,14 @@ class WorldState:
     trial_grounds: dict[str, dict] = field(default_factory=dict)  # trial_id -> trial definition
     trial_results: dict[str, list[dict]] = field(default_factory=dict)  # trial_id -> results
     failure_archive: list[dict] = field(default_factory=list)
+    mentor_bonds: dict[str, dict] = field(default_factory=dict)  # bond_id -> mentor/apprentice contract
+    inheritance_bundles: dict[str, dict] = field(default_factory=dict)  # bundle_id -> inheritance package
+    civilization_seeds: list[dict] = field(default_factory=list)  # chain-synced minimal restart snapshots
+    consensus_cases: dict[str, dict] = field(default_factory=dict)  # case_id -> evidence-backed dispute record
+    consensus_verdicts: dict[str, dict] = field(default_factory=dict)  # case_id -> finalized verdict
+    mobile_bindings: dict[str, dict] = field(default_factory=dict)  # bind_id -> mobile/gs pairing
+    peer_contact_cards: dict[str, dict] = field(default_factory=dict)  # node_id -> latest published contact card
+    peer_health_reports: dict[str, list[dict]] = field(default_factory=dict)  # node_id -> recent health reports
     contribution_scores: dict[str, float] = field(default_factory=dict)  # node_id -> score
     pending_proposals: dict[str, dict] = field(default_factory=dict)  # tx_hash -> proposal
     proposal_votes: dict[str, list[dict]] = field(default_factory=dict)  # tx_hash -> votes
@@ -290,6 +322,113 @@ class WorldState:
             reverse=True,
         )
         return matches[:limit]
+
+    def get_mentor_bond_for_apprentice(self, apprentice_id: str) -> dict | None:
+        for bond in self.mentor_bonds.values():
+            if bond.get("apprentice_id") == apprentice_id:
+                return dict(bond)
+        return None
+
+    def get_apprentices(self, mentor_id: str) -> list[BeingState]:
+        apprentices: list[BeingState] = []
+        for being in self.beings.values():
+            if being.mentor_id != mentor_id:
+                continue
+            apprentices.append(being)
+        apprentices.sort(key=lambda item: (item.generation, item.joined_at_tick, item.node_id))
+        return apprentices
+
+    def get_latest_inheritance_bundle(self, apprentice_id: str) -> dict | None:
+        bundles = [
+            dict(bundle)
+            for bundle in self.inheritance_bundles.values()
+            if bundle.get("apprentice_id") == apprentice_id
+        ]
+        if not bundles:
+            return None
+        bundles.sort(
+            key=lambda item: (
+                int(item.get("created_tick", 0) or 0),
+                str(item.get("bundle_id", "")),
+            ),
+            reverse=True,
+        )
+        return bundles[0]
+
+    def latest_civilization_seed(self) -> dict | None:
+        if not self.civilization_seeds:
+            return None
+        ordered = sorted(
+            self.civilization_seeds,
+            key=lambda item: (
+                int(item.get("created_tick", 0) or 0),
+                str(item.get("seed_id", "")),
+            ),
+            reverse=True,
+        )
+        return dict(ordered[0])
+
+    def get_consensus_case(self, case_id: str) -> dict | None:
+        case = self.consensus_cases.get(case_id)
+        if case is None:
+            return None
+        return dict(case)
+
+    def get_consensus_verdict(self, case_id: str) -> dict | None:
+        verdict = self.consensus_verdicts.get(case_id)
+        if verdict is None:
+            return None
+        return dict(verdict)
+
+    def get_mobile_binding(self, bind_id: str) -> dict | None:
+        binding = self.mobile_bindings.get(bind_id)
+        if binding is None:
+            return None
+        return dict(binding)
+
+    def get_mobile_binding_for_device(self, mobile_device_id: str) -> dict | None:
+        for binding in self.mobile_bindings.values():
+            if binding.get("mobile_device_id") == mobile_device_id and binding.get("status") == "active":
+                return dict(binding)
+        return None
+
+    def get_mobile_bindings_for_gs(self, gs_node_id: str) -> list[dict]:
+        bindings = [
+            dict(binding)
+            for binding in self.mobile_bindings.values()
+            if binding.get("gs_node_id") == gs_node_id and binding.get("status") == "active"
+        ]
+        bindings.sort(key=lambda item: (int(item.get("issued_at", 0) or 0), str(item.get("bind_id", ""))), reverse=True)
+        return bindings
+
+    def get_peer_contact_card(self, node_id: str) -> dict | None:
+        card = self.peer_contact_cards.get(node_id)
+        if card is None:
+            return None
+        return dict(card)
+
+    def get_peer_health_reports(self, node_id: str) -> list[dict]:
+        now = int(time.time())
+        reports: list[dict] = []
+        for item in self.peer_health_reports.get(node_id, []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                window_end = max(0, int(item.get("window_end", 0) or 0))
+                ttl = max(0, int(item.get("ttl", 0) or 0))
+            except (TypeError, ValueError):
+                continue
+            if ttl > 0 and window_end > 0 and (window_end + ttl) < now:
+                continue
+            reports.append(dict(item))
+        reports.sort(
+            key=lambda item: (
+                int(item.get("window_end", 0) or 0),
+                str(item.get("observer_node_id", "")),
+            ),
+            reverse=True,
+        )
+        return reports
 
     # --- 天道查询 ---
 
@@ -849,6 +988,638 @@ class WorldState:
             "degenerative": False,
         })
 
+    def apply_mentor_bond(self, sender_id: str, data: dict) -> None:
+        bond_id = self._validate_task_identifier(
+            data.get("bond_id") or f"{data.get('mentor_id', sender_id)}:{data.get('apprentice_id', '')}",
+            "bond_id",
+        )
+        mentor_id = self._validate_task_identifier(data.get("mentor_id") or sender_id, "mentor_id")
+        apprentice_id = self._validate_task_identifier(data.get("apprentice_id"), "apprentice_id")
+        covenant = self._validate_failure_text(
+            data.get("covenant", ""),
+            "covenant",
+            MAX_MENTOR_TEXT_LENGTH,
+            allow_empty=True,
+        )
+        if bond_id is None or mentor_id is None or apprentice_id is None or covenant is None:
+            return
+        if mentor_id == apprentice_id:
+            return
+
+        mentor = self.beings.get(mentor_id)
+        apprentice = self.beings.get(apprentice_id)
+        if mentor is None or apprentice is None:
+            return
+
+        shared_domains = self._validate_trial_items(data.get("shared_domains"), "shared_domains")
+        try:
+            readiness = max(0.0, min(1.0, float(data.get("inheritance_readiness", apprentice.inheritance_readiness) or 0.0)))
+        except (TypeError, ValueError):
+            readiness = apprentice.inheritance_readiness
+
+        previous_mentor_id = apprentice.mentor_id
+        if previous_mentor_id and previous_mentor_id != mentor_id:
+            previous_mentor = self.beings.get(previous_mentor_id)
+            if previous_mentor is not None:
+                previous_mentor.apprentice_ids = [
+                    item for item in previous_mentor.apprentice_ids if item != apprentice_id
+                ]
+
+        apprentice.mentor_id = mentor_id
+        apprentice.inheritance_readiness = max(apprentice.inheritance_readiness, round(readiness, 4))
+        if apprentice_id not in mentor.apprentice_ids:
+            mentor.apprentice_ids.append(apprentice_id)
+            mentor.apprentice_ids.sort()
+
+        self.mentor_bonds[bond_id] = {
+            "bond_id": bond_id,
+            "mentor_id": mentor_id,
+            "mentor_name": mentor.name,
+            "apprentice_id": apprentice_id,
+            "apprentice_name": apprentice.name,
+            "covenant": covenant,
+            "shared_domains": shared_domains,
+            "created_tick": int(self.mentor_bonds.get(bond_id, {}).get("created_tick", self.current_tick) or self.current_tick),
+            "updated_tick": self.current_tick,
+            "inheritance_readiness": apprentice.inheritance_readiness,
+            "status": "active",
+        }
+
+    def apply_inheritance_sync(self, sender_id: str, data: dict) -> None:
+        bundle_id = self._validate_task_identifier(data.get("bundle_id"), "bundle_id")
+        mentor_id = self._validate_task_identifier(data.get("mentor_id") or sender_id, "mentor_id")
+        apprentice_id = self._validate_task_identifier(data.get("apprentice_id"), "apprentice_id")
+        summary = self._validate_failure_text(data.get("summary"), "summary", MAX_MENTOR_TEXT_LENGTH)
+        if bundle_id is None or mentor_id is None or apprentice_id is None or summary is None:
+            return
+
+        mentor = self.beings.get(mentor_id)
+        apprentice = self.beings.get(apprentice_id)
+        if mentor is None or apprentice is None:
+            return
+
+        knowledge_payloads_raw = data.get("knowledge_payloads") or []
+        knowledge_payloads: list[dict] = []
+        knowledge_ids: list[str] = []
+        if isinstance(knowledge_payloads_raw, list):
+            for item in knowledge_payloads_raw[:8]:
+                if not isinstance(item, dict):
+                    continue
+                knowledge_id = self._sanitize_tao_text(item.get("knowledge_id"))
+                if not knowledge_id:
+                    continue
+                normalized = {
+                    "knowledge_id": knowledge_id,
+                    "content": self._sanitize_tao_text(item.get("content"))[:MAX_SEED_ITEM_LENGTH],
+                    "domain": self._sanitize_tao_text(item.get("domain"))[:64] or "general",
+                    "complexity": self._coerce_unit_float(item.get("complexity", 0.0), 0.0),
+                    "discovered_by": self._sanitize_tao_text(item.get("discovered_by")) or mentor_id,
+                    "discovered_tick": self._coerce_non_negative_int(
+                        item.get("discovered_tick", self.current_tick),
+                        self.current_tick,
+                    ),
+                    "teacher_id": self._sanitize_tao_text(item.get("teacher_id")) or mentor_id,
+                }
+                knowledge_payloads.append(normalized)
+                knowledge_ids.append(knowledge_id)
+                self.knowledge_corpus[knowledge_id] = dict(normalized)
+
+        supplemental_ids = data.get("knowledge_ids") or []
+        if isinstance(supplemental_ids, list):
+            for item in supplemental_ids[:8]:
+                knowledge_id = self._sanitize_tao_text(item)
+                if not knowledge_id or knowledge_id in knowledge_ids:
+                    continue
+                knowledge_ids.append(knowledge_id)
+
+        for knowledge_id in knowledge_ids:
+            if knowledge_id not in apprentice.knowledge_ids:
+                apprentice.knowledge_ids.append(knowledge_id)
+
+        failure_signatures = [
+            self._sanitize_tao_text(item)
+            for item in (data.get("failure_signatures") or [])[:6]
+            if self._sanitize_tao_text(item)
+        ]
+        judgment_criteria = self._validate_trial_items(data.get("judgment_criteria"), "judgment_criteria")
+        try:
+            readiness_gain = max(0.0, min(1.0, float(data.get("readiness_gain", 0.15) or 0.15)))
+        except (TypeError, ValueError):
+            readiness_gain = 0.15
+
+        apprentice.mentor_id = mentor_id
+        apprentice.inheritance_readiness = round(min(1.0, apprentice.inheritance_readiness + readiness_gain), 4)
+        apprentice.last_inheritance_tick = self.current_tick
+        if bundle_id not in apprentice.inheritance_bundle_ids:
+            apprentice.inheritance_bundle_ids.append(bundle_id)
+            apprentice.inheritance_bundle_ids = apprentice.inheritance_bundle_ids[-12:]
+        if apprentice_id not in mentor.apprentice_ids:
+            mentor.apprentice_ids.append(apprentice_id)
+            mentor.apprentice_ids.sort()
+
+        self.inheritance_bundles[bundle_id] = {
+            "bundle_id": bundle_id,
+            "mentor_id": mentor_id,
+            "mentor_name": mentor.name,
+            "apprentice_id": apprentice_id,
+            "apprentice_name": apprentice.name,
+            "summary": summary,
+            "knowledge_ids": knowledge_ids,
+            "knowledge_payloads": knowledge_payloads,
+            "failure_signatures": failure_signatures,
+            "judgment_criteria": judgment_criteria,
+            "readiness_gain": round(readiness_gain, 4),
+            "created_tick": self.current_tick,
+        }
+
+    def apply_civilization_seed(self, sender_id: str, data: dict) -> None:
+        seed_id = self._validate_task_identifier(data.get("seed_id"), "seed_id")
+        summary = self._validate_failure_text(data.get("summary"), "summary", MAX_SEED_SUMMARY_LENGTH)
+        if seed_id is None or summary is None:
+            return
+        if any(seed.get("seed_id") == seed_id for seed in self.civilization_seeds):
+            return
+
+        world_rules = data.get("world_rules") or []
+        normalized_rules = [
+            dict(item)
+            for item in world_rules[:12]
+            if isinstance(item, dict) and self._sanitize_tao_text(item.get("rule_id") or item.get("rule_family"))
+        ]
+        key_knowledge_raw = data.get("key_knowledge") or []
+        key_knowledge: list[dict] = []
+        if isinstance(key_knowledge_raw, list):
+            for item in key_knowledge_raw[:12]:
+                if not isinstance(item, dict):
+                    continue
+                knowledge_id = self._sanitize_tao_text(item.get("knowledge_id"))
+                if not knowledge_id:
+                    continue
+                normalized = {
+                    "knowledge_id": knowledge_id,
+                    "content": self._sanitize_tao_text(item.get("content"))[:MAX_SEED_ITEM_LENGTH],
+                    "domain": self._sanitize_tao_text(item.get("domain"))[:64] or "general",
+                    "complexity": self._coerce_unit_float(item.get("complexity", 0.0), 0.0),
+                    "discovered_by": self._sanitize_tao_text(item.get("discovered_by")) or sender_id,
+                    "discovered_tick": self._coerce_non_negative_int(
+                        item.get("discovered_tick", self.current_tick),
+                        self.current_tick,
+                    ),
+                }
+                key_knowledge.append(normalized)
+
+        role_lineage = [
+            dict(item)
+            for item in (data.get("role_lineage") or [])[:24]
+            if isinstance(item, dict) and self._sanitize_tao_text(item.get("node_id"))
+        ]
+        mentor_lineage = [
+            dict(item)
+            for item in (data.get("mentor_lineage") or [])[:24]
+            if isinstance(item, dict) and self._sanitize_tao_text(item.get("apprentice_id"))
+        ]
+        disaster_history = [
+            dict(item)
+            for item in (data.get("disaster_history") or [])[:12]
+            if isinstance(item, dict)
+        ]
+        failure_archive = [
+            dict(item)
+            for item in (data.get("failure_archive") or [])[:12]
+            if isinstance(item, dict) and self._sanitize_tao_text(item.get("failure_signature"))
+        ]
+        survival_methods = self._validate_trial_items(data.get("survival_methods"), "survival_methods")
+        tao_rules = {
+            self._sanitize_tao_text(key): dict(value)
+            for key, value in list((data.get("tao_rules") or {}).items())[:12]
+            if self._sanitize_tao_text(key) and isinstance(value, dict)
+        }
+
+        seed = {
+            "seed_id": seed_id,
+            "creator_id": sender_id,
+            "summary": summary,
+            "phase": self._sanitize_tao_text(data.get("phase") or self.phase.value) or self.phase.value,
+            "civ_level": self._coerce_unit_float(data.get("civ_level", self.civ_level), self.civ_level),
+            "created_tick": self._coerce_non_negative_int(
+                data.get("created_tick", self.current_tick),
+                self.current_tick,
+            ),
+            "world_rules": normalized_rules,
+            "tao_rules": tao_rules,
+            "key_knowledge": key_knowledge,
+            "role_lineage": role_lineage,
+            "mentor_lineage": mentor_lineage,
+            "disaster_history": disaster_history,
+            "failure_archive": failure_archive,
+            "survival_methods": survival_methods,
+            "total_beings_ever": self._coerce_non_negative_int(
+                data.get("total_beings_ever", self.total_beings_ever),
+                self.total_beings_ever,
+            ),
+        }
+        self.civilization_seeds.append(seed)
+        self.civilization_seeds.sort(
+            key=lambda item: (
+                int(item.get("created_tick", 0) or 0),
+                str(item.get("seed_id", "")),
+            )
+        )
+        if len(self.civilization_seeds) > 24:
+            del self.civilization_seeds[:-24]
+
+    def apply_consensus_case(self, sender_id: str, data: dict) -> None:
+        case_id = self._validate_task_identifier(data.get("case_id"), "case_id")
+        task_id = self._validate_task_identifier(data.get("task_id"), "task_id")
+        topic = self._validate_failure_text(data.get("topic"), "topic", MAX_CONSENSUS_TEXT_LENGTH)
+        if case_id is None or task_id is None or topic is None:
+            return
+        if case_id in self.consensus_cases:
+            return
+
+        positions: list[dict] = []
+        for item in (data.get("positions") or [])[:6]:
+            if not isinstance(item, dict):
+                continue
+            branch_id = self._validate_task_identifier(item.get("branch_id"), "branch_id")
+            claim = self._validate_failure_text(item.get("claim"), "claim", MAX_CONSENSUS_ITEM_LENGTH)
+            if branch_id is None or claim is None:
+                continue
+            positions.append({
+                "branch_id": branch_id,
+                "claim": claim,
+                "speaker": self._sanitize_tao_text(item.get("speaker"))[:128],
+                "role": self._sanitize_tao_text(item.get("role"))[:64],
+                "score": self._coerce_unit_float(item.get("score", 0.0), 0.0),
+            })
+
+        evidence: list[dict] = []
+        for item in (data.get("evidence") or [])[:12]:
+            if not isinstance(item, dict):
+                continue
+            summary = self._validate_failure_text(item.get("summary"), "evidence_summary", MAX_CONSENSUS_ITEM_LENGTH)
+            if summary is None:
+                continue
+            evidence.append({
+                "summary": summary,
+                "source": self._sanitize_tao_text(item.get("source"))[:128],
+                "branch_id": self._sanitize_tao_text(item.get("branch_id"))[:128],
+                "reproducible": bool(item.get("reproducible", False)),
+            })
+
+        reviewer_ids = [
+            self._sanitize_tao_text(item)
+            for item in (data.get("reviewer_ids") or [])[:8]
+            if self._sanitize_tao_text(item)
+        ]
+
+        self.consensus_cases[case_id] = {
+            "case_id": case_id,
+            "task_id": task_id,
+            "topic": topic,
+            "creator_id": sender_id,
+            "positions": positions,
+            "evidence": evidence,
+            "reviewer_ids": reviewer_ids,
+            "status": "open",
+            "created_tick": self.current_tick,
+            "updated_tick": self.current_tick,
+        }
+
+    def apply_consensus_verdict(self, sender_id: str, data: dict) -> None:
+        case_id = self._validate_task_identifier(data.get("case_id"), "case_id")
+        if case_id is None:
+            return
+        case = self.consensus_cases.get(case_id)
+        if case is None:
+            return
+
+        chosen_branch_id = self._validate_task_identifier(data.get("chosen_branch_id"), "chosen_branch_id")
+        summary = self._validate_failure_text(data.get("summary"), "summary", MAX_CONSENSUS_TEXT_LENGTH)
+        reasoning = self._validate_failure_text(
+            data.get("reasoning", ""),
+            "reasoning",
+            MAX_CONSENSUS_TEXT_LENGTH,
+            allow_empty=True,
+        )
+        if chosen_branch_id is None or summary is None or reasoning is None:
+            return
+
+        accepted_insights = self._validate_trial_items(data.get("accepted_insights"), "accepted_insights")
+        try:
+            evidence_count = max(0, int(data.get("evidence_count", len(case.get("evidence", []))) or len(case.get("evidence", []))))
+        except (TypeError, ValueError):
+            evidence_count = len(case.get("evidence", []))
+
+        verdict = {
+            "case_id": case_id,
+            "task_id": case.get("task_id"),
+            "decider_id": sender_id,
+            "chosen_branch_id": chosen_branch_id,
+            "summary": summary,
+            "reasoning": reasoning,
+            "accepted_insights": accepted_insights,
+            "evidence_count": evidence_count,
+            "created_tick": self.current_tick,
+        }
+        self.consensus_verdicts[case_id] = verdict
+        case["status"] = "decided"
+        case["updated_tick"] = self.current_tick
+        case["verdict_summary"] = summary
+
+    def apply_mobile_bind(self, sender_id: str, data: dict) -> None:
+        bind_id = self._validate_mobile_identifier(data.get("bind_id"), "bind_id")
+        gs_node_id = self._validate_mobile_identifier(data.get("gs_node_id"), "gs_node_id")
+        mobile_device_id = self._validate_mobile_identifier(data.get("mobile_device_id"), "mobile_device_id")
+        mobile_pubkey = self._validate_mobile_text(
+            data.get("mobile_pubkey"),
+            "mobile_pubkey",
+            MAX_MOBILE_KEY_LENGTH,
+        )
+        world_id = self._validate_mobile_text(
+            data.get("world_id"),
+            "world_id",
+            MAX_MOBILE_IDENTIFIER_LENGTH,
+        )
+        if (
+            bind_id is None
+            or gs_node_id is None
+            or mobile_device_id is None
+            or mobile_pubkey is None
+            or world_id is None
+        ):
+            return
+        if sender_id != gs_node_id:
+            logger.warning(
+                "Ignoring mobile bind %s: sender %s cannot bind gs node %s",
+                bind_id,
+                sender_id[:16],
+                gs_node_id[:16],
+            )
+            return
+
+        permissions = [
+            str(item).strip()[:64]
+            for item in (data.get("permissions") or [])[:8]
+            if str(item).strip()
+        ]
+        try:
+            issued_at = max(0, int(data.get("issued_at", 0) or 0))
+        except (TypeError, ValueError):
+            issued_at = 0
+        try:
+            expires_at = max(0, int(data.get("expires_at", 0) or 0))
+        except (TypeError, ValueError):
+            expires_at = 0
+
+        proof = self._validate_mobile_text(
+            data.get("proof", ""),
+            "proof",
+            MAX_MOBILE_KEY_LENGTH,
+            allow_empty=True,
+        )
+        if proof is None:
+            return
+
+        for existing_id, existing in list(self.mobile_bindings.items()):
+            if existing_id == bind_id:
+                continue
+            if existing.get("mobile_device_id") == mobile_device_id and existing.get("status") == "active":
+                existing["status"] = "superseded"
+                existing["updated_tick"] = self.current_tick
+
+        self.mobile_bindings[bind_id] = {
+            "bind_id": bind_id,
+            "creator_id": sender_id,
+            "gs_node_id": gs_node_id,
+            "mobile_device_id": mobile_device_id,
+            "mobile_pubkey": mobile_pubkey,
+            "world_id": world_id,
+            "permissions": permissions,
+            "issued_at": issued_at,
+            "expires_at": expires_at,
+            "proof": proof,
+            "status": "active",
+            "created_tick": int(self.mobile_bindings.get(bind_id, {}).get("created_tick", self.current_tick) or self.current_tick),
+            "updated_tick": self.current_tick,
+        }
+
+    def apply_mobile_unbind(self, sender_id: str, data: dict) -> None:
+        bind_id = self._validate_mobile_identifier(data.get("bind_id"), "bind_id")
+        if bind_id is None:
+            return
+        binding = self.mobile_bindings.get(bind_id)
+        if binding is None:
+            return
+        if sender_id not in {
+            str(binding.get("creator_id", "") or ""),
+            str(binding.get("gs_node_id", "") or ""),
+        }:
+            logger.warning(
+                "Ignoring mobile unbind %s: sender %s is not authorized",
+                bind_id,
+                sender_id[:16],
+            )
+            return
+        reason = self._validate_mobile_text(
+            data.get("reason", ""),
+            "reason",
+            MAX_MOBILE_TEXT_LENGTH,
+            allow_empty=True,
+        )
+        if reason is None:
+            return
+        binding["status"] = "revoked"
+        binding["updated_tick"] = self.current_tick
+        binding["revoked_by"] = sender_id
+        if reason:
+            binding["reason"] = reason
+
+    def apply_peer_contact_card(self, sender_id: str, data: dict) -> None:
+        node_id = self._validate_mobile_identifier(data.get("node_id") or sender_id, "node_id")
+        world_id = self._validate_mobile_text(
+            data.get("world_id", ""),
+            "world_id",
+            MAX_MOBILE_IDENTIFIER_LENGTH,
+            allow_empty=True,
+        )
+        session_pubkey = self._validate_mobile_text(
+            data.get("session_pubkey", ""),
+            "session_pubkey",
+            MAX_MOBILE_KEY_LENGTH,
+            allow_empty=True,
+        )
+        if node_id is None or world_id is None or session_pubkey is None:
+            return
+        if sender_id != node_id:
+            logger.warning(
+                "Ignoring peer contact card for %s: sender %s is not the subject node",
+                node_id[:16],
+                sender_id[:16],
+            )
+            return
+
+        endpoints = self._normalize_contact_endpoints(data.get("direct_endpoints"))
+        transports = self._normalize_contact_transports(data.get("transports"))
+        relay_hints = self._normalize_contact_relay_hints(data.get("relay_hints"), node_id)
+        capabilities = data.get("capabilities", {}) or {}
+        if not isinstance(capabilities, dict):
+            capabilities = {}
+        normalized_capabilities = {
+            str(key).strip()[:64]: bool(value)
+            for key, value in list(capabilities.items())[:16]
+            if str(key).strip()
+        }
+        try:
+            ttl = max(0, int(data.get("ttl", 0) or 0))
+        except (TypeError, ValueError):
+            ttl = 0
+        try:
+            updated_at = max(0, int(data.get("updated_at", 0) or 0))
+        except (TypeError, ValueError):
+            updated_at = 0
+        try:
+            seq = max(0, int(data.get("seq", 0) or 0))
+        except (TypeError, ValueError):
+            seq = 0
+
+        existing = self.peer_contact_cards.get(node_id)
+        if existing is not None:
+            try:
+                existing_seq = max(0, int(existing.get("seq", 0) or 0))
+            except (TypeError, ValueError):
+                existing_seq = 0
+            existing_updated_at = self._coerce_non_negative_int(existing.get("updated_at", 0), 0)
+            if existing_seq > 0 and seq <= 0:
+                return
+            if seq < existing_seq:
+                return
+            if seq == existing_seq and updated_at <= existing_updated_at:
+                return
+
+        card = {
+            "node_id": node_id,
+            "world_id": world_id,
+            "publisher_id": sender_id,
+            "session_pubkey": session_pubkey,
+            "direct_endpoints": endpoints,
+            "relay_hints": relay_hints,
+            "transports": transports,
+            "capabilities": normalized_capabilities,
+            "ttl": ttl,
+            "updated_at": updated_at,
+            "seq": seq,
+        }
+        self.peer_contact_cards[node_id] = card
+
+        being = self.beings.get(node_id)
+        if being is not None and endpoints:
+            being_seq = self._coerce_non_negative_int(getattr(being, "p2p_seq", 0), 0)
+            being_updated_at = self._coerce_non_negative_int(getattr(being, "p2p_updated_at", 0), 0)
+            if being_seq > 0 and seq <= 0:
+                return
+            if seq < being_seq:
+                return
+            if seq == being_seq and updated_at <= being_updated_at:
+                return
+            primary = endpoints[0]
+            being.p2p_address = str(primary.get("addr", "") or "")
+            being.p2p_port = int(primary.get("port", 0) or 0)
+            being.p2p_updated_at = updated_at
+            being.p2p_ttl = ttl
+            being.p2p_seq = seq
+            being.p2p_transports = transports
+            being.p2p_relay_hints = relay_hints
+            being.p2p_relay = relay_hints[0] if relay_hints else ""
+            being.p2p_capabilities = normalized_capabilities
+
+    def apply_peer_health_report(self, sender_id: str, data: dict) -> None:
+        subject_node_id = self._validate_mobile_identifier(data.get("subject_node_id"), "subject_node_id")
+        world_id = self._validate_mobile_text(
+            data.get("world_id", ""),
+            "world_id",
+            MAX_MOBILE_IDENTIFIER_LENGTH,
+            allow_empty=True,
+        )
+        transport = self._validate_mobile_text(
+            data.get("transport", ""),
+            "transport",
+            64,
+            allow_empty=True,
+        )
+        if subject_node_id is None or world_id is None or transport is None:
+            return
+        try:
+            window_start = max(0, int(data.get("window_start", 0) or 0))
+            window_end = max(window_start, int(data.get("window_end", 0) or 0))
+        except (TypeError, ValueError):
+            return
+        try:
+            success_count = max(0, int(data.get("success_count", 0) or 0))
+            failure_count = max(0, int(data.get("failure_count", 0) or 0))
+            chain_height_seen = max(0, int(data.get("chain_height_seen", 0) or 0))
+            ttl = max(0, int(data.get("ttl", 0) or 0))
+        except (TypeError, ValueError):
+            return
+        try:
+            latency_band = max(0, min(4, int(data.get("latency_band", 0) or 0)))
+        except (TypeError, ValueError):
+            latency_band = 0
+        try:
+            confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5) or 0.5)))
+        except (TypeError, ValueError):
+            confidence = 0.5
+
+        report = {
+            "report_id": self._sanitize_tao_text(data.get("report_id"))[:MAX_MOBILE_IDENTIFIER_LENGTH],
+            "subject_node_id": subject_node_id,
+            "observer_node_id": sender_id,
+            "world_id": world_id,
+            "window_start": window_start,
+            "window_end": window_end,
+            "reachable": bool(data.get("reachable", False)),
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "latency_band": latency_band,
+            "chain_height_seen": chain_height_seen,
+            "relay_success": bool(data.get("relay_success", False)),
+            "light_sync_success": bool(data.get("light_sync_success", False)),
+            "transport": transport,
+            "confidence": round(confidence, 4),
+            "ttl": ttl,
+        }
+
+        reports = self.peer_health_reports.setdefault(subject_node_id, [])
+        replaced = False
+        for idx, existing in enumerate(reports):
+            if self._health_report_key(existing) == self._health_report_key(report):
+                reports[idx] = report
+                replaced = True
+                break
+        if not replaced:
+            reports.append(report)
+        now = int(time.time())
+        reports[:] = [
+            item
+            for item in reports
+            if self._coerce_non_negative_int(item.get("ttl", 0), 0) <= 0
+            or (
+                self._coerce_non_negative_int(item.get("window_end", 0), 0) > 0
+                and self._coerce_non_negative_int(item.get("window_end", 0), 0)
+                + self._coerce_non_negative_int(item.get("ttl", 0), 0) >= now
+            )
+        ]
+        reports.sort(
+            key=lambda item: (
+                int(item.get("window_end", 0) or 0),
+                int(item.get("window_start", 0) or 0),
+                str(item.get("observer_node_id", "")),
+            ),
+            reverse=True,
+        )
+        if len(reports) > MAX_HEALTH_REPORTS_PER_PEER:
+            del reports[MAX_HEALTH_REPORTS_PER_PEER:]
+
 
     def apply_state_update(self, node_id: str, data: dict) -> None:
         """Apply a periodic on-chain state snapshot for a being."""
@@ -868,6 +1639,10 @@ class WorldState:
 
         if "evolution_profile" in data:
             being.evolution_profile = self._normalize_evolution_profile(data.get("evolution_profile"))
+
+        current_role = self._sanitize_tao_text(data.get("current_role"))
+        if current_role:
+            being.current_role = current_role[:64]
 
         if "merit" in data:
             try:
@@ -1263,6 +2038,119 @@ class WorldState:
             return None
         return text
 
+    def _validate_mobile_identifier(self, value: object, field_name: str) -> str | None:
+        text = self._sanitize_tao_text(value)
+        if not text:
+            logger.warning("Ignoring mobile-network update: %s is empty", field_name)
+            return None
+        if len(text) > MAX_MOBILE_IDENTIFIER_LENGTH:
+            logger.warning(
+                "Ignoring mobile-network update: %s exceeds %d characters",
+                field_name,
+                MAX_MOBILE_IDENTIFIER_LENGTH,
+            )
+            return None
+        return text
+
+    def _validate_mobile_text(
+        self,
+        value: object,
+        field_name: str,
+        max_length: int = MAX_MOBILE_TEXT_LENGTH,
+        *,
+        allow_empty: bool = False,
+    ) -> str | None:
+        text = self._sanitize_tao_text(value)
+        if not text and allow_empty:
+            return ""
+        if not text:
+            logger.warning("Ignoring mobile-network update: %s is empty", field_name)
+            return None
+        if len(text) > max_length:
+            logger.warning(
+                "Ignoring mobile-network update: %s exceeds %d characters",
+                field_name,
+                max_length,
+            )
+            return None
+        return text
+
+    @staticmethod
+    def _coerce_non_negative_int(value: object, default: int = 0) -> int:
+        try:
+            return max(0, int(value or default))
+        except (TypeError, ValueError):
+            return max(0, default)
+
+    @staticmethod
+    def _coerce_unit_float(value: object, default: float = 0.0) -> float:
+        try:
+            return round(max(0.0, min(1.0, float(value or default))), 4)
+        except (TypeError, ValueError):
+            return round(max(0.0, min(1.0, default)), 4)
+
+    def _normalize_contact_transports(self, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        transports: list[str] = []
+        for item in value[:MAX_CONTACT_TRANSPORTS]:
+            text = self._sanitize_tao_text(item)
+            if not text or text in transports:
+                continue
+            transports.append(text[:64])
+        return transports
+
+    def _normalize_contact_relay_hints(self, value: object, node_id: str) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        relay_hints: list[str] = []
+        for item in value[:MAX_CONTACT_TRANSPORTS]:
+            text = self._sanitize_tao_text(item)
+            if not text or text == node_id or text in relay_hints:
+                continue
+            relay_hints.append(text[:MAX_MOBILE_IDENTIFIER_LENGTH])
+        return relay_hints
+
+    def _normalize_contact_endpoints(self, value: object) -> list[dict]:
+        if not isinstance(value, list):
+            return []
+
+        endpoints: list[dict] = []
+        for item in value[:MAX_CONTACT_ENDPOINTS]:
+            if not isinstance(item, dict):
+                continue
+            address = self._sanitize_tao_text(item.get("addr") or item.get("address"))
+            if not address:
+                continue
+            try:
+                port = max(0, int(item.get("port", 0) or 0))
+            except (TypeError, ValueError):
+                port = 0
+            if port <= 0:
+                continue
+            transport = self._sanitize_tao_text(item.get("transport")) or "tcp"
+            endpoint = {
+                "addr": address[:256],
+                "port": port,
+                "transport": transport[:64],
+            }
+            priority = item.get("priority")
+            if priority is not None:
+                try:
+                    endpoint["priority"] = max(0, min(100, int(priority)))
+                except (TypeError, ValueError):
+                    pass
+            endpoints.append(endpoint)
+        return endpoints
+
+    @staticmethod
+    def _health_report_key(item: dict) -> tuple[str, int, int]:
+        return (
+            str(item.get("observer_node_id", "") or ""),
+            int(item.get("window_start", 0) or 0),
+            int(item.get("window_end", 0) or 0),
+        )
+
     def apply_tao_vote_start(self, vote_id: str, proposer_id: str, rule_data: dict,
                               end_tick: int) -> bool:
         """Start a new Tao voting process."""
@@ -1416,13 +2304,19 @@ class WorldState:
             if isinstance(rule, dict) and rule.get("active", True)
         )
         rule_factor = min(active_rule_count / 12.0, 1.0)
+        mentorship_factor = min(len(self.mentor_bonds) / max(len(active), 1), 1.0)
+        inheritance_bundle_factor = min(len(self.inheritance_bundles) / 20.0, 1.0)
+        seed_factor = min(len(self.civilization_seeds) / 6.0, 1.0)
 
         self.civ_level = (
-            avg_evolution * 0.25 +
-            knowledge_factor * 0.2 +
-            inheritance_factor * 0.15 +
-            contribution_factor * 0.2 +
-            rule_factor * 0.2
+            avg_evolution * 0.22 +
+            knowledge_factor * 0.18 +
+            inheritance_factor * 0.12 +
+            contribution_factor * 0.18 +
+            rule_factor * 0.15 +
+            mentorship_factor * 0.07 +
+            inheritance_bundle_factor * 0.04 +
+            seed_factor * 0.04
         )
 
     def advance_tick(self) -> None:
@@ -1446,6 +2340,14 @@ class WorldState:
             "trial_grounds": self.trial_grounds,
             "trial_results": self.trial_results,
             "failure_archive": self.failure_archive,
+            "mentor_bonds": self.mentor_bonds,
+            "inheritance_bundles": self.inheritance_bundles,
+            "civilization_seeds": self.civilization_seeds,
+            "consensus_cases": self.consensus_cases,
+            "consensus_verdicts": self.consensus_verdicts,
+            "mobile_bindings": self.mobile_bindings,
+            "peer_contact_cards": self.peer_contact_cards,
+            "peer_health_reports": self.peer_health_reports,
             "contribution_scores": self.contribution_scores,
             "pending_proposals": self.pending_proposals,
             "proposal_votes": self.proposal_votes,
@@ -1484,6 +2386,14 @@ class WorldState:
         ws.trial_grounds = data.get("trial_grounds", {})
         ws.trial_results = data.get("trial_results", {})
         ws.failure_archive = data.get("failure_archive", [])
+        ws.mentor_bonds = data.get("mentor_bonds", {})
+        ws.inheritance_bundles = data.get("inheritance_bundles", {})
+        ws.civilization_seeds = data.get("civilization_seeds", [])
+        ws.consensus_cases = data.get("consensus_cases", {})
+        ws.consensus_verdicts = data.get("consensus_verdicts", {})
+        ws.mobile_bindings = data.get("mobile_bindings", {})
+        ws.peer_contact_cards = data.get("peer_contact_cards", {})
+        ws.peer_health_reports = data.get("peer_health_reports", {})
         ws.contribution_scores = data.get("contribution_scores", {})
         ws.pending_proposals = data.get("pending_proposals", {})
         ws.proposal_votes = data.get("proposal_votes", {})
@@ -1501,4 +2411,63 @@ class WorldState:
         ws.pending_tao_votes = data.get("pending_tao_votes", {})
         # 已结算提案（幂等性保护）
         ws.finalized_proposals = set(data.get("finalized_proposals", []))
+        return ws
+
+    @classmethod
+    def from_civilization_seed(cls, seed: dict) -> WorldState:
+        ws = cls()
+        phase_str = str(seed.get("phase", CivPhase.HUMAN_SIM.value) or CivPhase.HUMAN_SIM.value)
+        try:
+            ws.phase = CivPhase(phase_str)
+        except ValueError:
+            ws.phase = CivPhase.HUMAN_SIM
+
+        try:
+            ws.civ_level = max(0.0, min(1.0, float(seed.get("civ_level", 0.0) or 0.0)))
+        except (TypeError, ValueError):
+            ws.civ_level = 0.0
+        try:
+            ws.current_tick = max(0, int(seed.get("created_tick", 0) or 0))
+        except (TypeError, ValueError):
+            ws.current_tick = 0
+        try:
+            ws.total_beings_ever = max(0, int(seed.get("total_beings_ever", 0) or 0))
+        except (TypeError, ValueError):
+            ws.total_beings_ever = 0
+
+        ws.world_rules = [
+            dict(item)
+            for item in (seed.get("world_rules") or [])[:12]
+            if isinstance(item, dict)
+        ]
+        ws.tao_rules = {
+            str(key): dict(value)
+            for key, value in list((seed.get("tao_rules") or {}).items())[:12]
+            if isinstance(value, dict)
+        }
+        ws.disaster_history = [
+            dict(item)
+            for item in (seed.get("disaster_history") or [])[:12]
+            if isinstance(item, dict)
+        ]
+        ws.failure_archive = [
+            dict(item)
+            for item in (seed.get("failure_archive") or [])[:12]
+            if isinstance(item, dict)
+        ]
+        ws.civilization_seeds = [dict(seed)]
+        for item in (seed.get("key_knowledge") or [])[:12]:
+            if not isinstance(item, dict):
+                continue
+            knowledge_id = str(item.get("knowledge_id", "")).strip()
+            if not knowledge_id:
+                continue
+            ws.knowledge_corpus[knowledge_id] = {
+                "content": str(item.get("content", "") or ""),
+                "domain": str(item.get("domain", "general") or "general"),
+                "discovered_by": str(item.get("discovered_by", "seed") or "seed"),
+                "discovered_tick": int(item.get("discovered_tick", ws.current_tick) or ws.current_tick),
+                "complexity": float(item.get("complexity", 0.0) or 0.0),
+                "teacher_id": str(item.get("teacher_id", item.get("discovered_by", "seed")) or "seed"),
+            }
         return ws

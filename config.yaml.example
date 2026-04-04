@@ -31,6 +31,10 @@ network:
   sync_interval: 30           # Seconds between proactive chain sync attempts
   startup_sync_timeout: 45    # First-startup sync deadline before failing closed
   peer_endpoint_ttl: 600      # Seconds a published on-chain peer endpoint stays fresh
+  peer_observability_interval: 300  # Seconds between public contact-card / health-evidence refreshes
+  mobile_pairing_ttl: 600     # Seconds a startup pairing QR remains valid before rotating
+  mobile_snapshot_interval: 1800  # Seconds between gs -> Android peer snapshot refreshes
+  mobile_snapshot_peer_limit: 12  # Max peer entries exported into the mobile bootstrap snapshot
   relay_capable: false        # Legacy manual override; public relay role is auto-detected when this node is externally reachable
   max_relay_hints: 3          # Max relay node IDs advertised in each on-chain contact card
   webrtc_enabled: true        # Enable WebRTC data channels for NAT traversal and relay-assisted dialing

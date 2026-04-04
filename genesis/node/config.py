@@ -39,6 +39,10 @@ class NetworkConfig:
     sync_interval: int = 30
     startup_sync_timeout: int = 45
     peer_endpoint_ttl: int = 600
+    peer_observability_interval: int = 300
+    mobile_pairing_ttl: int = 600
+    mobile_snapshot_interval: int = 1800
+    mobile_snapshot_peer_limit: int = 12
     relay_capable: bool = False
     max_relay_hints: int = 3
     webrtc_enabled: bool = True

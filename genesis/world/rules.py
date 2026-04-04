@@ -172,6 +172,10 @@ class RulesEngine:
             "require_trial_for_high_risk": True,
             "trial_risk_threshold": 0.55,
             "intent_review_min_collaborators": 3,
+            "require_consensus_for_high_impact": True,
+            "consensus_score_gap_threshold": 0.12,
+            "consensus_min_evidence": 2,
+            "consensus_min_reviewers": 2,
         }
 
         for rule in self.get_active_rules():
@@ -227,6 +231,41 @@ class RulesEngine:
                 except (TypeError, ValueError):
                     pass
 
+            if params.get("require_consensus_for_high_impact"):
+                policy["require_consensus_for_high_impact"] = True
+
+            score_gap = params.get("consensus_score_gap_threshold")
+            if score_gap is not None:
+                try:
+                    normalized = max(0.01, min(0.5, float(score_gap)))
+                except (TypeError, ValueError):
+                    normalized = None
+                if normalized is not None:
+                    policy["consensus_score_gap_threshold"] = min(
+                        float(policy["consensus_score_gap_threshold"]),
+                        normalized,
+                    )
+
+            min_evidence = params.get("consensus_min_evidence")
+            if min_evidence is not None:
+                try:
+                    policy["consensus_min_evidence"] = max(
+                        int(policy["consensus_min_evidence"]),
+                        int(min_evidence),
+                    )
+                except (TypeError, ValueError):
+                    pass
+
+            min_reviewers = params.get("consensus_min_reviewers")
+            if min_reviewers is not None:
+                try:
+                    policy["consensus_min_reviewers"] = max(
+                        int(policy["consensus_min_reviewers"]),
+                        int(min_reviewers),
+                    )
+                except (TypeError, ValueError):
+                    pass
+
         if "reflection" in policy["required_task_stages"]:
             policy["require_reflection"] = True
 
@@ -237,6 +276,11 @@ class RulesEngine:
         policy: dict[str, Any] = {
             "archive_discoveries": False,
             "teach_after_discovery": False,
+            "mentor_target_apprentices": 1,
+            "inheritance_sync_interval": 18,
+            "inheritance_min_evolution": 0.45,
+            "seed_snapshot_interval": 36,
+            "seed_knowledge_limit": 8,
         }
 
         for rule in self.get_active_rules():
@@ -248,6 +292,56 @@ class RulesEngine:
                 policy["archive_discoveries"] = True
             if params.get("teach_after_discovery"):
                 policy["teach_after_discovery"] = True
+
+            mentor_target = params.get("mentor_target_apprentices")
+            if mentor_target is not None:
+                try:
+                    policy["mentor_target_apprentices"] = max(
+                        int(policy["mentor_target_apprentices"]),
+                        int(mentor_target),
+                    )
+                except (TypeError, ValueError):
+                    pass
+
+            sync_interval = params.get("inheritance_sync_interval")
+            if sync_interval is not None:
+                try:
+                    policy["inheritance_sync_interval"] = min(
+                        int(policy["inheritance_sync_interval"]),
+                        max(3, int(sync_interval)),
+                    )
+                except (TypeError, ValueError):
+                    pass
+
+            min_evolution = params.get("inheritance_min_evolution")
+            if min_evolution is not None:
+                try:
+                    policy["inheritance_min_evolution"] = min(
+                        float(policy["inheritance_min_evolution"]),
+                        max(0.0, min(1.0, float(min_evolution))),
+                    )
+                except (TypeError, ValueError):
+                    pass
+
+            seed_interval = params.get("seed_snapshot_interval")
+            if seed_interval is not None:
+                try:
+                    policy["seed_snapshot_interval"] = min(
+                        int(policy["seed_snapshot_interval"]),
+                        max(6, int(seed_interval)),
+                    )
+                except (TypeError, ValueError):
+                    pass
+
+            seed_limit = params.get("seed_knowledge_limit")
+            if seed_limit is not None:
+                try:
+                    policy["seed_knowledge_limit"] = max(
+                        int(policy["seed_knowledge_limit"]),
+                        int(seed_limit),
+                    )
+                except (TypeError, ValueError):
+                    pass
 
         return policy
 

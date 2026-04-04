@@ -5,6 +5,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from genesis.being.agent import SiliconBeing
 from genesis.main import run_task
@@ -250,6 +251,112 @@ class TaskWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(completed), 1)
         self.assertIn("Trial Ground Verdict: blocked", completed[0]["result"])
         self.assertIn("Safe Alternative:", completed[0]["result"])
+
+    async def test_branch_conflict_opens_and_resolves_consensus_case(self):
+        world_state = WorldState()
+        world_state.apply_being_join("self-node", "Aeris", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-1", "Lumis", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-2", "Veyra", {"location": "signal_tower"})
+        world_state.apply_world_rule({
+            "rule_family": "consensus_adjudication",
+            "rule_id": "EVO-CONSENSUS-389",
+            "name": "Consensus Adjudication v389",
+            "description": "High-impact disagreements must be evidence-backed.",
+            "category": "evolved",
+            "version": 389,
+            "parameters": {
+                "require_consensus_for_high_impact": True,
+                "consensus_score_gap_threshold": 0.08,
+                "consensus_min_evidence": 2,
+                "consensus_min_reviewers": 2,
+            },
+        })
+
+        being = SiliconBeing(
+            node_id="self-node",
+            name="Aeris",
+            private_key=b"secret",
+            config={"location": "genesis_plains", "traits": {}},
+            llm_client=None,
+        )
+
+        task = being._normalize_user_task(
+            {
+                "task_id": "task-consensus-1",
+                "task": "Choose the most durable approach for preserving civilization memory.",
+                "status": "branching",
+                "collaborators": [
+                    {"node_id": "peer-1", "name": "Lumis", "role": "researcher", "is_npc": False},
+                    {"node_id": "peer-2", "name": "Veyra", "role": "archivist", "is_npc": False},
+                ],
+                "delegated_results": [
+                    {
+                        "assignment_id": "assign-1",
+                        "branch_id": "branch-archive",
+                        "collaborator_id": "peer-1",
+                        "collaborator_name": "Lumis",
+                        "summary": "Archive-first approach is resilient if replay evidence stays complete.",
+                    },
+                    {
+                        "assignment_id": "assign-2",
+                        "branch_id": "branch-lineage",
+                        "collaborator_id": "peer-2",
+                        "collaborator_name": "Veyra",
+                        "summary": "Lineage-first approach is resilient if mentor inheritance remains current.",
+                    },
+                ],
+                "branches": [
+                    {"branch_id": "branch-archive", "focus": "archive"},
+                    {"branch_id": "branch-lineage", "focus": "lineage"},
+                ],
+            }
+        )
+
+        being._generate_task_json = AsyncMock(return_value={
+            "branch_findings": [
+                {
+                    "branch_id": "branch-archive",
+                    "status": "promising",
+                    "score": 0.81,
+                    "strengths": ["Archive-first path keeps evidence replayable."],
+                    "weaknesses": ["Requires broader mentor discipline."],
+                    "salvageable_insights": ["Keep branch replay metadata immutable."],
+                },
+                {
+                    "branch_id": "branch-lineage",
+                    "status": "promising",
+                    "score": 0.78,
+                    "strengths": ["Lineage-first path keeps judgment standards alive."],
+                    "weaknesses": ["Needs stronger archive discipline."],
+                    "salvageable_insights": ["Pair each lineage sync with archive evidence."],
+                },
+            ],
+            "best_branch_ids": ["branch-archive", "branch-lineage"],
+            "merge_strategy": "Adjudicate through consensus because both branches remain strong.",
+            "stage_summary": "Two strong branches remained in tension.",
+        })
+
+        world_state.current_tick = 5
+        first_txs = await being._evaluate_user_task_branches(task, world_state)
+        self.assertIn("opened consensus case", first_txs.lower())
+        self.assertEqual(task["status"], "branching")
+        consensus_case_tx = next(tx for tx in task["pending_chain_txs"] if tx["tx_type"] == "CONSENSUS_CASE")
+        world_state.apply_consensus_case("self-node", consensus_case_tx["data"])
+        task["pending_chain_txs"] = []
+
+        world_state.current_tick = 6
+        second_msg = await being._evaluate_user_task_branches(task, world_state)
+        self.assertIn("consensus verdict", second_msg.lower())
+        consensus_verdict_tx = next(tx for tx in task["pending_chain_txs"] if tx["tx_type"] == "CONSENSUS_VERDICT")
+        world_state.apply_consensus_verdict("self-node", consensus_verdict_tx["data"])
+        task["pending_chain_txs"] = []
+
+        world_state.current_tick = 7
+        third_msg = await being._evaluate_user_task_branches(task, world_state)
+        self.assertIn("resolved consensus case", third_msg.lower())
+        self.assertEqual(task["status"], "synthesizing")
+        self.assertEqual(task["best_branch_ids"], ["branch-archive"])
+        self.assertIn("Consensus favored branch-archive", task["stage_summary"])
 
 
 class TaskCommandOutputTests(unittest.TestCase):

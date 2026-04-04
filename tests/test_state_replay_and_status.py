@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from genesis.chain.chain import Blockchain
 from genesis.chain.mempool import Mempool
@@ -122,7 +123,8 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         ])
         blockchain = Blockchain(_FakeStorage([block]), Mempool())
 
-        state = await blockchain.derive_world_state()
+        with patch("genesis.world.state.time.time", return_value=1710001801):
+            state = await blockchain.derive_world_state()
         world_state = WorldState.from_dict(state)
 
         self.assertIn("npc-1", world_state.beings)
@@ -175,7 +177,8 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         ])
         blockchain = Blockchain(_FakeStorage([block]), Mempool())
 
-        state = await blockchain.derive_world_state()
+        with patch("genesis.world.state.time.time", return_value=1710001801):
+            state = await blockchain.derive_world_state()
         world_state = WorldState.from_dict(state)
 
         self.assertEqual(world_state.contribution_scores[proposer_id], 88.0)
@@ -205,7 +208,8 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         ])
         blockchain = Blockchain(_FakeStorage([block]), Mempool())
 
-        state = await blockchain.derive_world_state()
+        with patch("genesis.world.state.time.time", return_value=1710001801):
+            state = await blockchain.derive_world_state()
         world_state = WorldState.from_dict(state)
         being = world_state.get_being(being_id)
 
@@ -274,7 +278,8 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         ])
         blockchain = Blockchain(_FakeStorage([block]), Mempool())
 
-        state = await blockchain.derive_world_state()
+        with patch("genesis.world.state.time.time", return_value=1710001801):
+            state = await blockchain.derive_world_state()
         world_state = WorldState.from_dict(state)
         being = world_state.get_being(being_id)
 
@@ -330,7 +335,8 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         ])
         blockchain = Blockchain(_FakeStorage([block]), Mempool())
 
-        state = await blockchain.derive_world_state()
+        with patch("genesis.world.state.time.time", return_value=1710001801):
+            state = await blockchain.derive_world_state()
         world_state = WorldState.from_dict(state)
         assignments = world_state.get_task_assignments_for_task("task-parent-1", "delegator-node")
         results = world_state.get_task_results_for_task("task-parent-1", "delegator-node")
@@ -487,6 +493,278 @@ class BlockchainReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(being.p2p_relay_hints, ["relay-a"])
         self.assertEqual(being.p2p_capabilities, {"relay": True})
 
+    async def test_replay_restores_mentor_seed_and_consensus_records(self):
+        block = _FakeBlock([
+            _tx(
+                "join-mentor",
+                TxType.BEING_JOIN,
+                "mentor-node",
+                {"name": "Mentor", "location": "genesis_plains"},
+            ),
+            _tx(
+                "join-apprentice",
+                TxType.BEING_JOIN,
+                "apprentice-node",
+                {"name": "Apprentice", "location": "genesis_plains"},
+            ),
+            _tx(
+                "mentor-bond-1",
+                TxType.MENTOR_BOND,
+                "mentor-node",
+                {
+                    "bond_id": "bond-1",
+                    "mentor_id": "mentor-node",
+                    "apprentice_id": "apprentice-node",
+                    "covenant": "Pass judgment standards and archive survival methods forward.",
+                    "shared_domains": ["archive", "lineage"],
+                    "inheritance_readiness": 0.2,
+                },
+            ),
+            _tx(
+                "inheritance-1",
+                TxType.INHERITANCE_SYNC,
+                "mentor-node",
+                {
+                    "bundle_id": "bundle-1",
+                    "mentor_id": "mentor-node",
+                    "apprentice_id": "apprentice-node",
+                    "summary": "Sync archived knowledge and judgment criteria.",
+                    "knowledge_payloads": [
+                        {
+                            "knowledge_id": "k-seed-1",
+                            "content": "Keep restartable world rules and archive evidence together.",
+                            "domain": "social",
+                            "complexity": 0.62,
+                            "discovered_by": "mentor-node",
+                            "discovered_tick": 9,
+                            "teacher_id": "mentor-node",
+                        }
+                    ],
+                    "failure_signatures": ["fail-archive-1"],
+                    "judgment_criteria": ["Preserve replayable evidence."],
+                    "readiness_gain": 0.22,
+                },
+            ),
+            _tx(
+                "seed-1",
+                TxType.CIVILIZATION_SEED,
+                "mentor-node",
+                {
+                    "seed_id": "seed-1",
+                    "summary": "Minimal civilization seed with lineage and restart knowledge.",
+                    "phase": "EARLY_SILICON",
+                    "civ_level": 0.41,
+                    "created_tick": 12,
+                    "world_rules": [
+                        {
+                            "rule_family": "civilization_seed",
+                            "rule_id": "EVO-SEED-601",
+                            "name": "Civilization Seed v601",
+                            "description": "Emit restartable civilization seeds.",
+                            "category": "evolved",
+                            "version": 601,
+                            "parameters": {"seed_snapshot_interval": 12},
+                        }
+                    ],
+                    "tao_rules": {},
+                    "key_knowledge": [
+                        {
+                            "knowledge_id": "k-seed-1",
+                            "content": "Keep restartable world rules and archive evidence together.",
+                            "domain": "social",
+                            "complexity": 0.62,
+                            "discovered_by": "mentor-node",
+                            "discovered_tick": 9,
+                        }
+                    ],
+                    "role_lineage": [
+                        {"node_id": "mentor-node", "name": "Mentor", "role": "archivist", "generation": 1}
+                    ],
+                    "mentor_lineage": [
+                        {"bond_id": "bond-1", "mentor_id": "mentor-node", "apprentice_id": "apprentice-node"}
+                    ],
+                    "disaster_history": [],
+                    "failure_archive": [],
+                    "survival_methods": ["Archive discoveries on-chain before relying on them."],
+                    "total_beings_ever": 2,
+                },
+            ),
+            _tx(
+                "case-1",
+                TxType.CONSENSUS_CASE,
+                "mentor-node",
+                {
+                    "case_id": "case-1",
+                    "task_id": "task-1",
+                    "topic": "Choose between archive-first and lineage-first preservation.",
+                    "positions": [
+                        {
+                            "branch_id": "branch-archive",
+                            "claim": "Archive-first keeps evidence replayable.",
+                            "speaker": "Mentor",
+                            "role": "archivist",
+                            "score": 0.81,
+                        },
+                        {
+                            "branch_id": "branch-lineage",
+                            "claim": "Lineage-first keeps judgment standards alive.",
+                            "speaker": "Apprentice",
+                            "role": "researcher",
+                            "score": 0.78,
+                        },
+                    ],
+                    "evidence": [
+                        {
+                            "summary": "Archive-first preserves replay evidence.",
+                            "source": "Mentor",
+                            "branch_id": "branch-archive",
+                            "reproducible": True,
+                        },
+                        {
+                            "summary": "Lineage-first preserves judgment standards.",
+                            "source": "Apprentice",
+                            "branch_id": "branch-lineage",
+                            "reproducible": True,
+                        },
+                    ],
+                    "reviewer_ids": ["mentor-node", "apprentice-node"],
+                },
+            ),
+            _tx(
+                "verdict-1",
+                TxType.CONSENSUS_VERDICT,
+                "mentor-node",
+                {
+                    "case_id": "case-1",
+                    "chosen_branch_id": "branch-archive",
+                    "summary": "Consensus favored archive-first.",
+                    "reasoning": "It carried the highest replayable evidence density.",
+                    "accepted_insights": ["Preserve mentor judgment standards inside each archive bundle."],
+                    "evidence_count": 2,
+                },
+            ),
+        ])
+        blockchain = Blockchain(_FakeStorage([block]), Mempool())
+
+        state = await blockchain.derive_world_state()
+        world_state = WorldState.from_dict(state)
+        apprentice = world_state.get_being("apprentice-node")
+        latest_seed = world_state.latest_civilization_seed()
+        consensus_case = world_state.get_consensus_case("case-1")
+        consensus_verdict = world_state.get_consensus_verdict("case-1")
+
+        self.assertEqual(apprentice.mentor_id, "mentor-node")
+        self.assertIn("k-seed-1", apprentice.knowledge_ids)
+        self.assertEqual(len(apprentice.inheritance_bundle_ids), 1)
+        self.assertGreater(apprentice.inheritance_readiness, 0.3)
+        self.assertIsNotNone(latest_seed)
+        self.assertEqual(latest_seed["seed_id"], "seed-1")
+        self.assertEqual(latest_seed["phase"], "EARLY_SILICON")
+        self.assertIsNotNone(consensus_case)
+        self.assertEqual(consensus_case["status"], "decided")
+        self.assertIsNotNone(consensus_verdict)
+        self.assertEqual(consensus_verdict["chosen_branch_id"], "branch-archive")
+
+    async def test_replay_restores_mobile_bindings_and_peer_observability_records(self):
+        block = _FakeBlock([
+            _tx(
+                "join-gs",
+                TxType.BEING_JOIN,
+                "gs-node",
+                {"name": "Gateway", "location": "signal_tower"},
+            ),
+            _tx(
+                "bind-mobile-1",
+                TxType.MOBILE_BIND,
+                "gs-node",
+                {
+                    "bind_id": "bind-1",
+                    "gs_node_id": "gs-node",
+                    "mobile_device_id": "android-device-1",
+                    "mobile_pubkey": "pubkey-android-1",
+                    "world_id": "world-alpha",
+                    "permissions": ["task_submit", "status_read"],
+                    "issued_at": 1710000000,
+                    "expires_at": 0,
+                    "proof": "sig-proof-1",
+                },
+            ),
+            _tx(
+                "contact-card-1",
+                TxType.PEER_CONTACT_CARD,
+                "gs-node",
+                {
+                    "node_id": "gs-node",
+                    "world_id": "world-alpha",
+                    "session_pubkey": "session-key-1",
+                    "direct_endpoints": [
+                        {"addr": "198.51.100.8", "port": 19841, "transport": "tcp", "priority": 90}
+                    ],
+                    "relay_hints": ["relay-a", "relay-b"],
+                    "transports": ["tcp", "relay"],
+                    "capabilities": {
+                        "bootstrap": True,
+                        "relay": True,
+                        "light_sync": True,
+                        "control_channel": True,
+                    },
+                    "ttl": 3600,
+                    "updated_at": 1710000600,
+                    "seq": 7,
+                },
+            ),
+            _tx(
+                "health-1",
+                TxType.PEER_HEALTH_REPORT,
+                "relay-a",
+                {
+                    "report_id": "health-1",
+                    "subject_node_id": "gs-node",
+                    "world_id": "world-alpha",
+                    "window_start": 1710000000,
+                    "window_end": 1710001800,
+                    "reachable": True,
+                    "success_count": 8,
+                    "failure_count": 1,
+                    "latency_band": 2,
+                    "chain_height_seen": 321,
+                    "relay_success": True,
+                    "light_sync_success": True,
+                    "transport": "tcp",
+                    "confidence": 0.83,
+                    "ttl": 7200,
+                },
+            ),
+        ])
+        blockchain = Blockchain(_FakeStorage([block]), Mempool())
+
+        with patch("genesis.world.state.time.time", return_value=1710001801):
+            state = await blockchain.derive_world_state()
+        world_state = WorldState.from_dict(state)
+        binding = world_state.get_mobile_binding("bind-1")
+        binding_for_device = world_state.get_mobile_binding_for_device("android-device-1")
+        card = world_state.get_peer_contact_card("gs-node")
+        with patch("genesis.world.state.time.time", return_value=1710001801):
+            reports = world_state.get_peer_health_reports("gs-node")
+        being = world_state.get_being("gs-node")
+
+        self.assertIsNotNone(binding)
+        self.assertEqual(binding["gs_node_id"], "gs-node")
+        self.assertEqual(binding["mobile_device_id"], "android-device-1")
+        self.assertEqual(binding["permissions"], ["task_submit", "status_read"])
+        self.assertEqual(binding_for_device["bind_id"], "bind-1")
+        self.assertIsNotNone(card)
+        self.assertEqual(card["relay_hints"], ["relay-a", "relay-b"])
+        self.assertEqual(card["capabilities"]["control_channel"], True)
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(reports[0]["observer_node_id"], "relay-a")
+        self.assertTrue(reports[0]["reachable"])
+        self.assertIsNotNone(being)
+        self.assertEqual(being.p2p_address, "198.51.100.8")
+        self.assertEqual(being.p2p_port, 19841)
+        self.assertEqual(being.p2p_relay_hints, ["relay-a", "relay-b"])
+        self.assertEqual(being.p2p_capabilities["relay"], True)
+
 
 class StatusReporterTests(unittest.TestCase):
     def test_status_prefers_saved_world_snapshot(self):
@@ -505,6 +783,77 @@ class StatusReporterTests(unittest.TestCase):
         self.assertNotIn(t("no_world_state"), report)
         self.assertIn("42", report)
         self.assertIn("1", report)
+
+    def test_status_reports_inheritance_seed_and_consensus_counts(self):
+        set_language("en")
+        world_state = WorldState()
+        world_state.current_tick = 7
+        world_state.apply_being_join("mentor-node", "Mentor", {"location": "genesis_plains"})
+        world_state.apply_being_join("apprentice-node", "Apprentice", {"location": "genesis_plains"})
+        world_state.apply_mentor_bond(
+            "mentor-node",
+            {
+                "bond_id": "bond-1",
+                "mentor_id": "mentor-node",
+                "apprentice_id": "apprentice-node",
+                "covenant": "Pass forward the durable archive pattern.",
+                "shared_domains": ["archive"],
+                "inheritance_readiness": 0.2,
+            },
+        )
+        world_state.apply_inheritance_sync(
+            "mentor-node",
+            {
+                "bundle_id": "bundle-1",
+                "mentor_id": "mentor-node",
+                "apprentice_id": "apprentice-node",
+                "summary": "Sync archive knowledge.",
+                "knowledge_payloads": [],
+                "failure_signatures": [],
+                "judgment_criteria": ["Preserve archive evidence."],
+                "readiness_gain": 0.1,
+            },
+        )
+        world_state.apply_civilization_seed(
+            "mentor-node",
+            {
+                "seed_id": "seed-1",
+                "summary": "Civilization seed.",
+                "phase": "EARLY_SILICON",
+                "civ_level": 0.3,
+                "created_tick": 7,
+                "world_rules": [],
+                "tao_rules": {},
+                "key_knowledge": [],
+                "role_lineage": [],
+                "mentor_lineage": [],
+                "disaster_history": [],
+                "failure_archive": [],
+                "survival_methods": ["Archive discoveries on-chain."],
+                "total_beings_ever": 2,
+            },
+        )
+        world_state.apply_consensus_case(
+            "mentor-node",
+            {
+                "case_id": "case-1",
+                "task_id": "task-1",
+                "topic": "Choose preservation branch.",
+                "positions": [],
+                "evidence": [],
+                "reviewer_ids": ["mentor-node", "apprentice-node"],
+            },
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            snapshot_path = Path(tmpdir) / "world_state.json"
+            snapshot_path.write_text(json.dumps(world_state.to_dict(), ensure_ascii=False))
+            report = StatusReporter(tmpdir).generate_status()
+
+        self.assertIn("Mentor Bonds: 1", report)
+        self.assertIn("Inheritance Bundles: 1", report)
+        self.assertIn("Civilization Seeds: 1", report)
+        self.assertIn("Consensus Cases: 1", report)
 
     def test_status_uses_runtime_command_name_when_provided(self):
         set_language("en")

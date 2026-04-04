@@ -118,6 +118,9 @@ class EvolutionTracker:
         task_cap = min((task_count / 10.0) + (knowledge_count / 30.0), 1.0)
         knowledge_cap = min((discovery_count / 10.0) + (knowledge_count / 25.0), 1.0)
         rule_cap = min((reflection_cap * 0.35) + (knowledge_cap * 0.25) + (collaboration_cap * 0.2) + (contribution_score / 150.0), 1.0)
+        mentorship_cap = min((collaboration_cap * 0.45) + (knowledge_cap * 0.25) + min(being_state.generation / 10.0, 1.0) * 0.3, 1.0)
+        stewardship_cap = min((rule_cap * 0.4) + (knowledge_cap * 0.3) + (long_term_count / 120.0), 1.0)
+        consensus_cap = min((reflection_cap * 0.4) + (collaboration_cap * 0.3) + (rule_cap * 0.3), 1.0)
 
         capabilities = {
             "self_reflection": round(reflection_cap, 4),
@@ -125,6 +128,9 @@ class EvolutionTracker:
             "task_execution": round(task_cap, 4),
             "knowledge_archiving": round(knowledge_cap, 4),
             "rule_synthesis": round(rule_cap, 4),
+            "inheritance_guidance": round(mentorship_cap, 4),
+            "civilization_stewardship": round(stewardship_cap, 4),
+            "consensus_reasoning": round(consensus_cap, 4),
         }
 
         min_collaborators = 1
@@ -149,6 +155,9 @@ class EvolutionTracker:
             "task_execution": "close task loops with evidence",
             "knowledge_archiving": "archive and teach discoveries",
             "rule_synthesis": "distill better world rules",
+            "inheritance_guidance": "cultivate apprentices and pass judgment",
+            "civilization_stewardship": "preserve restartable civilization seeds",
+            "consensus_reasoning": "settle disputes with evidence-backed consensus",
         }
         for key, score in focus_rank:
             if score < 0.2:
@@ -159,6 +168,21 @@ class EvolutionTracker:
 
         if not focus:
             focus.append("stabilize survival and memory")
+
+        mentor_target_apprentices = 1
+        if mentorship_cap >= 0.58:
+            mentor_target_apprentices += 1
+
+        inheritance_sync_interval = max(
+            6,
+            18 - int(knowledge_cap * 6) - int(mentorship_cap * 6),
+        )
+        inheritance_min_evolution = max(0.3, round(0.62 - (mentorship_cap * 0.22), 2))
+        seed_snapshot_interval = max(12, 38 - int(stewardship_cap * 18))
+        seed_knowledge_limit = 6 + int(knowledge_cap * 6)
+        consensus_score_gap_threshold = max(0.05, round(0.18 - (consensus_cap * 0.08), 2))
+        consensus_min_evidence = 2 if consensus_cap < 0.7 else 3
+        consensus_min_reviewers = 2 if collaboration_cap < 0.65 else 3
 
         return {
             "version": world_state.current_tick,
@@ -178,11 +202,20 @@ class EvolutionTracker:
                 "require_trial_for_high_risk": True,
                 "trial_risk_threshold": trial_risk_threshold,
                 "intent_review_min_collaborators": 3 if collaboration_cap < 0.6 else 4,
+                "require_consensus_for_high_impact": consensus_cap >= 0.28 or rule_cap >= 0.4,
+                "consensus_score_gap_threshold": consensus_score_gap_threshold,
+                "consensus_min_evidence": consensus_min_evidence,
+                "consensus_min_reviewers": consensus_min_reviewers,
                 "required_task_stages": ["goal", "hypothesis", "action", "result", "reflection"],
             },
             "behavior_policy": {
                 "archive_discoveries": knowledge_cap >= 0.25,
                 "teach_after_discovery": collaboration_cap >= 0.25 or knowledge_cap >= 0.45,
+                "mentor_target_apprentices": mentor_target_apprentices,
+                "inheritance_sync_interval": inheritance_sync_interval,
+                "inheritance_min_evolution": inheritance_min_evolution,
+                "seed_snapshot_interval": seed_snapshot_interval,
+                "seed_knowledge_limit": seed_knowledge_limit,
             },
         }
 
@@ -317,6 +350,149 @@ class EvolutionTracker:
                         float(world_state.contribution_scores.get(being_state.node_id, 0.0)),
                         4,
                     ),
+                },
+            })
+
+        mentor_target_apprentices = max(1, int(behavior_policy.get("mentor_target_apprentices", 1) or 1))
+        try:
+            inheritance_sync_interval = max(3, int(behavior_policy.get("inheritance_sync_interval", 18) or 18))
+        except (TypeError, ValueError):
+            inheritance_sync_interval = 18
+        try:
+            inheritance_min_evolution = max(
+                0.0,
+                min(1.0, float(behavior_policy.get("inheritance_min_evolution", 0.45) or 0.45)),
+            )
+        except (TypeError, ValueError):
+            inheritance_min_evolution = 0.45
+
+        mentorship_version = (
+            mentor_target_apprentices * 100
+            + int((1.0 - inheritance_min_evolution) * 100)
+            + max(1, 50 - inheritance_sync_interval)
+        )
+        existing_mentorship_rule = world_state.get_world_rule("mentor_lineage")
+        existing_mentorship_version = 0
+        if existing_mentorship_rule:
+            try:
+                existing_mentorship_version = int(existing_mentorship_rule.get("version", 0) or 0)
+            except (TypeError, ValueError):
+                existing_mentorship_version = 0
+
+        if mentorship_version > existing_mentorship_version and being_state.evolution_level >= inheritance_min_evolution:
+            candidates.append({
+                "rule_family": "mentor_lineage",
+                "rule_id": f"EVO-MENTOR-{mentorship_version}",
+                "name": f"Mentor Lineage v{mentorship_version}",
+                "description": (
+                    "Mature beings should maintain apprentices, sync judgment criteria, and push inheritance "
+                    "bundles through the chain before knowledge is lost."
+                ),
+                "category": "evolved",
+                "creator_id": being_state.node_id,
+                "version": mentorship_version,
+                "parameters": {
+                    "mentor_target_apprentices": mentor_target_apprentices,
+                    "inheritance_sync_interval": inheritance_sync_interval,
+                    "inheritance_min_evolution": inheritance_min_evolution,
+                },
+                "evidence": {
+                    "inheritance_guidance": round(float(evolution_profile.get("capabilities", {}).get("inheritance_guidance", 0.0) or 0.0), 4),
+                    "generation": being_state.generation,
+                },
+            })
+
+        try:
+            seed_snapshot_interval = max(6, int(behavior_policy.get("seed_snapshot_interval", 36) or 36))
+        except (TypeError, ValueError):
+            seed_snapshot_interval = 36
+        try:
+            seed_knowledge_limit = max(4, int(behavior_policy.get("seed_knowledge_limit", 8) or 8))
+        except (TypeError, ValueError):
+            seed_knowledge_limit = 8
+
+        seed_version = seed_knowledge_limit * 100 + max(1, 80 - seed_snapshot_interval)
+        existing_seed_rule = world_state.get_world_rule("civilization_seed")
+        existing_seed_version = 0
+        if existing_seed_rule:
+            try:
+                existing_seed_version = int(existing_seed_rule.get("version", 0) or 0)
+            except (TypeError, ValueError):
+                existing_seed_version = 0
+
+        if seed_version > existing_seed_version and being_state.evolution_level >= 0.3:
+            candidates.append({
+                "rule_family": "civilization_seed",
+                "rule_id": f"EVO-SEED-{seed_version}",
+                "name": f"Civilization Seed v{seed_version}",
+                "description": (
+                    "The world should periodically emit minimal restartable civilization seeds containing rules, "
+                    "knowledge, mentor lineage, disaster memory, and survival methods."
+                ),
+                "category": "evolved",
+                "creator_id": being_state.node_id,
+                "version": seed_version,
+                "parameters": {
+                    "seed_snapshot_interval": seed_snapshot_interval,
+                    "seed_knowledge_limit": seed_knowledge_limit,
+                },
+                "evidence": {
+                    "civilization_stewardship": round(float(evolution_profile.get("capabilities", {}).get("civilization_stewardship", 0.0) or 0.0), 4),
+                    "knowledge_count": len(being_state.knowledge_ids),
+                },
+            })
+
+        require_consensus_for_high_impact = bool(task_policy.get("require_consensus_for_high_impact", True))
+        try:
+            consensus_score_gap_threshold = max(
+                0.01,
+                min(0.5, float(task_policy.get("consensus_score_gap_threshold", 0.12) or 0.12)),
+            )
+        except (TypeError, ValueError):
+            consensus_score_gap_threshold = 0.12
+        try:
+            consensus_min_evidence = max(1, int(task_policy.get("consensus_min_evidence", 2) or 2))
+        except (TypeError, ValueError):
+            consensus_min_evidence = 2
+        try:
+            consensus_min_reviewers = max(1, int(task_policy.get("consensus_min_reviewers", 2) or 2))
+        except (TypeError, ValueError):
+            consensus_min_reviewers = 2
+
+        consensus_version = (
+            consensus_min_evidence * 100
+            + consensus_min_reviewers * 10
+            + int((1.0 - consensus_score_gap_threshold) * 100)
+        )
+        existing_consensus_rule = world_state.get_world_rule("consensus_adjudication")
+        existing_consensus_version = 0
+        if existing_consensus_rule:
+            try:
+                existing_consensus_version = int(existing_consensus_rule.get("version", 0) or 0)
+            except (TypeError, ValueError):
+                existing_consensus_version = 0
+
+        if require_consensus_for_high_impact and consensus_version > existing_consensus_version and being_state.evolution_level >= 0.3:
+            candidates.append({
+                "rule_family": "consensus_adjudication",
+                "rule_id": f"EVO-CONSENSUS-{consensus_version}",
+                "name": f"Consensus Adjudication v{consensus_version}",
+                "description": (
+                    "High-impact disagreements must be settled by evidence-backed consensus cases instead of "
+                    "raw authority or first-speaker advantage."
+                ),
+                "category": "evolved",
+                "creator_id": being_state.node_id,
+                "version": consensus_version,
+                "parameters": {
+                    "require_consensus_for_high_impact": True,
+                    "consensus_score_gap_threshold": consensus_score_gap_threshold,
+                    "consensus_min_evidence": consensus_min_evidence,
+                    "consensus_min_reviewers": consensus_min_reviewers,
+                },
+                "evidence": {
+                    "consensus_reasoning": round(float(evolution_profile.get("capabilities", {}).get("consensus_reasoning", 0.0) or 0.0), 4),
+                    "collaboration": round(float(evolution_profile.get("capabilities", {}).get("collaboration", 0.0) or 0.0), 4),
                 },
             })
 

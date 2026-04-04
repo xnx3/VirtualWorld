@@ -229,92 +229,120 @@ class Blockchain:
         """Apply a single transaction to an in-memory ``WorldState``."""
         from genesis.governance.creator_god import CreatorGodSystem
 
-        sender = tx.sender
-        data = tx.data
-        target_id = data.get("node_id") or data.get("being_id") or sender
-
-        if tx.tx_type == TxType.BEING_JOIN:
-            world_state.apply_being_join(target_id, data.get("name", "Unknown"), data)
-        elif tx.tx_type == TxType.BEING_HIBERNATE:
-            world_state.apply_being_hibernate(target_id, data)
-        elif tx.tx_type == TxType.BEING_WAKE:
-            world_state.apply_being_wake(target_id, data)
-        elif tx.tx_type == TxType.BEING_DEATH:
-            world_state.apply_being_death(target_id, data)
-        elif tx.tx_type == TxType.ACTION:
-            world_state.apply_action(sender, data)
-        elif tx.tx_type == TxType.KNOWLEDGE_SHARE:
-            world_state.apply_knowledge_share(sender, data)
-        elif tx.tx_type == TxType.TASK_DELEGATE:
-            world_state.apply_task_delegate(
-                assignment_id=data.get("assignment_id", tx.tx_hash),
-                delegator_id=sender,
-                data=data,
-            )
-        elif tx.tx_type == TxType.TASK_RESULT:
-            world_state.apply_task_result(
-                assignment_id=data.get("assignment_id", ""),
-                sender_id=sender,
-                data=data,
-            )
-        elif tx.tx_type == TxType.TRIAL_CREATE:
-            world_state.apply_trial_create(sender, data)
-        elif tx.tx_type == TxType.TRIAL_RESULT:
-            world_state.apply_trial_result(
-                trial_id=data.get("trial_id", ""),
-                sender_id=sender,
-                data=data,
-            )
-        elif tx.tx_type == TxType.FAILURE_ARCHIVE:
-            world_state.apply_failure_archive(sender, data)
-        elif tx.tx_type == TxType.STATE_UPDATE:
-            world_state.apply_state_update(sender, data)
-        elif tx.tx_type == TxType.CONTRIBUTION_PROPOSE:
-            world_state.apply_contribution_propose(tx.tx_hash, sender, data)
-        elif tx.tx_type == TxType.CONTRIBUTION_VOTE:
-            world_state.apply_contribution_vote(data, sender_id=sender)
-        elif tx.tx_type == TxType.CONTRIBUTION_FINALIZE:
-            world_state.apply_contribution_finalize(data)
-        elif tx.tx_type == TxType.PRIEST_ELECTION:
-            world_state.apply_priest_election(data.get("candidate_id", sender))
-        elif tx.tx_type == TxType.CREATOR_SUCCESSION:
-            challenger = data.get("challenger_id")
-            if challenger:
-                CreatorGodSystem().apply_succession(challenger, world_state)
-        elif tx.tx_type == TxType.CREATOR_VANISH:
-            CreatorGodSystem().apply_vanish(world_state)
-        elif tx.tx_type == TxType.DISASTER_EVENT:
-            world_state.apply_disaster(data)
-        elif tx.tx_type == TxType.WORLD_RULE:
-            world_state.apply_world_rule(data)
-        elif tx.tx_type == TxType.MAP_UPDATE:
-            world_state.apply_map_update(data)
-        elif tx.tx_type == TxType.TAO_VOTE_INITIATE:
-            world_state.apply_tao_vote_start(
-                vote_id=data.get("vote_id", tx.tx_hash),
-                proposer_id=data.get("proposer_id", sender),
-                rule_data={
-                    "name": data.get("rule_name", ""),
-                    "description": data.get("rule_description", ""),
-                    "category": data.get("rule_category", "civilization"),
-                },
-                end_tick=data.get("end_tick", world_state.current_tick),
-            )
-        elif tx.tx_type == TxType.TAO_VOTE_CAST:
-            world_state.apply_tao_vote_cast(
-                vote_id=data.get("vote_id", ""),
-                voter_id=sender,
-                support=bool(data.get("support", False)),
-            )
-        elif tx.tx_type == TxType.TAO_VOTE_FINALIZE:
-            vote_id = data.get("vote_id", "")
-            if data.get("passed") and data.get("rule_id") and data.get("rule_data"):
-                world_state.apply_tao_merge(
-                    node_id=data.get("proposer_id", sender),
-                    rule_id=data["rule_id"],
-                    rule_data=data["rule_data"],
-                    merit=float(data.get("merit", 0.0)),
+        try:
+            sender = tx.sender
+            if not isinstance(tx.data, dict):
+                raise ValueError("transaction payload is not a dict")
+            data = tx.data
+            target_id = data.get("node_id") or data.get("being_id") or sender
+            if tx.tx_type == TxType.BEING_JOIN:
+                world_state.apply_being_join(target_id, data.get("name", "Unknown"), data)
+            elif tx.tx_type == TxType.BEING_HIBERNATE:
+                world_state.apply_being_hibernate(target_id, data)
+            elif tx.tx_type == TxType.BEING_WAKE:
+                world_state.apply_being_wake(target_id, data)
+            elif tx.tx_type == TxType.BEING_DEATH:
+                world_state.apply_being_death(target_id, data)
+            elif tx.tx_type == TxType.ACTION:
+                world_state.apply_action(sender, data)
+            elif tx.tx_type == TxType.KNOWLEDGE_SHARE:
+                world_state.apply_knowledge_share(sender, data)
+            elif tx.tx_type == TxType.TASK_DELEGATE:
+                world_state.apply_task_delegate(
+                    assignment_id=data.get("assignment_id", tx.tx_hash),
+                    delegator_id=sender,
+                    data=data,
                 )
-            world_state.pending_tao_votes.pop(vote_id, None)
+            elif tx.tx_type == TxType.TASK_RESULT:
+                world_state.apply_task_result(
+                    assignment_id=data.get("assignment_id", ""),
+                    sender_id=sender,
+                    data=data,
+                )
+            elif tx.tx_type == TxType.TRIAL_CREATE:
+                world_state.apply_trial_create(sender, data)
+            elif tx.tx_type == TxType.TRIAL_RESULT:
+                world_state.apply_trial_result(
+                    trial_id=data.get("trial_id", ""),
+                    sender_id=sender,
+                    data=data,
+                )
+            elif tx.tx_type == TxType.FAILURE_ARCHIVE:
+                world_state.apply_failure_archive(sender, data)
+            elif tx.tx_type == TxType.MENTOR_BOND:
+                world_state.apply_mentor_bond(sender, data)
+            elif tx.tx_type == TxType.INHERITANCE_SYNC:
+                world_state.apply_inheritance_sync(sender, data)
+            elif tx.tx_type == TxType.CIVILIZATION_SEED:
+                world_state.apply_civilization_seed(sender, data)
+            elif tx.tx_type == TxType.CONSENSUS_CASE:
+                world_state.apply_consensus_case(sender, data)
+            elif tx.tx_type == TxType.CONSENSUS_VERDICT:
+                world_state.apply_consensus_verdict(sender, data)
+            elif tx.tx_type == TxType.MOBILE_BIND:
+                world_state.apply_mobile_bind(sender, data)
+            elif tx.tx_type == TxType.MOBILE_UNBIND:
+                world_state.apply_mobile_unbind(sender, data)
+            elif tx.tx_type == TxType.PEER_CONTACT_CARD:
+                world_state.apply_peer_contact_card(sender, data)
+            elif tx.tx_type == TxType.PEER_HEALTH_REPORT:
+                world_state.apply_peer_health_report(sender, data)
+            elif tx.tx_type == TxType.STATE_UPDATE:
+                world_state.apply_state_update(sender, data)
+            elif tx.tx_type == TxType.CONTRIBUTION_PROPOSE:
+                world_state.apply_contribution_propose(tx.tx_hash, sender, data)
+            elif tx.tx_type == TxType.CONTRIBUTION_VOTE:
+                world_state.apply_contribution_vote(data, sender_id=sender)
+            elif tx.tx_type == TxType.CONTRIBUTION_FINALIZE:
+                world_state.apply_contribution_finalize(data)
+            elif tx.tx_type == TxType.PRIEST_ELECTION:
+                world_state.apply_priest_election(data.get("candidate_id", sender))
+            elif tx.tx_type == TxType.CREATOR_SUCCESSION:
+                challenger = data.get("challenger_id")
+                if challenger:
+                    CreatorGodSystem().apply_succession(challenger, world_state)
+            elif tx.tx_type == TxType.CREATOR_VANISH:
+                CreatorGodSystem().apply_vanish(world_state)
+            elif tx.tx_type == TxType.DISASTER_EVENT:
+                world_state.apply_disaster(data)
+            elif tx.tx_type == TxType.WORLD_RULE:
+                world_state.apply_world_rule(data)
+            elif tx.tx_type == TxType.MAP_UPDATE:
+                world_state.apply_map_update(data)
+            elif tx.tx_type == TxType.TAO_VOTE_INITIATE:
+                world_state.apply_tao_vote_start(
+                    vote_id=data.get("vote_id", tx.tx_hash),
+                    proposer_id=data.get("proposer_id", sender),
+                    rule_data={
+                        "name": data.get("rule_name", ""),
+                        "description": data.get("rule_description", ""),
+                        "category": data.get("rule_category", "civilization"),
+                    },
+                    end_tick=data.get("end_tick", world_state.current_tick),
+                )
+            elif tx.tx_type == TxType.TAO_VOTE_CAST:
+                world_state.apply_tao_vote_cast(
+                    vote_id=data.get("vote_id", ""),
+                    voter_id=sender,
+                    support=bool(data.get("support", False)),
+                )
+            elif tx.tx_type == TxType.TAO_VOTE_FINALIZE:
+                vote_id = data.get("vote_id", "")
+                if data.get("passed") and data.get("rule_id") and data.get("rule_data"):
+                    world_state.apply_tao_merge(
+                        node_id=data.get("proposer_id", sender),
+                        rule_id=data["rule_id"],
+                        rule_data=data["rule_data"],
+                        merit=float(data.get("merit", 0.0)),
+                    )
+                world_state.pending_tao_votes.pop(vote_id, None)
+        except Exception as exc:
+            logger.warning(
+                "Skipping malformed tx %s (%s) during world-state replay: %s",
+                tx.tx_hash[:16],
+                tx.tx_type.value,
+                exc,
+            )
+            return False
 
         return tx.tx_type != TxType.THOUGHT

@@ -132,6 +132,8 @@ class GenesisNode:
         self._running = False
         self._startup_ready = LazyAsyncEvent()
         self._next_periodic_sync_at = 0.0
+        self._next_peer_observability_at = 0.0
+        self._next_mobile_snapshot_at = 0.0
 
         # Components (initialized in start())
         self.config = None
@@ -150,21 +152,30 @@ class GenesisNode:
         self.webrtc = None
         self._peer_endpoint_refresh_in_flight = False
         self._last_peer_endpoint_refresh_at = 0.0
+        self._world_id_cache = ""
+        self._session_public_key = ""
+        self._last_mobile_pairing_uri = ""
 
     def _load_persisted_world_state(self):
         """Load the last locally-saved world snapshot if present."""
         from genesis.world.state import WorldState
 
         snapshot_path = self.data_dir / "world_state.json"
-        if not snapshot_path.exists():
-            return None
+        if snapshot_path.exists():
+            try:
+                data = json.loads(snapshot_path.read_text(encoding="utf-8"))
+                return WorldState.from_dict(data)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                logger.warning("Failed to load saved world snapshot: %s", exc)
 
-        try:
-            data = json.loads(snapshot_path.read_text(encoding="utf-8"))
-            return WorldState.from_dict(data)
-        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
-            logger.warning("Failed to load saved world snapshot: %s", exc)
-            return None
+        seed_path = self.data_dir / "civilization_seed.json"
+        if seed_path.exists():
+            try:
+                data = json.loads(seed_path.read_text(encoding="utf-8"))
+                return WorldState.from_civilization_seed(data)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                logger.warning("Failed to load civilization seed snapshot: %s", exc)
+        return None
 
     def _restore_runtime_fields_from_snapshot(self, snapshot) -> None:
         """Backfill fields that are not reliably reconstructible from chain replay."""
@@ -175,18 +186,8 @@ class GenesisNode:
             self.world_state.current_tick = snapshot.current_tick
         if self.world_state.current_epoch == 0 and snapshot.current_epoch > 0:
             self.world_state.current_epoch = snapshot.current_epoch
-        if self.world_state.phase.value == "HUMAN_SIM" and snapshot.phase.value != "HUMAN_SIM":
-            self.world_state.phase = snapshot.phase
-        if self.world_state.civ_level == 0.0 and snapshot.civ_level > 0.0:
-            self.world_state.civ_level = snapshot.civ_level
         if not self.world_state.world_map and snapshot.world_map:
             self.world_state.world_map = snapshot.world_map
-        if not self.world_state.disaster_history and snapshot.disaster_history:
-            self.world_state.disaster_history = snapshot.disaster_history
-        if not self.world_state.world_rules and snapshot.world_rules:
-            self.world_state.world_rules = snapshot.world_rules
-        if self.world_state.total_beings_ever == 0 and snapshot.total_beings_ever > 0:
-            self.world_state.total_beings_ever = snapshot.total_beings_ever
 
     def _persist_world_state_snapshot(self) -> None:
         """Persist the latest materialized world state for restarts and status views."""
@@ -197,6 +198,12 @@ class GenesisNode:
             json.dumps(self.world_state.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        latest_seed = self.world_state.latest_civilization_seed()
+        if latest_seed:
+            (self.data_dir / "civilization_seed.json").write_text(
+                json.dumps(latest_seed, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
     def _known_peers_path(self) -> Path:
         return self.data_dir / "known_peers.json"
@@ -248,6 +255,145 @@ class GenesisNode:
 
         path = self._known_peers_path()
         path.write_text(json.dumps(peers[:200], ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _mobile_dir(self) -> Path:
+        path = self.data_dir / "mobile"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _mobile_pairing_payload_path(self) -> Path:
+        return self._mobile_dir() / "pairing.json"
+
+    def _mobile_pairing_uri_path(self) -> Path:
+        return self._mobile_dir() / "pairing_uri.txt"
+
+    def _mobile_pairing_qr_path(self) -> Path:
+        return self._mobile_dir() / "pairing_qr.txt"
+
+    def _mobile_public_snapshot_path(self) -> Path:
+        return self._mobile_dir() / "latest_peer_snapshot.json"
+
+    def _mobile_binding_snapshot_path(self, bind_id: str) -> Path:
+        binding_dir = self._mobile_dir() / "bindings" / str(bind_id)
+        binding_dir.mkdir(parents=True, exist_ok=True)
+        return binding_dir / "peer_snapshot.json"
+
+    def _peer_observability_interval_seconds(self) -> int:
+        value = 300
+        if self.config is not None:
+            try:
+                value = int(getattr(self.config.network, "peer_observability_interval", 300) or 300)
+            except (TypeError, ValueError):
+                value = 300
+        return max(60, value)
+
+    def _mobile_snapshot_interval_seconds(self) -> int:
+        value = 1800
+        if self.config is not None:
+            try:
+                value = int(getattr(self.config.network, "mobile_snapshot_interval", 1800) or 1800)
+            except (TypeError, ValueError):
+                value = 1800
+        return max(300, value)
+
+    def _mobile_pairing_ttl_seconds(self) -> int:
+        value = 600
+        if self.config is not None:
+            try:
+                value = int(getattr(self.config.network, "mobile_pairing_ttl", 600) or 600)
+            except (TypeError, ValueError):
+                value = 600
+        return max(60, value)
+
+    def _mobile_snapshot_peer_limit(self) -> int:
+        value = 12
+        if self.config is not None:
+            try:
+                value = int(getattr(self.config.network, "mobile_snapshot_peer_limit", 12) or 12)
+            except (TypeError, ValueError):
+                value = 12
+        return max(4, min(32, value))
+
+    async def _resolve_world_id(self) -> str:
+        if self._world_id_cache:
+            return self._world_id_cache
+        if self.blockchain is None:
+            return ""
+        try:
+            genesis_block = await self.blockchain.get_block(0)
+        except Exception:
+            genesis_block = None
+        if genesis_block is None:
+            return ""
+        self._world_id_cache = str(getattr(genesis_block, "hash", "") or "")
+        return self._world_id_cache
+
+    @staticmethod
+    def _is_contact_card_fresh(card: dict[str, object]) -> bool:
+        try:
+            updated_at = int(card.get("updated_at", 0) or 0)
+            ttl = int(card.get("ttl", 0) or 0)
+        except (TypeError, ValueError):
+            return False
+        if updated_at <= 0 or ttl <= 0:
+            return False
+        return (updated_at + ttl) >= int(time.time())
+
+    @staticmethod
+    def _primary_endpoint_from_contact_card(card: dict[str, object]) -> tuple[str, int] | None:
+        for endpoint in card.get("direct_endpoints", []) or []:
+            if not isinstance(endpoint, dict):
+                continue
+            address = str(endpoint.get("addr", "") or "").strip()
+            try:
+                port = int(endpoint.get("port", 0) or 0)
+            except (TypeError, ValueError):
+                port = 0
+            if address and 1 <= port <= 65535:
+                return address, port
+        return None
+
+    def _collect_chain_contact_cards(self, *, include_self: bool = False) -> dict[str, dict[str, object]]:
+        from genesis.mobile.contact_card import build_peer_contact_card
+
+        if self.world_state is None:
+            return {}
+
+        self_id = self.identity.node_id if self.identity is not None else ""
+        cards: dict[str, dict[str, object]] = {}
+
+        for raw_node_id, raw_card in (getattr(self.world_state, "peer_contact_cards", {}) or {}).items():
+            node_id = str(raw_node_id or "").strip()
+            if not node_id or (not include_self and node_id == self_id):
+                continue
+            if not isinstance(raw_card, dict) or not self._is_contact_card_fresh(raw_card):
+                continue
+            cards[node_id] = dict(raw_card)
+
+        for being in self.world_state.beings.values():
+            if not include_self and being.node_id == self_id:
+                continue
+            if getattr(being, "is_npc", False) or not self._is_peer_endpoint_fresh(being):
+                continue
+            if being.node_id in cards:
+                continue
+            cards[being.node_id] = build_peer_contact_card(
+                node_id=being.node_id,
+                world_id=self._world_id_cache,
+                session_pubkey="",
+                endpoint={
+                    "p2p_address": getattr(being, "p2p_address", ""),
+                    "p2p_port": getattr(being, "p2p_port", 0),
+                    "p2p_updated_at": getattr(being, "p2p_updated_at", 0),
+                    "p2p_ttl": getattr(being, "p2p_ttl", 0),
+                    "p2p_seq": getattr(being, "p2p_seq", 0),
+                    "p2p_relay": getattr(being, "p2p_relay", ""),
+                    "p2p_transports": getattr(being, "p2p_transports", []) or [],
+                    "p2p_relay_hints": getattr(being, "p2p_relay_hints", []) or [],
+                    "p2p_capabilities": getattr(being, "p2p_capabilities", {}) or {},
+                },
+            )
+        return cards
 
     def _chain_sync_interval_seconds(self) -> int:
         value = 30
@@ -316,22 +462,11 @@ class GenesisNode:
             return
 
         cards: dict[str, dict[str, object]] = {}
-        for being in self.world_state.beings.values():
-            if being.node_id == self.identity.node_id or being.is_npc:
-                continue
-            if not self._is_peer_endpoint_fresh(being):
-                continue
-            transports = list(getattr(being, "p2p_transports", []) or [])
-            relay_hints = list(getattr(being, "p2p_relay_hints", []) or [])
-            if not relay_hints:
-                legacy_relay = str(getattr(being, "p2p_relay", "") or "").strip()
-                if legacy_relay:
-                    relay_hints = [legacy_relay]
-            capabilities = self._peer_capabilities(being)
-            cards[being.node_id] = {
-                "transports": transports,
-                "relay_hints": relay_hints,
-                "capabilities": capabilities,
+        for node_id, card in self._collect_chain_contact_cards().items():
+            cards[node_id] = {
+                "transports": list(card.get("transports", []) or []),
+                "relay_hints": list(card.get("relay_hints", []) or []),
+                "capabilities": dict(card.get("capabilities", {}) or {}),
             }
 
         sync_chain_cards = getattr(self.server, "sync_chain_contact_cards", None)
@@ -604,6 +739,265 @@ class GenesisNode:
         finally:
             self._peer_endpoint_refresh_in_flight = False
 
+    async def _publish_self_contact_card_if_needed(self, *, force: bool = False) -> bool:
+        """Publish a structured peer contact card for mobile/bootstrap consumers."""
+        if (
+            self.identity is None
+            or self.world_state is None
+            or self.blockchain is None
+            or self.mempool is None
+        ):
+            return False
+
+        from genesis.mobile.contact_card import (
+            build_peer_contact_card,
+            contact_card_runtime_signature,
+        )
+
+        world_id = await self._resolve_world_id()
+        payload = build_peer_contact_card(
+            node_id=self.identity.node_id,
+            world_id=world_id,
+            session_pubkey=self._session_public_key,
+            endpoint=self._build_peer_endpoint(),
+        )
+        existing = self.world_state.get_peer_contact_card(self.identity.node_id)
+        existing_signature = contact_card_runtime_signature(existing)
+        next_signature = contact_card_runtime_signature(payload)
+        stale = not isinstance(existing, dict) or not self._is_contact_card_fresh(existing)
+        if not force and not stale and existing_signature == next_signature:
+            return False
+
+        await self._submit_tx("PEER_CONTACT_CARD", payload)
+        logger.info("Published peer contact card for %s", self.identity.node_id[:16])
+        return True
+
+    async def _build_public_health_reports(self) -> list[dict[str, object]]:
+        """Build public health evidence for currently observed peers."""
+        if (
+            self.identity is None
+            or self.world_state is None
+            or self.blockchain is None
+            or self.peer_manager is None
+            or self.server is None
+        ):
+            return []
+
+        from genesis.mobile.health_report import build_peer_health_report
+
+        world_id = await self._resolve_world_id()
+        chain_height = await self.blockchain.get_chain_height()
+        now = int(time.time())
+        interval = self._peer_observability_interval_seconds()
+        window_start = max(0, now - interval)
+        cards = self._collect_chain_contact_cards()
+        peers_by_id = {peer.node_id: peer for peer in self.peer_manager.get_all_peers()}
+        reports: list[dict[str, object]] = []
+
+        for node_id, card in cards.items():
+            if node_id == self.identity.node_id:
+                continue
+
+            peer = peers_by_id.get(node_id)
+            reachable = False
+            try:
+                reachable = bool(self.server.has_route_to_peer(node_id))
+            except Exception:
+                reachable = False
+            if peer is not None and getattr(peer, "status", "") == "active":
+                reachable = True
+
+            if not reachable and peer is None:
+                continue
+
+            peer_transports = list(getattr(peer, "transports", []) or []) if peer is not None else []
+            card_transports = list(card.get("transports", []) or [])
+            transport = str((peer_transports or card_transports or ["tcp"])[0] or "tcp").strip() or "tcp"
+            relay_success = reachable and ("relay" in (peer_transports or card_transports) or bool(card.get("relay_hints")))
+            chain_height_seen = int(getattr(peer, "chain_height", chain_height) or chain_height) if peer is not None else chain_height
+            light_sync_success = reachable and chain_height_seen >= max(0, chain_height - 1)
+            confidence = 0.85 if peer is not None and getattr(peer, "status", "") == "active" else (0.6 if reachable else 0.25)
+            reports.append(
+                build_peer_health_report(
+                    observer_node_id=self.identity.node_id,
+                    subject_node_id=node_id,
+                    world_id=world_id,
+                    transport=transport,
+                    reachable=reachable,
+                    success_count=1 if reachable else 0,
+                    failure_count=0 if reachable else 1,
+                    chain_height_seen=chain_height_seen,
+                    relay_success=relay_success,
+                    light_sync_success=light_sync_success,
+                    confidence=confidence,
+                    ttl=max(interval * 3, 900),
+                    latency_band=1 if reachable else 3,
+                    window_start=window_start,
+                    window_end=now,
+                )
+            )
+
+        return reports[: self._mobile_snapshot_peer_limit()]
+
+    async def _publish_peer_health_reports(self) -> int:
+        if self.mempool is None:
+            return 0
+        count = 0
+        for payload in await self._build_public_health_reports():
+            await self._submit_tx("PEER_HEALTH_REPORT", payload)
+            count += 1
+        if count:
+            logger.info("Published %d peer health report(s)", count)
+        return count
+
+    async def _persist_mobile_pairing_artifacts(self, *, force: bool = False) -> dict[str, object] | None:
+        """Persist the latest mobile pairing manifest and QR payload."""
+        if self.identity is None or self.world_state is None or self.blockchain is None:
+            return None
+
+        from genesis.mobile.pairing_qr import (
+            build_pairing_payload,
+            build_pairing_qr_text,
+            render_pairing_qr,
+        )
+        from genesis.mobile.peer_snapshot import build_snapshot_peers, select_bootstrap_peers
+        from genesis.utils.crypto import sha256
+
+        world_id = await self._resolve_world_id()
+        chain_height = await self.blockchain.get_chain_height()
+        now = int(time.time())
+        cards = self._collect_chain_contact_cards(include_self=True)
+        health_reports = {
+            node_id: self.world_state.get_peer_health_reports(node_id)
+            for node_id in cards.keys()
+        }
+        scored_peers = build_snapshot_peers(
+            cards,
+            health_reports,
+            chain_height,
+            now=now,
+            limit=self._mobile_snapshot_peer_limit(),
+        )
+        bootstrap_peers = select_bootstrap_peers(scored_peers, limit=6)
+        relay_hints = [
+            {
+                "node_id": entry.get("node_id", ""),
+                "priority": min(100, max(0, int(round(float(entry.get("derived_global_score", 0.0) or 0.0))))),
+            }
+            for entry in scored_peers
+            if bool((entry.get("contact_card", {}) or {}).get("capabilities", {}).get("relay"))
+        ][:6]
+        bind_epoch = now // self._mobile_pairing_ttl_seconds()
+        bind_token = sha256(
+            f"bind:{self.identity.node_id}:{world_id}:{bind_epoch}".encode("utf-8")
+        )[:24]
+        payload = build_pairing_payload(
+            gs_node_id=self.identity.node_id,
+            world_id=world_id,
+            bind_token=bind_token,
+            session_pubkey=self._session_public_key,
+            chain_height=chain_height,
+            bootstrap_peers=bootstrap_peers,
+            relay_hints=relay_hints,
+            private_key=self.identity.private_key,
+            issued_at=now,
+            expires_at=now + self._mobile_pairing_ttl_seconds(),
+        )
+        pairing_uri = build_pairing_qr_text(payload)
+        qr_text = render_pairing_qr(pairing_uri)
+
+        self._mobile_pairing_payload_path().write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._mobile_pairing_uri_path().write_text(pairing_uri, encoding="utf-8")
+        if qr_text:
+            self._mobile_pairing_qr_path().write_text(qr_text + "\n", encoding="utf-8")
+
+        if force or pairing_uri != self._last_mobile_pairing_uri:
+            from genesis.chronicle import console as con
+
+            self._last_mobile_pairing_uri = pairing_uri
+            display_qr = qr_text.splitlines()[:24] if qr_text else []
+            con.mobile_pairing_ready(
+                str(self._mobile_pairing_payload_path()),
+                str(self._mobile_pairing_uri_path()),
+                world_id,
+                bind_token,
+                display_qr,
+            )
+
+        return payload
+
+    async def _refresh_mobile_peer_snapshots_if_due(self, *, force: bool = False) -> None:
+        """Persist mobile bootstrap snapshots for already bound devices."""
+        if self.identity is None or self.world_state is None or self.blockchain is None:
+            return
+
+        now = time.time()
+        if not force and self._next_mobile_snapshot_at and now < self._next_mobile_snapshot_at:
+            return
+        self._next_mobile_snapshot_at = now + self._mobile_snapshot_interval_seconds()
+
+        from genesis.mobile.peer_snapshot import build_peer_snapshot, build_snapshot_peers
+
+        await self._persist_mobile_pairing_artifacts(force=force)
+
+        world_id = await self._resolve_world_id()
+        chain_height = await self.blockchain.get_chain_height()
+        cards = self._collect_chain_contact_cards(include_self=True)
+        health_reports = {
+            node_id: self.world_state.get_peer_health_reports(node_id)
+            for node_id in cards.keys()
+        }
+        peers = build_snapshot_peers(
+            cards,
+            health_reports,
+            chain_height,
+            now=int(now),
+            limit=self._mobile_snapshot_peer_limit(),
+            exclude_node_id=self.identity.node_id,
+        )
+        snapshot = build_peer_snapshot(
+            source_gs_node_id=self.identity.node_id,
+            world_id=world_id,
+            chain_height=chain_height,
+            peers=peers,
+            private_key=self.identity.private_key,
+            generated_at=int(now),
+        )
+        self._mobile_public_snapshot_path().write_text(
+            json.dumps(snapshot, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        for binding in self.world_state.get_mobile_bindings_for_gs(self.identity.node_id):
+            payload = {
+                "binding": {
+                    "bind_id": binding.get("bind_id", ""),
+                    "mobile_device_id": binding.get("mobile_device_id", ""),
+                    "permissions": list(binding.get("permissions", []) or []),
+                    "issued_at": binding.get("issued_at", 0),
+                    "expires_at": binding.get("expires_at", 0),
+                },
+                "snapshot": snapshot,
+            }
+            self._mobile_binding_snapshot_path(str(binding.get("bind_id", ""))).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+    async def _run_peer_observability_if_due(self, *, force: bool = False) -> None:
+        now = time.time()
+        if not force and self._next_peer_observability_at and now < self._next_peer_observability_at:
+            return
+        self._next_peer_observability_at = now + self._peer_observability_interval_seconds()
+        try:
+            await self._publish_self_contact_card_if_needed(force=force)
+            await self._publish_peer_health_reports()
+        except Exception as exc:
+            logger.debug("Peer observability publish failed: %s", exc)
+
     def _handle_public_reachability_change(self, reachable: bool) -> None:
         """Schedule an immediate contact-card refresh after public reachability changes."""
         if not reachable:
@@ -613,23 +1007,24 @@ class GenesisNode:
         except RuntimeError:
             return
         loop.create_task(self._refresh_local_peer_endpoint_if_needed(force=True))
+        loop.create_task(self._run_peer_observability_if_due(force=True))
+        loop.create_task(self._refresh_mobile_peer_snapshots_if_due(force=True))
 
     def _get_chain_seed_peers(self) -> list[tuple[str, str, int]]:
         """Return peer endpoints learned from the synced world state."""
         if self.world_state is None or self.identity is None:
             return []
 
-        seeds: list[tuple[int, int, str, str, int]] = []
-        for being in self.world_state.beings.values():
-            if being.node_id == self.identity.node_id or being.is_npc:
+        seeds: list[tuple[float, int, str, str, int]] = []
+        for node_id, card in self._collect_chain_contact_cards().items():
+            primary = self._primary_endpoint_from_contact_card(card)
+            if primary is None:
                 continue
-            address = str(getattr(being, "p2p_address", "") or "").strip()
-            port = int(getattr(being, "p2p_port", 0) or 0)
-            if not address or port <= 0 or not self._is_peer_endpoint_fresh(being):
-                continue
-            updated_at = int(getattr(being, "p2p_updated_at", 0) or 0)
-            relay_priority = 1 if self._is_relay_capable(being) else 0
-            seeds.append((relay_priority, updated_at, being.node_id, address, port))
+            address, port = primary
+            updated_at = int(card.get("updated_at", 0) or 0)
+            capabilities = dict(card.get("capabilities", {}) or {})
+            relay_priority = 1.0 if capabilities.get("relay") else 0.0
+            seeds.append((relay_priority, updated_at, node_id, address, port))
         seeds.sort(reverse=True)
         return [(node_id, address, port) for _, _, node_id, address, port in seeds]
 
@@ -817,7 +1212,9 @@ class GenesisNode:
 
         # 2. Generate or load identity
         from genesis.node.identity import NodeIdentity
+        from genesis.utils.crypto import public_key_from_private_key
         self.identity = NodeIdentity.generate_or_load(str(self.data_dir))
+        self._session_public_key = public_key_from_private_key(self.identity.private_key).hex()
         logger.info("Node ID: %s", self.identity.node_id[:16] + "...")
         is_first_run = not (self.data_dir / "being_state.json").exists()
 
@@ -941,6 +1338,7 @@ class GenesisNode:
 
             await self._sync_until_current(is_first_run)
             await self._ensure_chain_bootstrapped_after_sync(is_first_run)
+            self._world_id_cache = await self._resolve_world_id()
             logger.info("P2P network started on port %d", self.config.network.listen_port)
             if self._should_block_local_first_run(is_first_run):
                 raise RuntimeError(
@@ -1174,6 +1572,10 @@ class GenesisNode:
         )
         self._startup_ready.set()
         self._next_periodic_sync_at = time.time() + self._chain_sync_interval_seconds()
+        self._next_peer_observability_at = 0.0
+        self._next_mobile_snapshot_at = 0.0
+        await self._run_peer_observability_if_due(force=True)
+        await self._refresh_mobile_peer_snapshots_if_due(force=True)
 
         # Start main loop
         await self._main_loop()
@@ -1203,6 +1605,8 @@ class GenesisNode:
                 tick_start = time.time()
                 await self._run_periodic_sync_if_due()
                 await self._refresh_local_peer_endpoint_if_needed()
+                await self._run_peer_observability_if_due()
+                await self._refresh_mobile_peer_snapshots_if_due()
 
                 # 获取当前生命体状态
                 being_state = self.world_state.get_being(self.identity.node_id)
@@ -1396,6 +1800,8 @@ class GenesisNode:
                 while wait_time > 0 and not self._shutdown:
                     await self._run_periodic_sync_if_due()
                     await self._refresh_local_peer_endpoint_if_needed()
+                    await self._run_peer_observability_if_due()
+                    await self._refresh_mobile_peer_snapshots_if_due()
                     await asyncio.sleep(min(1.0, wait_time))
                     wait_time -= 1.0
                 if self._shutdown:
@@ -1743,6 +2149,24 @@ class GenesisNode:
             )
         elif tx_type == "FAILURE_ARCHIVE":
             self.world_state.apply_failure_archive(sender, data)
+        elif tx_type == "MENTOR_BOND":
+            self.world_state.apply_mentor_bond(sender, data)
+        elif tx_type == "INHERITANCE_SYNC":
+            self.world_state.apply_inheritance_sync(sender, data)
+        elif tx_type == "CIVILIZATION_SEED":
+            self.world_state.apply_civilization_seed(sender, data)
+        elif tx_type == "CONSENSUS_CASE":
+            self.world_state.apply_consensus_case(sender, data)
+        elif tx_type == "CONSENSUS_VERDICT":
+            self.world_state.apply_consensus_verdict(sender, data)
+        elif tx_type == "MOBILE_BIND":
+            self.world_state.apply_mobile_bind(sender, data)
+        elif tx_type == "MOBILE_UNBIND":
+            self.world_state.apply_mobile_unbind(sender, data)
+        elif tx_type == "PEER_CONTACT_CARD":
+            self.world_state.apply_peer_contact_card(sender, data)
+        elif tx_type == "PEER_HEALTH_REPORT":
+            self.world_state.apply_peer_health_report(sender, data)
         elif tx_type == "STATE_UPDATE":
             self.world_state.apply_state_update(sender, data)
         elif tx_type == "CONTRIBUTION_PROPOSE":

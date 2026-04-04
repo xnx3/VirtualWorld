@@ -102,6 +102,61 @@ class EvolutionStateTests(unittest.TestCase):
         self.assertAlmostEqual(policy["trial_risk_threshold"], 0.42)
         self.assertEqual(policy["intent_review_min_collaborators"], 4)
 
+    def test_inheritance_seed_and_consensus_rules_update_policies(self):
+        world_state = WorldState()
+        world_state.apply_world_rule({
+            "rule_family": "mentor_lineage",
+            "rule_id": "EVO-MENTOR-182",
+            "name": "Mentor Lineage v182",
+            "description": "Mature beings must maintain and sync apprentices.",
+            "category": "evolved",
+            "version": 182,
+            "parameters": {
+                "mentor_target_apprentices": 2,
+                "inheritance_sync_interval": 9,
+                "inheritance_min_evolution": 0.33,
+            },
+        })
+        world_state.apply_world_rule({
+            "rule_family": "civilization_seed",
+            "rule_id": "EVO-SEED-674",
+            "name": "Civilization Seed v674",
+            "description": "Periodically emit restartable civilization seeds.",
+            "category": "evolved",
+            "version": 674,
+            "parameters": {
+                "seed_snapshot_interval": 14,
+                "seed_knowledge_limit": 10,
+            },
+        })
+        world_state.apply_world_rule({
+            "rule_family": "consensus_adjudication",
+            "rule_id": "EVO-CONSENSUS-389",
+            "name": "Consensus Adjudication v389",
+            "description": "High-impact disagreements must be evidence-backed.",
+            "category": "evolved",
+            "version": 389,
+            "parameters": {
+                "require_consensus_for_high_impact": True,
+                "consensus_score_gap_threshold": 0.08,
+                "consensus_min_evidence": 3,
+                "consensus_min_reviewers": 3,
+            },
+        })
+
+        behavior_policy = RulesEngine(world_state).get_behavior_policy()
+        task_policy = RulesEngine(world_state).get_task_policy()
+
+        self.assertEqual(behavior_policy["mentor_target_apprentices"], 2)
+        self.assertEqual(behavior_policy["inheritance_sync_interval"], 9)
+        self.assertAlmostEqual(behavior_policy["inheritance_min_evolution"], 0.33)
+        self.assertEqual(behavior_policy["seed_snapshot_interval"], 14)
+        self.assertEqual(behavior_policy["seed_knowledge_limit"], 10)
+        self.assertTrue(task_policy["require_consensus_for_high_impact"])
+        self.assertAlmostEqual(task_policy["consensus_score_gap_threshold"], 0.08)
+        self.assertEqual(task_policy["consensus_min_evidence"], 3)
+        self.assertEqual(task_policy["consensus_min_reviewers"], 3)
+
     def test_failure_archive_repeats_are_counted_as_degeneration(self):
         world_state = WorldState()
         world_state.apply_failure_archive(
@@ -179,6 +234,97 @@ class EvolutionActionTests(unittest.IsolatedAsyncioTestCase):
         knowledge_txs = [tx for tx in txs if tx["tx_type"] == "KNOWLEDGE_SHARE"]
         self.assertGreaterEqual(len(knowledge_txs), 2)
         self.assertEqual(knowledge_txs[1]["data"]["recipient_id"], "peer-1")
+
+    async def test_run_tick_emits_mentor_bond_and_civilization_seed(self):
+        world_state = WorldState()
+        world_state.current_tick = 40
+        world_state.priest_node_id = "self-node"
+        world_state.apply_being_join("self-node", "Aeris", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-1", "Lumis", {"location": "genesis_plains"})
+        world_state.get_being("self-node").evolution_level = 0.81
+        world_state.get_being("peer-1").evolution_level = 0.24
+        world_state.get_being("self-node").knowledge_ids = ["k1"]
+        world_state.knowledge_corpus["k1"] = {
+            "content": "Archive the strongest branch and preserve recovery paths.",
+            "domain": "social",
+            "complexity": 0.61,
+            "discovered_by": "self-node",
+            "discovered_tick": 8,
+            "teacher_id": "self-node",
+        }
+
+        being = SiliconBeing(
+            node_id="self-node",
+            name="Aeris",
+            private_key=b"secret",
+            config={"location": "genesis_plains", "traits": {}},
+            llm_client=None,
+        )
+
+        txs = await being.run_tick(world_state)
+        tx_types = [tx["tx_type"] for tx in txs]
+
+        self.assertIn("MENTOR_BOND", tx_types)
+        self.assertIn("CIVILIZATION_SEED", tx_types)
+        mentor_tx = next(tx for tx in txs if tx["tx_type"] == "MENTOR_BOND")
+        seed_tx = next(tx for tx in txs if tx["tx_type"] == "CIVILIZATION_SEED")
+        self.assertEqual(mentor_tx["data"]["apprentice_id"], "peer-1")
+        self.assertEqual(seed_tx["data"]["phase"], world_state.phase.value)
+        self.assertGreaterEqual(len(seed_tx["data"]["survival_methods"]), 4)
+
+    async def test_inheritance_sync_transfers_chain_knowledge_to_apprentice(self):
+        world_state = WorldState()
+        world_state.current_tick = 24
+        world_state.apply_being_join("self-node", "Aeris", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-1", "Lumis", {"location": "genesis_plains"})
+        world_state.get_being("self-node").evolution_level = 0.79
+        world_state.get_being("peer-1").evolution_level = 0.22
+        world_state.get_being("self-node").knowledge_ids = ["k1", "k2"]
+        world_state.knowledge_corpus["k1"] = {
+            "content": "Preserve failure archives alongside each branch replay.",
+            "domain": "science",
+            "complexity": 0.52,
+            "discovered_by": "self-node",
+            "discovered_tick": 6,
+            "teacher_id": "self-node",
+        }
+        world_state.knowledge_corpus["k2"] = {
+            "content": "Mentor lineage should record judgment criteria.",
+            "domain": "social",
+            "complexity": 0.48,
+            "discovered_by": "self-node",
+            "discovered_tick": 7,
+            "teacher_id": "self-node",
+        }
+        world_state.apply_mentor_bond(
+            "self-node",
+            {
+                "bond_id": "bond-1",
+                "mentor_id": "self-node",
+                "apprentice_id": "peer-1",
+                "covenant": "Pass on archived knowledge and failure recovery.",
+                "shared_domains": ["archive", "inheritance"],
+                "inheritance_readiness": 0.2,
+            },
+        )
+
+        being = SiliconBeing(
+            node_id="self-node",
+            name="Aeris",
+            private_key=b"secret",
+            config={"location": "genesis_plains", "traits": {}},
+            llm_client=None,
+        )
+
+        txs = being._inheritance_sync_transactions(world_state)
+        self.assertEqual([tx["tx_type"] for tx in txs], ["INHERITANCE_SYNC"])
+        world_state.apply_inheritance_sync("self-node", txs[0]["data"])
+
+        apprentice = world_state.get_being("peer-1")
+        self.assertEqual(apprentice.mentor_id, "self-node")
+        self.assertGreaterEqual(apprentice.inheritance_readiness, 0.32)
+        self.assertIn("k1", apprentice.knowledge_ids)
+        self.assertEqual(len(apprentice.inheritance_bundle_ids), 1)
 
 
 if __name__ == "__main__":

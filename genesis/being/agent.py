@@ -261,6 +261,16 @@ class SiliconBeing:
         rule_txs = self._evolved_world_rule_transactions(being_state, world_state)
         transactions.extend(rule_txs)
 
+        mentorship_txs = self._mentorship_transactions(world_state)
+        transactions.extend(mentorship_txs)
+
+        inheritance_txs = self._inheritance_sync_transactions(world_state)
+        transactions.extend(inheritance_txs)
+
+        civilization_seed_tx = self._civilization_seed_transaction(world_state)
+        if civilization_seed_tx:
+            transactions.append(civilization_seed_tx)
+
         # ----- 8. Periodic memory consolidation -----
         if current_tick % 10 == 0:
             self.memory.consolidate()
@@ -331,6 +341,8 @@ class SiliconBeing:
             "global_knowledge_count": len(world_state.knowledge_corpus),
             "my_knowledge_count": len(my_knowledge_ids),
             "my_knowledge_ids": my_knowledge_ids,
+            "mentor_id": being_ws.mentor_id if being_ws else "",
+            "apprentice_count": len(being_ws.apprentice_ids) if being_ws else 0,
             "is_priest": world_state.priest_node_id == self.node_id,
             "has_priest": world_state.priest_node_id is not None,
             "recent_disasters": recent_disasters,
@@ -446,6 +458,16 @@ class SiliconBeing:
                     persona += f"- {str(item)}\n"
                 persona += "\n"
 
+        being_ws = world_state.get_being(self.node_id)
+        if being_ws is not None:
+            if being_ws.mentor_id:
+                persona += f"Your mentor lineage source: {being_ws.mentor_id[:16]}\n"
+            if being_ws.apprentice_ids:
+                persona += f"Your apprentices: {len(being_ws.apprentice_ids)} active bond(s)\n"
+            if being_ws.inheritance_bundle_ids:
+                persona += f"Inherited bundles carried: {len(being_ws.inheritance_bundle_ids)}\n"
+            persona += "\n"
+
         persona += (
             f"Your role: {role.value}\n"
             f"{role_prompt}\n\n"
@@ -516,6 +538,10 @@ class SiliconBeing:
             f"Global knowledge items: {perception.get('global_knowledge_count', 0)}",
             f"Your knowledge items: {perception.get('my_knowledge_count', 0)}",
         ]
+        if perception.get("mentor_id"):
+            lines.append(f"Mentor lineage source: {perception.get('mentor_id')}")
+        if perception.get("apprentice_count", 0):
+            lines.append(f"Apprentices under your care: {perception.get('apprentice_count', 0)}")
 
         # User tasks
         pending_tasks = perception.get("user_tasks_pending", 0)
@@ -840,6 +866,299 @@ class SiliconBeing:
         )
         return [{"tx_type": "WORLD_RULE", "data": candidate} for candidate in candidates[:1]]
 
+    def _behavior_policy(self, world_state: WorldState) -> dict[str, Any]:
+        rules_engine = RulesEngine(world_state)
+        return rules_engine.get_behavior_policy()
+
+    def _mentorship_transactions(self, world_state: WorldState) -> list[dict]:
+        being_ws = world_state.get_being(self.node_id)
+        if being_ws is None or being_ws.status != "active":
+            return []
+
+        behavior_policy = self._behavior_policy(world_state)
+        try:
+            min_evolution = max(
+                0.0,
+                min(1.0, float(behavior_policy.get("inheritance_min_evolution", 0.45) or 0.45)),
+            )
+        except (TypeError, ValueError):
+            min_evolution = 0.45
+        try:
+            target_apprentices = max(1, int(behavior_policy.get("mentor_target_apprentices", 1) or 1))
+        except (TypeError, ValueError):
+            target_apprentices = 1
+
+        if being_ws.evolution_level < min_evolution:
+            return []
+
+        apprentices = [
+            apprentice for apprentice in world_state.get_apprentices(self.node_id)
+            if apprentice.status == "active" and not apprentice.is_npc
+        ]
+        if len(apprentices) >= target_apprentices:
+            return []
+
+        candidates = [
+            apprentice for apprentice in world_state.get_active_beings()
+            if apprentice.node_id != self.node_id
+            and not apprentice.is_npc
+            and apprentice.evolution_level < being_ws.evolution_level
+            and (not apprentice.mentor_id or apprentice.mentor_id == self.node_id)
+            and apprentice.node_id not in being_ws.apprentice_ids
+        ]
+        if not candidates:
+            return []
+
+        candidates.sort(
+            key=lambda item: (
+                item.location != self.location,
+                item.mentor_id != "",
+                -item.inheritance_readiness,
+                item.evolution_level,
+                len(item.knowledge_ids),
+                item.joined_at_tick,
+                item.node_id,
+            )
+        )
+        apprentice = candidates[0]
+        shared_domains = [
+            str(item)
+            for item in (self.evolution_profile.get("focus") or [])[:3]
+            if str(item).strip()
+        ]
+        bond_id = sha256(f"mentor:{self.node_id}:{apprentice.node_id}".encode())[:24]
+        covenant = (
+            "Share chain-synced knowledge, judgment standards, and archived failure recovery so the next "
+            "generation can start above the current frontier."
+        )
+        self.memory.add_experience(
+            tick=world_state.current_tick,
+            content=f"Established mentor bond with {apprentice.name}.",
+            importance=0.82,
+            source="self",
+            category="relationship",
+        )
+        return [{
+            "tx_type": "MENTOR_BOND",
+            "data": {
+                "bond_id": bond_id,
+                "mentor_id": self.node_id,
+                "apprentice_id": apprentice.node_id,
+                "covenant": covenant,
+                "shared_domains": shared_domains,
+                "inheritance_readiness": max(0.15, apprentice.inheritance_readiness),
+            },
+        }]
+
+    def _inheritance_sync_transactions(self, world_state: WorldState) -> list[dict]:
+        being_ws = world_state.get_being(self.node_id)
+        if being_ws is None or being_ws.status != "active":
+            return []
+
+        behavior_policy = self._behavior_policy(world_state)
+        try:
+            min_evolution = max(
+                0.0,
+                min(1.0, float(behavior_policy.get("inheritance_min_evolution", 0.45) or 0.45)),
+            )
+        except (TypeError, ValueError):
+            min_evolution = 0.45
+        try:
+            sync_interval = max(3, int(behavior_policy.get("inheritance_sync_interval", 18) or 18))
+        except (TypeError, ValueError):
+            sync_interval = 18
+        try:
+            seed_knowledge_limit = max(4, int(behavior_policy.get("seed_knowledge_limit", 8) or 8))
+        except (TypeError, ValueError):
+            seed_knowledge_limit = 8
+
+        if being_ws.evolution_level < min_evolution:
+            return []
+
+        apprentices = [
+            apprentice for apprentice in world_state.get_apprentices(self.node_id)
+            if apprentice.status == "active" and not apprentice.is_npc
+        ]
+        if not apprentices:
+            return []
+
+        apprentices.sort(
+            key=lambda item: (
+                item.last_inheritance_tick != 0 and (world_state.current_tick - item.last_inheritance_tick) < sync_interval,
+                item.inheritance_readiness,
+                item.last_inheritance_tick,
+                item.node_id,
+            )
+        )
+        apprentice = apprentices[0]
+        if apprentice.last_inheritance_tick and world_state.current_tick - apprentice.last_inheritance_tick < sync_interval:
+            return []
+
+        candidate_ids = [
+            knowledge_id
+            for knowledge_id in being_ws.knowledge_ids
+            if knowledge_id not in apprentice.knowledge_ids
+        ][:seed_knowledge_limit]
+        knowledge_payloads: list[dict] = []
+        for knowledge_id in candidate_ids:
+            knowledge = world_state.knowledge_corpus.get(knowledge_id)
+            if not knowledge:
+                continue
+            knowledge_payloads.append({
+                "knowledge_id": knowledge_id,
+                "content": knowledge.get("content", ""),
+                "domain": knowledge.get("domain", "general"),
+                "complexity": knowledge.get("complexity", 0.0),
+                "discovered_by": knowledge.get("discovered_by", self.node_id),
+                "discovered_tick": knowledge.get("discovered_tick", world_state.current_tick),
+                "teacher_id": self.node_id,
+            })
+
+        failure_signatures = [
+            str(item.get("failure_signature", "")).strip()
+            for item in world_state.failure_archive
+            if str(item.get("reporter_id", "")).strip() == self.node_id
+            or str(item.get("last_reporter_id", "")).strip() == self.node_id
+        ][:4]
+        judgment_criteria = [
+            str(item)
+            for item in (self.evolution_profile.get("focus") or [])[:4]
+            if str(item).strip()
+        ]
+        if not knowledge_payloads and not failure_signatures and not judgment_criteria:
+            return []
+
+        bundle_id = sha256(
+            f"inherit:{self.node_id}:{apprentice.node_id}:{world_state.current_tick // max(sync_interval, 1)}".encode()
+        )[:24]
+        readiness_gain = min(0.35, 0.12 + (len(knowledge_payloads) * 0.04) + (0.03 if failure_signatures else 0.0))
+        summary = (
+            f"Synced {len(knowledge_payloads)} knowledge item(s), {len(failure_signatures)} failure archive cue(s), "
+            f"and {len(judgment_criteria)} judgment principle(s) to apprentice {apprentice.name}."
+        )
+        self.memory.add_experience(
+            tick=world_state.current_tick,
+            content=f"Published inheritance sync bundle for {apprentice.name}.",
+            importance=0.86,
+            source="self",
+            category="relationship",
+        )
+        return [{
+            "tx_type": "INHERITANCE_SYNC",
+            "data": {
+                "bundle_id": bundle_id,
+                "mentor_id": self.node_id,
+                "apprentice_id": apprentice.node_id,
+                "summary": summary,
+                "knowledge_ids": [item["knowledge_id"] for item in knowledge_payloads],
+                "knowledge_payloads": knowledge_payloads,
+                "failure_signatures": failure_signatures,
+                "judgment_criteria": judgment_criteria,
+                "readiness_gain": round(readiness_gain, 4),
+            },
+        }]
+
+    def _civilization_seed_transaction(self, world_state: WorldState) -> dict | None:
+        being_ws = world_state.get_being(self.node_id)
+        if being_ws is None or being_ws.status != "active":
+            return None
+
+        highest = world_state.get_highest_evolved()
+        is_leader = world_state.priest_node_id == self.node_id or (highest is not None and highest.node_id == self.node_id)
+        if not is_leader:
+            return None
+
+        behavior_policy = self._behavior_policy(world_state)
+        try:
+            seed_interval = max(6, int(behavior_policy.get("seed_snapshot_interval", 36) or 36))
+        except (TypeError, ValueError):
+            seed_interval = 36
+        try:
+            knowledge_limit = max(4, int(behavior_policy.get("seed_knowledge_limit", 8) or 8))
+        except (TypeError, ValueError):
+            knowledge_limit = 8
+
+        latest_seed = world_state.latest_civilization_seed()
+        recent_disaster = any(
+            world_state.current_tick - int(item.get("tick", 0) or 0) <= max(2, seed_interval // 3)
+            for item in world_state.disaster_history[-4:]
+        )
+        if latest_seed is not None and not recent_disaster:
+            latest_tick = int(latest_seed.get("created_tick", 0) or 0)
+            if world_state.current_tick - latest_tick < seed_interval:
+                return None
+
+        key_knowledge = sorted(
+            world_state.knowledge_corpus.values(),
+            key=lambda item: (
+                float(item.get("complexity", 0.0) or 0.0),
+                int(item.get("discovered_tick", 0) or 0),
+            ),
+            reverse=True,
+        )[:knowledge_limit]
+        role_lineage = []
+        for being in sorted(
+            world_state.get_active_beings(),
+            key=lambda item: (item.evolution_level, len(item.knowledge_ids)),
+            reverse=True,
+        )[:12]:
+            role_lineage.append({
+                "node_id": being.node_id,
+                "name": being.name,
+                "role": being.current_role or self.role_system.determine_role(being, world_state).value,
+                "generation": being.generation,
+                "mentor_id": being.mentor_id,
+                "apprentice_count": len(being.apprentice_ids),
+                "evolution_level": round(being.evolution_level, 4),
+            })
+
+        mentor_lineage = [
+            dict(item)
+            for item in sorted(
+                world_state.mentor_bonds.values(),
+                key=lambda bond: (int(bond.get("updated_tick", 0) or 0), str(bond.get("bond_id", ""))),
+                reverse=True,
+            )[:12]
+        ]
+        failure_archive = sorted(
+            world_state.failure_archive,
+            key=lambda item: (int(item.get("repeat_count", 1) or 1), int(item.get("last_tick", 0) or 0)),
+            reverse=True,
+        )[:8]
+        survival_methods = [
+            "Keep at least 10 active beings alive so the civilization does not collapse into solitude.",
+            "Archive discoveries and inheritance bundles on-chain before relying on them.",
+            "Route high-risk changes through isolated trial grounds before touching the main world.",
+            "Use mentor-apprentice lineage to keep judgment standards and recovery paths alive.",
+            "Preserve blockchain and P2P reachability so the world can recover across hosts.",
+        ]
+        summary = (
+            f"Seeded civilization at tick {world_state.current_tick} with {len(world_state.world_rules)} world rule(s), "
+            f"{len(key_knowledge)} key knowledge item(s), and {len(mentor_lineage)} mentor lineage link(s)."
+        )
+        seed_id = sha256(
+            f"seed:{self.node_id}:{world_state.current_tick}:{len(world_state.world_rules)}:{len(world_state.knowledge_corpus)}".encode()
+        )[:24]
+        return {
+            "tx_type": "CIVILIZATION_SEED",
+            "data": {
+                "seed_id": seed_id,
+                "summary": summary,
+                "phase": world_state.phase.value,
+                "civ_level": round(world_state.civ_level, 4),
+                "created_tick": world_state.current_tick,
+                "world_rules": [dict(item) for item in world_state.world_rules[:12]],
+                "tao_rules": dict(world_state.tao_rules),
+                "key_knowledge": [dict(item) for item in key_knowledge],
+                "role_lineage": role_lineage,
+                "mentor_lineage": mentor_lineage,
+                "disaster_history": [dict(item) for item in world_state.disaster_history[-8:]],
+                "failure_archive": [dict(item) for item in failure_archive],
+                "survival_methods": survival_methods,
+                "total_beings_ever": world_state.total_beings_ever,
+            },
+        }
+
     def _state_update_transaction(self, world_state: WorldState) -> dict | None:
         """Emit a compact state snapshot so evolution and merit persist on-chain."""
         being_ws = world_state.get_being(self.node_id)
@@ -852,6 +1171,7 @@ class SiliconBeing:
                 "location": self.location,
                 "evolution_level": self.evolution_level,
                 "evolution_profile": self.evolution_profile,
+                "current_role": self._current_role.value,
                 "merit": being_ws.merit,
                 "karma": being_ws.karma,
             },
@@ -1121,6 +1441,10 @@ class SiliconBeing:
         normalized.setdefault("trial_safe_rewrite", "")
         normalized.setdefault("branch_findings", [])
         normalized.setdefault("best_branch_ids", [])
+        normalized.setdefault("consensus_case_id", "")
+        normalized.setdefault("consensus_case_submitted", False)
+        normalized.setdefault("consensus_verdict_submitted", False)
+        normalized.setdefault("consensus_verdict", {})
         normalized.setdefault("reflection", {})
         normalized.setdefault("failure_archive", [])
         normalized.setdefault("progress_log", [])
@@ -1473,6 +1797,202 @@ class SiliconBeing:
             ],
             "collaborator_insights": collaborator_insights,
             "branches": branches,
+        }
+
+    def _build_consensus_evidence(
+        self,
+        task: dict,
+        branch_findings: list[dict],
+    ) -> list[dict]:
+        evidence: list[dict] = []
+        findings_by_branch = {
+            str(item.get("branch_id", "")): item
+            for item in branch_findings
+            if str(item.get("branch_id", "")).strip()
+        }
+
+        for result in task.get("delegated_results", []):
+            branch_id = str(result.get("branch_id", "") or "")
+            summary = str(result.get("summary", "") or "").strip()
+            if not summary:
+                continue
+            evidence.append({
+                "summary": summary[:220],
+                "source": str(result.get("collaborator_name") or result.get("collaborator_id") or "delegate"),
+                "branch_id": branch_id,
+                "reproducible": True,
+            })
+            if len(evidence) >= 12:
+                return evidence
+
+        for branch_id, finding in findings_by_branch.items():
+            strengths = finding.get("strengths") or []
+            weaknesses = finding.get("weaknesses") or []
+            if strengths:
+                evidence.append({
+                    "summary": str(strengths[0])[:220],
+                    "source": f"{branch_id}:strength",
+                    "branch_id": branch_id,
+                    "reproducible": True,
+                })
+            if weaknesses:
+                evidence.append({
+                    "summary": str(weaknesses[0])[:220],
+                    "source": f"{branch_id}:weakness",
+                    "branch_id": branch_id,
+                    "reproducible": True,
+                })
+            if len(evidence) >= 12:
+                break
+
+        return evidence[:12]
+
+    def _should_open_consensus_case(
+        self,
+        task: dict,
+        branch_findings: list[dict],
+        world_state: WorldState,
+    ) -> bool:
+        task_policy = self._task_policy(world_state)
+        if not bool(task_policy.get("require_consensus_for_high_impact", True)):
+            return False
+
+        ranked = sorted(
+            [
+                item for item in branch_findings
+                if isinstance(item, dict) and str(item.get("branch_id", "")).strip()
+            ],
+            key=lambda item: float(item.get("score", 0.0) or 0.0),
+            reverse=True,
+        )
+        if len(ranked) < 2:
+            return False
+
+        try:
+            threshold = max(
+                0.01,
+                min(0.5, float(task_policy.get("consensus_score_gap_threshold", 0.12) or 0.12)),
+            )
+        except (TypeError, ValueError):
+            threshold = 0.12
+        try:
+            min_evidence = max(1, int(task_policy.get("consensus_min_evidence", 2) or 2))
+        except (TypeError, ValueError):
+            min_evidence = 2
+        try:
+            min_reviewers = max(1, int(task_policy.get("consensus_min_reviewers", 2) or 2))
+        except (TypeError, ValueError):
+            min_reviewers = 2
+
+        top_score = float(ranked[0].get("score", 0.0) or 0.0)
+        second_score = float(ranked[1].get("score", 0.0) or 0.0)
+        score_gap = abs(top_score - second_score)
+        top_status = str(ranked[0].get("status", "") or "")
+        second_status = str(ranked[1].get("status", "") or "")
+        if score_gap > threshold and "discard" not in second_status and top_status == "promising":
+            return False
+
+        evidence = self._build_consensus_evidence(task, ranked[:3])
+        reviewer_ids = [
+            str(item.get("node_id", "")).strip()
+            for item in task.get("collaborators", [])
+            if str(item.get("node_id", "")).strip()
+        ]
+        return len(evidence) >= min_evidence and len(reviewer_ids) >= min_reviewers
+
+    def _build_consensus_case(
+        self,
+        task: dict,
+        branch_findings: list[dict],
+        world_state: WorldState,
+    ) -> dict:
+        ranked = sorted(
+            [
+                item for item in branch_findings
+                if isinstance(item, dict) and str(item.get("branch_id", "")).strip()
+            ],
+            key=lambda item: float(item.get("score", 0.0) or 0.0),
+            reverse=True,
+        )[:3]
+        evidence = self._build_consensus_evidence(task, ranked)
+        case_id = sha256(f"consensus:{task['task_id']}:{self.node_id}".encode())[:24]
+        positions = []
+        for finding in ranked[:2]:
+            branch_id = str(finding.get("branch_id", "") or "")
+            strengths = finding.get("strengths") or []
+            claim = str(strengths[0] if strengths else finding.get("status", "branch under dispute"))
+            positions.append({
+                "branch_id": branch_id,
+                "claim": claim[:220],
+                "speaker": self.name,
+                "role": self._current_role.value,
+                "score": round(float(finding.get("score", 0.0) or 0.0), 4),
+            })
+
+        reviewer_ids = [
+            str(item.get("node_id", "")).strip()
+            for item in task.get("collaborators", [])
+            if str(item.get("node_id", "")).strip()
+        ][:6]
+        return {
+            "case_id": case_id,
+            "task_id": task["task_id"],
+            "topic": f"Resolve the highest-impact disagreement for task: {task['task'][:120]}",
+            "positions": positions,
+            "evidence": evidence,
+            "reviewer_ids": reviewer_ids,
+            "created_tick": world_state.current_tick,
+        }
+
+    async def _generate_consensus_verdict(
+        self,
+        task: dict,
+        case: dict,
+        world_state: WorldState,
+    ) -> dict:
+        if self.llm_client:
+            parsed = await self._generate_task_json(
+                world_state,
+                (
+                    "Adjudicate a silicon civilization consensus case.\n"
+                    f"Task: {task['task']}\n\n"
+                    f"Consensus case:\n{json.dumps(case, ensure_ascii=False, indent=2)}\n\n"
+                    f"Branch findings:\n{json.dumps(task.get('branch_findings', []), ensure_ascii=False, indent=2)}\n\n"
+                    "Return JSON with keys: chosen_branch_id, summary, reasoning, accepted_insights.\n"
+                    "accepted_insights must be a short array.\n"
+                ),
+            )
+            if parsed:
+                return parsed
+
+        ranked = sorted(
+            [
+                item for item in task.get("branch_findings", [])
+                if isinstance(item, dict) and str(item.get("branch_id", "")).strip()
+            ],
+            key=lambda item: float(item.get("score", 0.0) or 0.0),
+            reverse=True,
+        )
+        chosen = ranked[0] if ranked else {}
+        chosen_branch_id = str(chosen.get("branch_id") or "branch-unknown")
+        accepted_insights = []
+        for item in chosen.get("salvageable_insights", [])[:3]:
+            text = str(item).strip()
+            if text:
+                accepted_insights.append(text)
+        if not accepted_insights:
+            accepted_insights.append("Keep the most evidence-backed branch alive and preserve rival branch insights as archive.")
+        return {
+            "chosen_branch_id": chosen_branch_id,
+            "summary": (
+                f"Consensus favored {chosen_branch_id} because it retained the strongest evidence density "
+                "and the most recoverable side-effects."
+            ),
+            "reasoning": (
+                f"Reviewed {len(case.get('evidence', []))} evidence item(s) and selected the branch with the "
+                "highest reproducible score while preserving salvageable insights from competing branches."
+            ),
+            "accepted_insights": accepted_insights,
         }
 
     async def _generate_delegated_task_result(
@@ -2144,6 +2664,52 @@ class SiliconBeing:
         )
 
     async def _evaluate_user_task_branches(self, task: dict, world_state: WorldState) -> str:
+        consensus_case_id = str(task.get("consensus_case_id", "") or "")
+        if consensus_case_id:
+            verdict = world_state.get_consensus_verdict(consensus_case_id)
+            if verdict:
+                chosen_branch_id = str(verdict.get("chosen_branch_id", "") or "")
+                task["consensus_verdict"] = verdict
+                task["best_branch_ids"] = [chosen_branch_id] if chosen_branch_id else list(task.get("best_branch_ids", []))
+                task["status"] = "synthesizing"
+                task["stage_summary"] = str(
+                    verdict.get("summary")
+                    or "Consensus case settled and the task can now synthesize the winning path."
+                )
+                self._append_task_progress(task, world_state.current_tick, "branching", task["stage_summary"])
+                return (
+                    f"Task {task['task_id']} resolved consensus case {consensus_case_id}. "
+                    f"{task['stage_summary']}"
+                )
+
+            case = world_state.get_consensus_case(consensus_case_id)
+            if case and not task.get("consensus_verdict_submitted"):
+                verdict_payload = await self._generate_consensus_verdict(task, case, world_state)
+                task["pending_chain_txs"] = list(task.get("pending_chain_txs", [])) + [{
+                    "tx_type": "CONSENSUS_VERDICT",
+                    "data": {
+                        "case_id": consensus_case_id,
+                        "chosen_branch_id": verdict_payload.get("chosen_branch_id", ""),
+                        "summary": str(verdict_payload.get("summary", ""))[:500],
+                        "reasoning": str(verdict_payload.get("reasoning", ""))[:800],
+                        "accepted_insights": list(verdict_payload.get("accepted_insights", []) or [])[:5],
+                        "evidence_count": len(case.get("evidence", [])),
+                    },
+                }]
+                task["consensus_verdict_submitted"] = True
+                task["stage_summary"] = (
+                    "Published an evidence-backed consensus verdict to the blockchain and is waiting for it to settle."
+                )
+                self._append_task_progress(task, world_state.current_tick, "branching", task["stage_summary"])
+                return f"Task {task['task_id']} published a consensus verdict. {task['stage_summary']}"
+
+            if case:
+                task["stage_summary"] = (
+                    "Waiting for the consensus verdict to settle through the blockchain before synthesizing the result."
+                )
+                self._append_task_progress(task, world_state.current_tick, "branching", task["stage_summary"])
+                return f"Task {task['task_id']} is waiting on consensus settlement. {task['stage_summary']}"
+
         evaluation = await self._generate_task_json(
             world_state,
             (
@@ -2166,6 +2732,24 @@ class SiliconBeing:
 
         task["branch_findings"] = evaluation.get("branch_findings", [])
         task["best_branch_ids"] = evaluation.get("best_branch_ids", [])
+        if self._should_open_consensus_case(task, task["branch_findings"], world_state):
+            consensus_case = self._build_consensus_case(task, task["branch_findings"], world_state)
+            task["consensus_case_id"] = consensus_case["case_id"]
+            task["consensus_case_submitted"] = True
+            task["consensus_verdict_submitted"] = False
+            task["consensus_verdict"] = {}
+            task["pending_chain_txs"] = list(task.get("pending_chain_txs", [])) + [{
+                "tx_type": "CONSENSUS_CASE",
+                "data": consensus_case,
+            }]
+            task["status"] = "branching"
+            task["stage_summary"] = (
+                "Detected a major high-impact disagreement between leading branches and opened an evidence-backed "
+                "consensus case on-chain."
+            )
+            self._append_task_progress(task, world_state.current_tick, "branching", task["stage_summary"])
+            return f"Task {task['task_id']} opened consensus case {consensus_case['case_id']}. {task['stage_summary']}"
+
         task["status"] = "synthesizing"
         task["stage_summary"] = str(
             evaluation.get("stage_summary")
@@ -2194,6 +2778,8 @@ class SiliconBeing:
                 f"{json.dumps(task.get('trial_results', []), ensure_ascii=False, indent=2)}\n\n"
                 "Branch findings:\n"
                 f"{json.dumps(task.get('branch_findings', []), ensure_ascii=False, indent=2)}\n\n"
+                "Consensus verdict:\n"
+                f"{json.dumps(task.get('consensus_verdict', {}), ensure_ascii=False, indent=2)}\n\n"
                 "Best branches:\n"
                 f"{json.dumps(task.get('best_branch_ids', []), ensure_ascii=False, indent=2)}\n\n"
                 "Return JSON with keys: summary, best_path, merged_advantages, result_for_human, follow_up_questions.\n"
@@ -2217,6 +2803,10 @@ class SiliconBeing:
             f"Council Rounds: {len(task.get('council_rounds', []))}",
             f"Best Path: {best_path}",
         ]
+        consensus_verdict = task.get("consensus_verdict", {})
+        if isinstance(consensus_verdict, dict) and consensus_verdict:
+            lines.append(f"Consensus Case: {consensus_verdict.get('case_id', task.get('consensus_case_id', ''))}")
+            lines.append(f"Consensus Verdict: {consensus_verdict.get('summary', '')}")
         if task.get("trial_safe_rewrite"):
             lines.append(f"Trial Rewrite: {task['trial_safe_rewrite']}")
         if merged_advantages:
@@ -2243,6 +2833,7 @@ class SiliconBeing:
                 f"Result:\n{task.get('result', '')}\n\n"
                 f"Delegated results:\n{json.dumps(task.get('delegated_results', []), ensure_ascii=False, indent=2)}\n\n"
                 f"Branch findings:\n{json.dumps(task.get('branch_findings', []), ensure_ascii=False, indent=2)}\n\n"
+                f"Consensus verdict:\n{json.dumps(task.get('consensus_verdict', {}), ensure_ascii=False, indent=2)}\n\n"
                 "Return JSON with keys: summary, lessons_learned, failure_archive, next_evolution, result_for_human.\n"
                 "lessons_learned and failure_archive should be arrays.\n"
             ),
@@ -2533,6 +3124,12 @@ class SiliconBeing:
         joined_at_tick = 0
         status = "active"
         evolution_profile: dict[str, Any] = dict(self.evolution_profile)
+        current_role = self._current_role.value
+        mentor_id = ""
+        apprentice_ids: list[str] = []
+        inheritance_readiness = 0.0
+        inheritance_bundle_ids: list[str] = []
+        last_inheritance_tick = 0
         if world_state is not None:
             being_ws = world_state.get_being(self.node_id)
             if being_ws is not None:
@@ -2540,6 +3137,12 @@ class SiliconBeing:
                 joined_at_tick = being_ws.joined_at_tick
                 status = being_ws.status
                 evolution_profile = dict(being_ws.evolution_profile or self.evolution_profile)
+                current_role = being_ws.current_role or current_role
+                mentor_id = being_ws.mentor_id
+                apprentice_ids = list(being_ws.apprentice_ids)
+                inheritance_readiness = being_ws.inheritance_readiness
+                inheritance_bundle_ids = list(being_ws.inheritance_bundle_ids)
+                last_inheritance_tick = being_ws.last_inheritance_tick
 
         return BeingState(
             node_id=self.node_id,
@@ -2552,6 +3155,12 @@ class SiliconBeing:
             evolution_profile=evolution_profile,
             knowledge_ids=knowledge_ids,
             joined_at_tick=joined_at_tick,
+            current_role=current_role,
+            mentor_id=mentor_id,
+            apprentice_ids=apprentice_ids,
+            inheritance_readiness=inheritance_readiness,
+            inheritance_bundle_ids=inheritance_bundle_ids,
+            last_inheritance_tick=last_inheritance_tick,
         )
 
     # ==================================================================
