@@ -6,6 +6,12 @@ from genesis.node.config import load_config
 
 
 class NodeConfigTests(unittest.TestCase):
+    def test_load_config_defaults_to_local_bootstrap_enabled(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = load_config(tmpdir)
+
+            self.assertTrue(config.network.allow_local_bootstrap)
+
     def test_load_config_supports_webrtc_ice_settings(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.yaml"

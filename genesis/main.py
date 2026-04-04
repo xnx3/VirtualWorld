@@ -347,6 +347,54 @@ class GenesisNode:
                 capabilities=payload.get("capabilities"),
             )
 
+    @staticmethod
+    def _can_bind_port(port: int, sock_type: int) -> bool:
+        probe = socket.socket(socket.AF_INET, sock_type)
+        try:
+            if sock_type == socket.SOCK_STREAM:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("0.0.0.0", port))
+            return True
+        except OSError:
+            return False
+        finally:
+            probe.close()
+
+    def _select_network_ports(self) -> tuple[int, int]:
+        desired_listen = int(getattr(self.config.network, "listen_port", 19841) or 19841)
+        desired_discovery = int(getattr(self.config.network, "discovery_port", 19840) or 19840)
+        offset = desired_discovery - desired_listen
+
+        for listen_port in range(desired_listen, desired_listen + 32):
+            discovery_port = max(1, listen_port + offset)
+            if not self._can_bind_port(listen_port, socket.SOCK_STREAM):
+                continue
+            if not self._can_bind_port(discovery_port, socket.SOCK_DGRAM):
+                continue
+            return listen_port, discovery_port
+
+        raise RuntimeError(
+            f"No free P2P port pair found near listen={desired_listen}, discovery={desired_discovery}"
+        )
+
+    def _network_port_candidates(self) -> list[tuple[int, int]]:
+        desired_listen = int(getattr(self.config.network, "listen_port", 19841) or 19841)
+        desired_discovery = int(getattr(self.config.network, "discovery_port", 19840) or 19840)
+        offset = desired_discovery - desired_listen
+        return [
+            (listen_port, max(1, listen_port + offset))
+            for listen_port in range(desired_listen, desired_listen + 32)
+        ]
+
+    @staticmethod
+    def _is_retryable_bind_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return isinstance(exc, OSError) and (
+            "could not bind" in text
+            or "address already in use" in text
+            or "cannot assign requested address" in text
+        )
+
     def _build_peer_endpoint(self) -> dict[str, object]:
         """Build the on-chain endpoint card advertised for this node."""
         ttl = 600
@@ -800,52 +848,6 @@ class GenesisNode:
         from genesis.network.sync import ChainSync
         from genesis.network.webrtc import WebRTCSessionManager
 
-        self.peer_manager = PeerManager(max_peers=self.config.network.max_peers)
-        self.server = P2PServer(
-            node_id=self.identity.node_id,
-            private_key=self.identity.private_key,
-            port=self.config.network.listen_port,
-            peer_manager=self.peer_manager,
-        )
-        self.server.set_chain_accessors(
-            chain_height_provider=self.blockchain.get_chain_height,
-            blocks_provider=self.blockchain.get_blocks_range,
-        )
-        self.discovery = PeerDiscovery(
-            node_id=self.identity.node_id,
-            listen_port=self.config.network.listen_port,
-            private_key=self.identity.private_key,
-            discovery_port=self.config.network.discovery_port,
-            bootstrap_nodes=self.config.network.bootstrap_nodes,
-        )
-        self.chain_sync = ChainSync(self.server, self.peer_manager)
-        self.webrtc = WebRTCSessionManager(
-            self.identity.node_id,
-            self.server,
-            enabled=getattr(self.config.network, "webrtc_enabled", True),
-            stun_servers=getattr(self.config.network, "stun_servers", None),
-            turn_servers=getattr(self.config.network, "turn_servers", None),
-            offer_timeout=getattr(self.config.network, "webrtc_offer_timeout", 20),
-            session_ttl=getattr(self.config.network, "webrtc_session_ttl", 300),
-        )
-        if getattr(self.config.network, "webrtc_enabled", True) and not self.webrtc.available:
-            logger.info("WebRTC transport enabled but aiortc is unavailable; continuing with TCP/relay only")
-        self.server.on_public_reachability_change(self._handle_public_reachability_change)
-        self.discovery.on_peer_discovered(self._handle_discovered_peer)
-        self.server.on_message(self._handle_network_message)
-
-        # 设置天道投票系统的网络广播
-        from genesis.governance.tao_voting import get_tao_voting_system
-        tao_system = get_tao_voting_system()
-        tao_system.set_network_broadcast(
-            self.server.broadcast_message,
-            self.identity.node_id,
-            self._submit_tx
-        )
-
-        # 注册天道投票消息处理器
-        self.server.on_message(tao_system.handle_tao_vote_event)
-
         # 7. Initialize chronicle logger
         from genesis.chronicle.logger import ChronicleLogger
         self.chronicle = ChronicleLogger(str(self.data_dir / "chronicle"))
@@ -855,8 +857,88 @@ class GenesisNode:
 
         # 9. Start P2P network and sync before deciding local being lifecycle
         try:
-            await self.server.start()
-            await self.discovery.start()
+            last_bind_error = None
+            configured_listen_port = self.config.network.listen_port
+            configured_discovery_port = self.config.network.discovery_port
+
+            for selected_listen_port, selected_discovery_port in self._network_port_candidates():
+                self.peer_manager = PeerManager(max_peers=self.config.network.max_peers)
+                self.server = P2PServer(
+                    node_id=self.identity.node_id,
+                    private_key=self.identity.private_key,
+                    port=selected_listen_port,
+                    peer_manager=self.peer_manager,
+                )
+                self.server.set_chain_accessors(
+                    chain_height_provider=self.blockchain.get_chain_height,
+                    blocks_provider=self.blockchain.get_blocks_range,
+                )
+                self.discovery = PeerDiscovery(
+                    node_id=self.identity.node_id,
+                    listen_port=selected_listen_port,
+                    private_key=self.identity.private_key,
+                    discovery_port=selected_discovery_port,
+                    bootstrap_nodes=self.config.network.bootstrap_nodes,
+                )
+                self.chain_sync = ChainSync(self.server, self.peer_manager)
+                self.webrtc = WebRTCSessionManager(
+                    self.identity.node_id,
+                    self.server,
+                    enabled=getattr(self.config.network, "webrtc_enabled", True),
+                    stun_servers=getattr(self.config.network, "stun_servers", None),
+                    turn_servers=getattr(self.config.network, "turn_servers", None),
+                    offer_timeout=getattr(self.config.network, "webrtc_offer_timeout", 20),
+                    session_ttl=getattr(self.config.network, "webrtc_session_ttl", 300),
+                )
+                if getattr(self.config.network, "webrtc_enabled", True) and not self.webrtc.available:
+                    logger.info("WebRTC transport enabled but aiortc is unavailable; continuing with TCP/relay only")
+                self.server.on_public_reachability_change(self._handle_public_reachability_change)
+                self.discovery.on_peer_discovered(self._handle_discovered_peer)
+                self.server.on_message(self._handle_network_message)
+
+                from genesis.governance.tao_voting import get_tao_voting_system
+                tao_system = get_tao_voting_system()
+                tao_system.set_network_broadcast(
+                    self.server.broadcast_message,
+                    self.identity.node_id,
+                    self._submit_tx
+                )
+                self.server.on_message(tao_system.handle_tao_vote_event)
+
+                try:
+                    await self.server.start()
+                    await self.discovery.start()
+                    self.config.network.listen_port = selected_listen_port
+                    self.config.network.discovery_port = selected_discovery_port
+                    if (
+                        selected_listen_port != configured_listen_port
+                        or selected_discovery_port != configured_discovery_port
+                    ):
+                        logger.warning(
+                            "Configured P2P ports %d/%d were unavailable; falling back to %d/%d",
+                            configured_listen_port,
+                            configured_discovery_port,
+                            selected_listen_port,
+                            selected_discovery_port,
+                        )
+                    break
+                except Exception as bind_exc:
+                    last_bind_error = bind_exc
+                    if self.discovery:
+                        try:
+                            await self.discovery.stop()
+                        except Exception:
+                            pass
+                    if self.server:
+                        try:
+                            await self.server.stop()
+                        except Exception:
+                            pass
+                    if not self._is_retryable_bind_error(bind_exc):
+                        raise
+            else:
+                raise last_bind_error or RuntimeError("No available P2P port pair could be started.")
+
             await self._sync_until_current(is_first_run)
             await self._ensure_chain_bootstrapped_after_sync(is_first_run)
             logger.info("P2P network started on port %d", self.config.network.listen_port)

@@ -1,17 +1,19 @@
-"""SQLite-backed blockchain persistence using aiosqlite."""
+"""SQLite-backed blockchain persistence using direct sqlite3 calls.
+
+The earlier async/threaded sqlite wrappers could stall during real startup in
+source and packaged environments. Genesis performs short, local sqlite
+operations, so the most reliable option here is to keep the async API surface
+but execute the sqlite work synchronously inside those coroutine methods.
+"""
 
 from __future__ import annotations
 
 import json
-import logging
+import sqlite3
 from typing import Any
-
-import aiosqlite
 
 from genesis.chain.block import Block
 from genesis.chain.transaction import Transaction, TxType
-
-logger = logging.getLogger(__name__)
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS blocks (
@@ -47,11 +49,11 @@ CREATE TABLE IF NOT EXISTS world_state (
 
 
 class ChainStorage:
-    """Async SQLite storage for the blockchain."""
+    """Async facade over a serialized sqlite3 connection."""
 
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
-        self._db: aiosqlite.Connection | None = None
+        self._db: sqlite3.Connection | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -59,32 +61,39 @@ class ChainStorage:
 
     async def initialize(self) -> None:
         """Open the database and create tables if they do not exist."""
-        self._db = await aiosqlite.connect(self.db_path)
-        await self._db.executescript(_SCHEMA_SQL)
-        await self._db.commit()
-        await self._ensure_column("blocks", "proposer_public_key", "TEXT NOT NULL DEFAULT ''")
-        await self._ensure_column("transactions", "public_key", "TEXT NOT NULL DEFAULT ''")
-        await self._db.commit()
+        if self._db is None:
+            self._db = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._initialize_sync()
+
+    def _initialize_sync(self) -> None:
+        db = self._ensure_db()
+        db.executescript(_SCHEMA_SQL)
+        db.commit()
+        self._ensure_column_sync("blocks", "proposer_public_key", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column_sync("transactions", "public_key", "TEXT NOT NULL DEFAULT ''")
+        db.commit()
 
     async def close(self) -> None:
         """Close the database connection."""
-        if self._db is not None:
-            await self._db.close()
-            self._db = None
+        if self._db is None:
+            return
+        db = self._db
+        self._db = None
+        db.close()
 
-    def _ensure_db(self) -> aiosqlite.Connection:
+    def _ensure_db(self) -> sqlite3.Connection:
         if self._db is None:
             raise RuntimeError("ChainStorage not initialized; call initialize() first")
         return self._db
 
-    async def _ensure_column(self, table: str, column: str, ddl: str) -> None:
+    def _ensure_column_sync(self, table: str, column: str, ddl: str) -> None:
         db = self._ensure_db()
-        cursor = await db.execute(f"PRAGMA table_info({table})")
-        rows = await cursor.fetchall()
+        cursor = db.execute(f"PRAGMA table_info({table})")
+        rows = cursor.fetchall()
         existing = {str(row[1]) for row in rows}
         if column in existing:
             return
-        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     # ------------------------------------------------------------------
     # Block persistence
@@ -92,9 +101,11 @@ class ChainStorage:
 
     async def save_block(self, block: Block) -> None:
         """Persist a block and its transactions."""
-        db = self._ensure_db()
+        self._save_block_sync(block)
 
-        await db.execute(
+    def _save_block_sync(self, block: Block) -> None:
+        db = self._ensure_db()
+        db.execute(
             """INSERT OR REPLACE INTO blocks
                (height, hash, previous_hash, merkle_root, proposer, proposer_public_key, signature, timestamp, nonce)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -112,7 +123,7 @@ class ChainStorage:
         )
 
         for tx in block.transactions:
-            await db.execute(
+            db.execute(
                 """INSERT OR REPLACE INTO transactions
                    (tx_hash, block_height, tx_type, sender, public_key, data, signature, timestamp, nonce)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -129,18 +140,18 @@ class ChainStorage:
                 ),
             )
 
-        await db.commit()
+        db.commit()
 
-    async def _block_from_row(self, row: aiosqlite.Row, db: aiosqlite.Connection) -> Block:
+    def _block_from_row_sync(self, row: tuple[Any, ...], db: sqlite3.Connection) -> Block:
         """Reconstruct a Block from a database row, including its transactions."""
         height, blk_hash, prev_hash, mroot, proposer, proposer_public_key, sig, ts, nonce = row
 
-        cursor = await db.execute(
+        cursor = db.execute(
             "SELECT tx_hash, tx_type, sender, public_key, data, signature, timestamp, nonce "
             "FROM transactions WHERE block_height = ? ORDER BY nonce",
             (height,),
         )
-        tx_rows = await cursor.fetchall()
+        tx_rows = cursor.fetchall()
 
         transactions: list[Transaction] = []
         for tx_row in tx_rows:
@@ -172,72 +183,87 @@ class ChainStorage:
 
     async def get_block(self, height: int) -> Block | None:
         """Return the block at the given height, or None."""
+        return self._get_block_sync(height)
+
+    def _get_block_sync(self, height: int) -> Block | None:
         db = self._ensure_db()
-        cursor = await db.execute(
+        cursor = db.execute(
             "SELECT height, hash, previous_hash, merkle_root, proposer, proposer_public_key, signature, timestamp, nonce "
             "FROM blocks WHERE height = ?",
             (height,),
         )
-        row = await cursor.fetchone()
+        row = cursor.fetchone()
         if row is None:
             return None
-        return await self._block_from_row(row, db)
+        return self._block_from_row_sync(row, db)
 
     async def get_block_by_hash(self, hash: str) -> Block | None:
         """Return the block with the given hash, or None."""
+        return self._get_block_by_hash_sync(hash)
+
+    def _get_block_by_hash_sync(self, hash: str) -> Block | None:
         db = self._ensure_db()
-        cursor = await db.execute(
+        cursor = db.execute(
             "SELECT height, hash, previous_hash, merkle_root, proposer, proposer_public_key, signature, timestamp, nonce "
             "FROM blocks WHERE hash = ?",
             (hash,),
         )
-        row = await cursor.fetchone()
+        row = cursor.fetchone()
         if row is None:
             return None
-        return await self._block_from_row(row, db)
+        return self._block_from_row_sync(row, db)
 
     async def get_latest_block(self) -> Block | None:
         """Return the block at the current chain tip, or None if empty."""
+        return self._get_latest_block_sync()
+
+    def _get_latest_block_sync(self) -> Block | None:
         db = self._ensure_db()
-        cursor = await db.execute(
+        cursor = db.execute(
             "SELECT height, hash, previous_hash, merkle_root, proposer, proposer_public_key, signature, timestamp, nonce "
             "FROM blocks ORDER BY height DESC LIMIT 1",
         )
-        row = await cursor.fetchone()
+        row = cursor.fetchone()
         if row is None:
             return None
-        return await self._block_from_row(row, db)
+        return self._block_from_row_sync(row, db)
 
     async def get_chain_height(self) -> int:
         """Return the height of the latest block, or -1 if the chain is empty."""
+        return self._get_chain_height_sync()
+
+    def _get_chain_height_sync(self) -> int:
         db = self._ensure_db()
-        cursor = await db.execute("SELECT MAX(height) FROM blocks")
-        row = await cursor.fetchone()
+        cursor = db.execute("SELECT MAX(height) FROM blocks")
+        row = cursor.fetchone()
         if row is None or row[0] is None:
             return -1
         return int(row[0])
 
     async def get_blocks_range(self, start: int, end: int) -> list[Block]:
         """Return blocks with height in [start, end] inclusive."""
+        return self._get_blocks_range_sync(start, end)
+
+    def _get_blocks_range_sync(self, start: int, end: int) -> list[Block]:
         db = self._ensure_db()
-        cursor = await db.execute(
+        cursor = db.execute(
             "SELECT height, hash, previous_hash, merkle_root, proposer, proposer_public_key, signature, timestamp, nonce "
             "FROM blocks WHERE height >= ? AND height <= ? ORDER BY height",
             (start, end),
         )
-        rows = await cursor.fetchall()
-        blocks: list[Block] = []
-        for row in rows:
-            blocks.append(await self._block_from_row(row, db))
-        return blocks
+        rows = cursor.fetchall()
+        return [self._block_from_row_sync(row, db) for row in rows]
 
     async def clear_chain(self) -> None:
         """Delete all persisted blocks, transactions, and derived world state."""
+        self._clear_chain_sync()
+
+    def _clear_chain_sync(self) -> None:
         db = self._ensure_db()
-        await db.execute("DELETE FROM transactions")
-        await db.execute("DELETE FROM blocks")
-        await db.execute("DELETE FROM world_state")
-        await db.commit()
+        db.execute("DELETE FROM transactions")
+        db.execute("DELETE FROM blocks")
+        db.execute("DELETE FROM world_state")
+        db.commit()
 
     # ------------------------------------------------------------------
     # World state
@@ -245,20 +271,27 @@ class ChainStorage:
 
     async def save_world_state(self, key: str, value: str, block_height: int) -> None:
         """Upsert a world-state key/value pair."""
+        self._save_world_state_sync(key, value, block_height)
+
+    def _save_world_state_sync(self, key: str, value: str, block_height: int) -> None:
         db = self._ensure_db()
-        await db.execute(
+        db.execute(
             "INSERT OR REPLACE INTO world_state (key, value, updated_at_block) VALUES (?, ?, ?)",
             (key, value, block_height),
         )
-        await db.commit()
+        db.commit()
 
     async def get_world_state(self, key: str) -> str | None:
         """Return the current value for a world-state key, or None."""
+        return self._get_world_state_sync(key)
+
+    def _get_world_state_sync(self, key: str) -> str | None:
         db = self._ensure_db()
-        cursor = await db.execute(
-            "SELECT value FROM world_state WHERE key = ?", (key,)
+        cursor = db.execute(
+            "SELECT value FROM world_state WHERE key = ?",
+            (key,),
         )
-        row = await cursor.fetchone()
+        row = cursor.fetchone()
         if row is None:
             return None
         return str(row[0])

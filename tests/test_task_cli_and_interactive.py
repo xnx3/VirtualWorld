@@ -172,6 +172,39 @@ class GenesisStartupGuardTests(unittest.TestCase):
                     [("fresh-peer", "10.0.0.8", 22333)],
                 )
 
+    def test_select_network_ports_keeps_requested_pair_when_free(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.config = SimpleNamespace(
+                network=SimpleNamespace(
+                    listen_port=19841,
+                    discovery_port=19840,
+                )
+            )
+
+            with patch.object(node, "_can_bind_port", return_value=True):
+                self.assertEqual(node._select_network_ports(), (19841, 19840))
+
+    def test_select_network_ports_falls_forward_when_requested_pair_is_busy(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.config = SimpleNamespace(
+                network=SimpleNamespace(
+                    listen_port=19841,
+                    discovery_port=19840,
+                )
+            )
+
+            def fake_can_bind(port, sock_type):
+                if port == 19841 and sock_type == socket.SOCK_STREAM:
+                    return False
+                if port == 19840 and sock_type == socket.SOCK_DGRAM:
+                    return False
+                return True
+
+            with patch.object(node, "_can_bind_port", side_effect=fake_can_bind):
+                self.assertEqual(node._select_network_ports(), (19842, 19841))
+
     def test_known_peer_cache_round_trip(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             node = GenesisNode(tmpdir)
@@ -385,6 +418,10 @@ class GenesisStartupGuardTests(unittest.TestCase):
             self.assertTrue(refreshed)
             self.assertEqual(submitted[0][0], "STATE_UPDATE")
             self.assertEqual(submitted[0][1]["p2p_capabilities"], {"relay": True})
+            self.assertEqual(
+                node.world_state.get_being("self-node").p2p_capabilities,
+                {"relay": True},
+            )
 
     def test_refresh_local_peer_endpoint_skips_when_chain_contact_card_is_current(self):
         with tempfile.TemporaryDirectory() as tmpdir:

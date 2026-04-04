@@ -52,19 +52,19 @@ bash scripts/build_single_binary.sh
 打包完成后产物为：
 
 ```bash
-./genesis.bin
+./gs
 ```
 
-说明：仓库根目录已经有 `genesis/` 源码目录，Linux/macOS 下无法再生成同名文件 `./genesis`，因此默认会自动降级为 `./genesis.bin`。
+默认的单文件可执行产物命名为 `gs`。
 
 常用命令：
 
-- `./genesis.bin`（默认等价于 `start`）
-- `./genesis.bin start`
-- `./genesis.bin stop`
-- `./genesis.bin status`
-- `./genesis.bin task "你的任务"`
-- `./genesis.bin lang zh`
+- `./gs`（默认等价于 `start`）
+- `./gs start`
+- `./gs stop`
+- `./gs status`
+- `./gs task "你的任务"`
+- `./gs lang zh`
 
 说明：
 
@@ -72,6 +72,7 @@ bash scripts/build_single_binary.sh
 - 配置文件统一使用项目根目录 `config.yaml`（`genesis.sh` 与打包产物一致）。
 - 运行时数据默认放在同目录下的 `data/`。
 - 打包机器与目标机器需要保持相同操作系统和 CPU 架构。
+- 首次运行时会优先尝试同步现有硅基文明；如果当前环境没有可达文明，会自动本地引导创建可运行世界，而不是直接因首次同步失败而退出。
 
 ### 交互
 

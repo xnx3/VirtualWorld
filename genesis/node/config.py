@@ -33,7 +33,7 @@ class NetworkConfig:
     discovery_port: int = 19840
     bootstrap_nodes: list[str] = field(default_factory=lambda: ["http://45.205.24.48:8760"])
     advertise_address: str = ""
-    allow_local_bootstrap: bool = False
+    allow_local_bootstrap: bool = True
     max_peers: int = 50
     discovery_interval: int = 30
     sync_interval: int = 30
