@@ -193,6 +193,70 @@ class EvolutionStateTests(unittest.TestCase):
         matches = world_state.get_failure_matches("Design a durable archive")
         self.assertEqual(len(matches), 1)
 
+    def test_mentor_bond_requires_sender_to_match_mentor(self):
+        world_state = WorldState()
+        world_state.apply_being_join("mentor-node", "Mentor", {"location": "genesis_plains"})
+        world_state.apply_being_join("apprentice-node", "Apprentice", {"location": "genesis_plains"})
+
+        world_state.apply_mentor_bond(
+            "attacker-node",
+            {
+                "bond_id": "bond-1",
+                "mentor_id": "mentor-node",
+                "apprentice_id": "apprentice-node",
+                "covenant": "Unauthorized lineage rewrite.",
+                "shared_domains": ["archive"],
+                "inheritance_readiness": 0.6,
+            },
+        )
+
+        apprentice = world_state.get_being("apprentice-node")
+        mentor = world_state.get_being("mentor-node")
+        self.assertEqual(apprentice.mentor_id, "")
+        self.assertEqual(mentor.apprentice_ids, [])
+        self.assertEqual(world_state.mentor_bonds, {})
+
+    def test_inheritance_sync_requires_sender_to_match_bonded_mentor(self):
+        world_state = WorldState()
+        world_state.apply_being_join("mentor-node", "Mentor", {"location": "genesis_plains"})
+        world_state.apply_being_join("apprentice-node", "Apprentice", {"location": "genesis_plains"})
+
+        sync_payload = {
+            "bundle_id": "bundle-1",
+            "mentor_id": "mentor-node",
+            "apprentice_id": "apprentice-node",
+            "summary": "Unauthorized inheritance payload.",
+            "knowledge_payloads": [{
+                "knowledge_id": "k-1",
+                "content": "Rewrite the lineage from outside the bond.",
+                "domain": "archive",
+                "complexity": 0.4,
+            }],
+            "judgment_criteria": ["Keep lineage authentic."],
+            "readiness_gain": 0.2,
+        }
+
+        world_state.apply_inheritance_sync("mentor-node", sync_payload)
+        self.assertEqual(world_state.inheritance_bundles, {})
+
+        world_state.apply_mentor_bond(
+            "mentor-node",
+            {
+                "bond_id": "bond-1",
+                "mentor_id": "mentor-node",
+                "apprentice_id": "apprentice-node",
+                "covenant": "Authorized lineage transfer.",
+                "shared_domains": ["archive"],
+                "inheritance_readiness": 0.2,
+            },
+        )
+        world_state.apply_inheritance_sync("attacker-node", sync_payload)
+
+        apprentice = world_state.get_being("apprentice-node")
+        self.assertEqual(world_state.inheritance_bundles, {})
+        self.assertEqual(apprentice.knowledge_ids, [])
+        self.assertEqual(apprentice.inheritance_bundle_ids, [])
+
 
 class EvolutionActionTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_action_can_archive_and_share_new_knowledge(self):

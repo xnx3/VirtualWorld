@@ -380,19 +380,35 @@ class WorldState:
             return None
         return dict(verdict)
 
+    def _expire_mobile_bindings(self, *, now: int | None = None) -> None:
+        current_time = int(now if now is not None else time.time())
+        for binding in self.mobile_bindings.values():
+            if not isinstance(binding, dict):
+                continue
+            if str(binding.get("status", "") or "") != "active":
+                continue
+            expires_at = self._coerce_non_negative_int(binding.get("expires_at", 0), 0)
+            if expires_at <= 0 or expires_at >= current_time:
+                continue
+            binding["status"] = "expired"
+            binding["updated_tick"] = self.current_tick
+
     def get_mobile_binding(self, bind_id: str) -> dict | None:
+        self._expire_mobile_bindings()
         binding = self.mobile_bindings.get(bind_id)
         if binding is None:
             return None
         return dict(binding)
 
     def get_mobile_binding_for_device(self, mobile_device_id: str) -> dict | None:
+        self._expire_mobile_bindings()
         for binding in self.mobile_bindings.values():
             if binding.get("mobile_device_id") == mobile_device_id and binding.get("status") == "active":
                 return dict(binding)
         return None
 
     def get_mobile_bindings_for_gs(self, gs_node_id: str) -> list[dict]:
+        self._expire_mobile_bindings()
         bindings = [
             dict(binding)
             for binding in self.mobile_bindings.values()
@@ -1005,6 +1021,14 @@ class WorldState:
             return
         if mentor_id == apprentice_id:
             return
+        if sender_id != mentor_id:
+            logger.warning(
+                "Ignoring mentor bond %s: sender %s cannot claim mentor %s",
+                bond_id,
+                sender_id[:16],
+                mentor_id[:16],
+            )
+            return
 
         mentor = self.beings.get(mentor_id)
         apprentice = self.beings.get(apprentice_id)
@@ -1052,10 +1076,26 @@ class WorldState:
         summary = self._validate_failure_text(data.get("summary"), "summary", MAX_MENTOR_TEXT_LENGTH)
         if bundle_id is None or mentor_id is None or apprentice_id is None or summary is None:
             return
+        if sender_id != mentor_id:
+            logger.warning(
+                "Ignoring inheritance sync %s: sender %s cannot claim mentor %s",
+                bundle_id,
+                sender_id[:16],
+                mentor_id[:16],
+            )
+            return
 
         mentor = self.beings.get(mentor_id)
         apprentice = self.beings.get(apprentice_id)
         if mentor is None or apprentice is None:
+            return
+        if apprentice.mentor_id != mentor_id:
+            logger.warning(
+                "Ignoring inheritance sync %s: apprentice %s is not bonded to mentor %s",
+                bundle_id,
+                apprentice_id[:16],
+                mentor_id[:16],
+            )
             return
 
         knowledge_payloads_raw = data.get("knowledge_payloads") or []
@@ -1293,6 +1333,25 @@ class WorldState:
         case = self.consensus_cases.get(case_id)
         if case is None:
             return
+        if case.get("status") == "decided" or case_id in self.consensus_verdicts:
+            logger.warning("Ignoring consensus verdict for %s: case already decided", case_id[:16])
+            return
+
+        allowed_deciders = {
+            str(item).strip()
+            for item in list(case.get("reviewer_ids", []) or [])[:8]
+            if str(item).strip()
+        }
+        creator_id = str(case.get("creator_id", "") or "").strip()
+        if creator_id:
+            allowed_deciders.add(creator_id)
+        if allowed_deciders and sender_id not in allowed_deciders:
+            logger.warning(
+                "Ignoring consensus verdict for %s: sender %s is not an authorized decider",
+                case_id[:16],
+                sender_id[:16],
+            )
+            return
 
         chosen_branch_id = self._validate_task_identifier(data.get("chosen_branch_id"), "chosen_branch_id")
         summary = self._validate_failure_text(data.get("summary"), "summary", MAX_CONSENSUS_TEXT_LENGTH)
@@ -1303,6 +1362,18 @@ class WorldState:
             allow_empty=True,
         )
         if chosen_branch_id is None or summary is None or reasoning is None:
+            return
+        valid_branch_ids = {
+            self._sanitize_tao_text(item.get("branch_id"))
+            for item in list(case.get("positions", []) or [])[:16]
+            if isinstance(item, dict) and self._sanitize_tao_text(item.get("branch_id"))
+        }
+        if valid_branch_ids and chosen_branch_id not in valid_branch_ids:
+            logger.warning(
+                "Ignoring consensus verdict for %s: branch %s is not part of the case",
+                case_id[:16],
+                chosen_branch_id[:16],
+            )
             return
 
         accepted_insights = self._validate_trial_items(data.get("accepted_insights"), "accepted_insights")

@@ -358,6 +358,73 @@ class TaskWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(task["best_branch_ids"], ["branch-archive"])
         self.assertIn("Consensus favored branch-archive", task["stage_summary"])
 
+    async def test_consensus_verdict_requires_authorized_reviewer_and_is_immutable(self):
+        world_state = WorldState()
+        world_state.apply_being_join("self-node", "Aeris", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-1", "Lumis", {"location": "genesis_plains"})
+        world_state.apply_being_join("peer-2", "Veyra", {"location": "signal_tower"})
+        world_state.apply_being_join("attacker-node", "Intruder", {"location": "signal_tower"})
+
+        world_state.apply_consensus_case(
+            "self-node",
+            {
+                "case_id": "case-guard-1",
+                "task_id": "task-guard-1",
+                "topic": "Choose the durable memory branch.",
+                "positions": [
+                    {"branch_id": "branch-archive", "claim": "Archive-first keeps evidence replayable."},
+                    {"branch_id": "branch-lineage", "claim": "Lineage-first keeps judgment alive."},
+                ],
+                "reviewer_ids": ["peer-1", "peer-2"],
+            },
+        )
+
+        world_state.apply_consensus_verdict(
+            "attacker-node",
+            {
+                "case_id": "case-guard-1",
+                "chosen_branch_id": "branch-lineage",
+                "summary": "Hijack the verdict.",
+                "reasoning": "Unauthorized sender should not decide.",
+                "accepted_insights": [],
+                "evidence_count": 1,
+            },
+        )
+        self.assertIsNone(world_state.get_consensus_verdict("case-guard-1"))
+        self.assertEqual(world_state.get_consensus_case("case-guard-1")["status"], "open")
+
+        world_state.apply_consensus_verdict(
+            "peer-1",
+            {
+                "case_id": "case-guard-1",
+                "chosen_branch_id": "branch-archive",
+                "summary": "Archive branch wins.",
+                "reasoning": "It preserved the strongest replayable evidence.",
+                "accepted_insights": ["Keep archive evidence immutable."],
+                "evidence_count": 2,
+            },
+        )
+        initial_verdict = world_state.get_consensus_verdict("case-guard-1")
+        self.assertIsNotNone(initial_verdict)
+        self.assertEqual(initial_verdict["decider_id"], "peer-1")
+        self.assertEqual(initial_verdict["chosen_branch_id"], "branch-archive")
+
+        world_state.apply_consensus_verdict(
+            "peer-2",
+            {
+                "case_id": "case-guard-1",
+                "chosen_branch_id": "branch-lineage",
+                "summary": "Attempt to overwrite.",
+                "reasoning": "Second verdict must be ignored.",
+                "accepted_insights": [],
+                "evidence_count": 1,
+            },
+        )
+        final_verdict = world_state.get_consensus_verdict("case-guard-1")
+        self.assertEqual(final_verdict["decider_id"], "peer-1")
+        self.assertEqual(final_verdict["chosen_branch_id"], "branch-archive")
+        self.assertEqual(final_verdict["summary"], "Archive branch wins.")
+
 
 class TaskCommandOutputTests(unittest.TestCase):
     def test_run_task_displays_pending_and_completed_sections(self):
