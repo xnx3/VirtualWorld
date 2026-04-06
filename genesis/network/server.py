@@ -57,6 +57,9 @@ class P2PServer:
         self._relay_routes: dict[str, list[str]] = {}
         self._peer_capabilities: dict[str, dict[str, Any]] = {}
         self._peer_transports: dict[str, list[str]] = {}
+        self._chain_relay_routes: dict[str, list[str]] = {}
+        self._chain_peer_capabilities: dict[str, dict[str, Any]] = {}
+        self._chain_peer_transports: dict[str, list[str]] = {}
         self._virtual_connections: dict[str, tuple[str, Callable[[Message], Awaitable[None] | None]]] = {}
         self._public_reachability_handlers: list[Callable[[bool], Awaitable[None] | None]] = []
         self._last_public_inbound_at: float = 0.0
@@ -99,7 +102,10 @@ class P2PServer:
         """True when this node can currently reach *node_id* directly or via relay."""
         if node_id in self._connections or node_id in self._virtual_connections:
             return True
-        return any(relay_id in self._connections for relay_id in self._relay_routes.get(node_id, []))
+        return any(
+            relay_id in self._connections or relay_id in self._virtual_connections
+            for relay_id in self._relay_candidates(node_id)
+        )
 
     def set_chain_accessors(
         self,
@@ -118,7 +124,7 @@ class P2PServer:
         relay_hints: list[str] | None = None,
         capabilities: dict[str, Any] | None = None,
     ) -> None:
-        """Register contact-card metadata learned from the chain or a relayed message."""
+        """Register runtime contact-card metadata learned from live traffic."""
         node_id = str(node_id).strip()
         if not node_id or node_id == self._node_id:
             return
@@ -148,6 +154,38 @@ class P2PServer:
             self._peer_capabilities[node_id] = merged_capabilities
         elif node_id not in self._peer_capabilities:
             self._peer_capabilities[node_id] = {}
+
+    def sync_chain_contact_cards(self, cards: dict[str, dict[str, Any]]) -> None:
+        """Replace chain-derived contact cards with the current fresh snapshot."""
+        chain_transports: dict[str, list[str]] = {}
+        chain_relays: dict[str, list[str]] = {}
+        chain_capabilities: dict[str, dict[str, Any]] = {}
+
+        for raw_node_id, payload in cards.items():
+            node_id = str(raw_node_id).strip()
+            if not node_id or node_id == self._node_id:
+                continue
+
+            transports: list[str] = []
+            for transport in payload.get("transports", []) or []:
+                transport_str = str(transport).strip()
+                if transport_str and transport_str not in transports:
+                    transports.append(transport_str)
+
+            relay_hints: list[str] = []
+            for relay_id in payload.get("relay_hints", []) or []:
+                relay_id_str = str(relay_id).strip()
+                if relay_id_str and relay_id_str != node_id and relay_id_str not in relay_hints:
+                    relay_hints.append(relay_id_str)
+
+            capabilities = payload.get("capabilities", {}) or {}
+            chain_transports[node_id] = transports
+            chain_relays[node_id] = relay_hints
+            chain_capabilities[node_id] = dict(capabilities) if isinstance(capabilities, dict) else {}
+
+        self._chain_peer_transports = chain_transports
+        self._chain_relay_routes = chain_relays
+        self._chain_peer_capabilities = chain_capabilities
 
     def register_virtual_connection(
         self,
@@ -237,6 +275,9 @@ class P2PServer:
         self._relay_routes.clear()
         self._peer_capabilities.clear()
         self._peer_transports.clear()
+        self._chain_relay_routes.clear()
+        self._chain_peer_capabilities.clear()
+        self._chain_peer_transports.clear()
 
         if self._server is not None:
             self._server.close()
@@ -265,8 +306,6 @@ class P2PServer:
         except (OSError, asyncio.TimeoutError) as exc:
             logger.debug("Failed to connect to %s:%d -- %s", address, port, exc)
             return False
-
-        self._security.record_connection(address)
 
         # Send HELLO.
         chain_height = await self._get_chain_height()
@@ -327,6 +366,7 @@ class P2PServer:
                 transports=["tcp"],
             )
         )
+        self._security.record_connection(address)
         self.register_contact_card(peer_id, transports=["tcp"])
 
         # Start reading from this peer in the background.
@@ -364,9 +404,25 @@ class P2PServer:
                 except OSError:
                     self.unregister_virtual_connection(node_id, transport=transport_name)
 
-            for relay_id in self._relay_routes.get(node_id, []):
+            for relay_id in self._relay_candidates(node_id):
                 relay_conn = self._connections.get(relay_id)
                 if relay_conn is None:
+                    virtual_relay = self._virtual_connections.get(relay_id)
+                    if virtual_relay is not None:
+                        _, relay_send = virtual_relay
+                        try:
+                            result = relay_send(
+                                Message.relay_envelope(
+                                    self._node_id,
+                                    node_id,
+                                    message.to_dict(),
+                                )
+                            )
+                            if asyncio.iscoroutine(result):
+                                await result
+                            return
+                        except OSError:
+                            self.unregister_virtual_connection(relay_id)
                     continue
                 _, relay_writer = relay_conn
                 try:
@@ -446,8 +502,6 @@ class P2PServer:
             writer.close()
             return
 
-        self._security.record_connection(remote_ip)
-
         # Expect HELLO as first message.
         try:
             hello = await asyncio.wait_for(self._read_message(reader), timeout=10.0)
@@ -501,6 +555,7 @@ class P2PServer:
                 transports=["tcp"],
             )
         )
+        self._security.record_connection(remote_ip)
         self.register_contact_card(peer_id, transports=["tcp"])
         await self._record_public_inbound(remote_ip)
 
@@ -575,8 +630,18 @@ class P2PServer:
         elif msg.msg_type == MessageType.GET_BLOCKS:
             start = int(msg.payload.get("start", 0))
             end = int(msg.payload.get("end", -1))
+            request_id = str(msg.payload.get("request_id", "")).strip()
             blocks = await self._get_blocks_payload(start, end)
-            await self.send_to_peer(peer_id, Message.blocks(self._node_id, blocks))
+            await self.send_to_peer(
+                peer_id,
+                Message.blocks(
+                    self._node_id,
+                    blocks,
+                    start=start,
+                    end=end,
+                    request_id=request_id,
+                ),
+            )
 
     async def _dispatch_message(self, msg: Message, peer_id: str) -> None:
         """Run built-in handlers then fan out to application handlers."""
@@ -669,6 +734,7 @@ class P2PServer:
 
     def _disconnect_peer(self, node_id: str) -> None:
         """Close and unregister a peer connection."""
+        peer = self._peer_manager.get_peer(node_id)
         conn = self._connections.pop(node_id, None)
         if conn is not None:
             _, writer = conn
@@ -676,8 +742,19 @@ class P2PServer:
                 writer.close()
             except OSError:
                 pass
+        if peer is not None and peer.address:
+            self._security.release_connection(peer.address)
         self._peer_manager.update_peer(node_id, status="dead")
         logger.info("Disconnected peer %s", node_id[:16])
+
+    def _relay_candidates(self, node_id: str) -> list[str]:
+        """Return runtime and chain relay hints with runtime hints first."""
+        merged: list[str] = []
+        for source in (self._relay_routes.get(node_id, []), self._chain_relay_routes.get(node_id, [])):
+            for relay_id in source:
+                if relay_id and relay_id not in merged:
+                    merged.append(relay_id)
+        return merged
 
     async def _get_chain_height(self) -> int:
         """Return the current chain height for handshakes."""
