@@ -218,20 +218,42 @@ class Message:
         return msg
 
     @classmethod
-    def get_blocks(cls, node_id: str, start: int, end: int) -> Message:
+    def get_blocks(
+        cls,
+        node_id: str,
+        start: int,
+        end: int,
+        *,
+        request_id: str = "",
+    ) -> Message:
         """Request a range of blocks [start, end] inclusive."""
         return cls(
             msg_type=MessageType.GET_BLOCKS,
-            payload={"start": start, "end": end},
+            payload={"start": start, "end": end, "request_id": request_id},
             sender_id=node_id,
         )
 
     @classmethod
-    def blocks(cls, node_id: str, blocks: list[dict[str, Any]]) -> Message:
+    def blocks(
+        cls,
+        node_id: str,
+        blocks: list[dict[str, Any]],
+        *,
+        start: int | None = None,
+        end: int | None = None,
+        request_id: str = "",
+    ) -> Message:
         """Respond with a list of serialized blocks."""
+        payload: dict[str, Any] = {"blocks": blocks}
+        if start is not None:
+            payload["start"] = int(start)
+        if end is not None:
+            payload["end"] = int(end)
+        if request_id:
+            payload["request_id"] = request_id
         return cls(
             msg_type=MessageType.BLOCKS,
-            payload={"blocks": blocks},
+            payload=payload,
             sender_id=node_id,
         )
 

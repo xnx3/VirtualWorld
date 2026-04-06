@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from typing import Any
 
 from genesis.chain.block import Block
@@ -37,6 +38,7 @@ class ChainSync:
         self._server = server
         self._peer_manager = peer_manager
         self._pending_responses: dict[str, asyncio.Future[Message]] = {}
+        self._pending_block_ranges: dict[tuple[str, int, int], str] = {}
 
         # Register an internal message handler so we can resolve futures.
         self._server.on_message(self._on_message)
@@ -221,17 +223,19 @@ class ChainSync:
         Returns a list of block dicts.  Raises ``asyncio.TimeoutError`` if the
         peer does not respond in time.
         """
-        request_key = f"blocks:{peer_id}:{start}:{end}"
+        request_id = uuid.uuid4().hex
         future: asyncio.Future[Message] = asyncio.get_running_loop().create_future()
-        self._pending_responses[request_key] = future
+        self._pending_responses[request_id] = future
+        self._pending_block_ranges[(peer_id, start, end)] = request_id
 
-        msg = Message.get_blocks(self._server.node_id, start, end)
+        msg = Message.get_blocks(self._server.node_id, start, end, request_id=request_id)
         await self._server.send_to_peer(peer_id, msg)
 
         try:
             response = await asyncio.wait_for(future, timeout=_REQUEST_TIMEOUT)
         finally:
-            self._pending_responses.pop(request_key, None)
+            self._pending_responses.pop(request_id, None)
+            self._pending_block_ranges.pop((peer_id, start, end), None)
 
         return response.payload.get("blocks", [])
 
@@ -300,11 +304,46 @@ class ChainSync:
     async def _on_message(self, msg: Message, peer_id: str) -> None:
         """Internal message handler that resolves pending request futures."""
         if msg.msg_type == MessageType.BLOCKS:
-            # Match against a pending request from this peer.
-            for key, future in list(self._pending_responses.items()):
-                if key.startswith(f"blocks:{peer_id}:") and not future.done():
+            request_id = str(msg.payload.get("request_id", "")).strip()
+            if request_id:
+                future = self._pending_responses.get(request_id)
+                if future is not None and not future.done():
                     future.set_result(msg)
-                    break
+                return
+
+            try:
+                start = int(msg.payload["start"])
+                end = int(msg.payload["end"])
+            except (KeyError, TypeError, ValueError):
+                peer_pending_ids = [
+                    pending_id
+                    for (pending_peer_id, _, _), pending_id in self._pending_block_ranges.items()
+                    if pending_peer_id == peer_id
+                ]
+                if len(peer_pending_ids) == 1:
+                    future = self._pending_responses.get(peer_pending_ids[0])
+                    if future is not None and not future.done():
+                        future.set_result(msg)
+                    return
+                logger.warning(
+                    "Ignoring unmatched BLOCKS response from %s without request metadata",
+                    peer_id[:16],
+                )
+                return
+
+            pending_id = self._pending_block_ranges.get((peer_id, start, end))
+            if not pending_id:
+                logger.debug(
+                    "Ignoring BLOCKS response from %s for unknown range %d-%d",
+                    peer_id[:16],
+                    start,
+                    end,
+                )
+                return
+
+            future = self._pending_responses.get(pending_id)
+            if future is not None and not future.done():
+                future.set_result(msg)
 
         elif msg.msg_type == MessageType.NEW_BLOCK:
             # Delegate to handle_new_block if a blockchain reference is available.
