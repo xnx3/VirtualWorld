@@ -277,6 +277,32 @@ class ChainSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(server.broadcasts), 1)
         self.assertEqual(server.broadcasts[0].msg_type, MessageType.NEW_TX)
 
+    async def test_blocks_response_matches_request_id_under_concurrency(self):
+        server = DummyServer()
+        sync = ChainSync(server, PeerManager())
+        loop = asyncio.get_running_loop()
+        future_a = loop.create_future()
+        future_b = loop.create_future()
+        sync._pending_responses["req-a"] = future_a
+        sync._pending_responses["req-b"] = future_b
+        sync._pending_block_ranges[("peer-1", 100, 199)] = "req-a"
+        sync._pending_block_ranges[("peer-1", 200, 299)] = "req-b"
+
+        await sync._on_message(
+            Message.blocks(
+                "peer-1",
+                [{"index": 200}],
+                start=200,
+                end=299,
+                request_id="req-b",
+            ),
+            "peer-1",
+        )
+
+        self.assertFalse(future_a.done())
+        self.assertTrue(future_b.done())
+        self.assertEqual(future_b.result().payload["blocks"][0]["index"], 200)
+
 
 class PeerManagerTests(unittest.TestCase):
     def test_add_peer_refreshes_existing_metadata(self):
@@ -324,12 +350,18 @@ class P2PServerAccessorTests(unittest.IsolatedAsyncioTestCase):
         server.send_to_peer = fake_send_to_peer  # type: ignore[method-assign]
 
         self.assertEqual(await server._get_chain_height(), 7)
-        await server._handle_builtin(Message.get_blocks("peer-1", 1, 1), "peer-1")
+        await server._handle_builtin(
+            Message.get_blocks("peer-1", 1, 1, request_id="req-1"),
+            "peer-1",
+        )
 
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0][0], "peer-1")
         self.assertEqual(sent[0][1].msg_type, MessageType.BLOCKS)
         self.assertEqual(sent[0][1].payload["blocks"][0]["index"], 1)
+        self.assertEqual(sent[0][1].payload["start"], 1)
+        self.assertEqual(sent[0][1].payload["end"], 1)
+        self.assertEqual(sent[0][1].payload["request_id"], "req-1")
 
     async def test_send_to_peer_falls_back_to_registered_relay_route(self):
         identity = NodeIdentity.generate()
@@ -346,6 +378,31 @@ class P2PServerAccessorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outbound.msg_type, MessageType.RELAY_ENVELOPE)
         self.assertEqual(outbound.payload["target_id"], "peer-1")
         self.assertEqual(outbound.payload["message"]["msg_type"], MessageType.PING.value)
+
+    async def test_send_to_peer_drops_expired_chain_relay_route_after_refresh(self):
+        identity = NodeIdentity.generate()
+        server = P2PServer("local-node", identity.private_key)
+        relay_writer = FakeWriter()
+        server._connections["relay-1"] = (asyncio.StreamReader(), relay_writer)  # type: ignore[attr-defined]
+        server.sync_chain_contact_cards(
+            {
+                "peer-1": {
+                    "transports": ["relay"],
+                    "relay_hints": ["relay-1"],
+                    "capabilities": {"relay": False},
+                }
+            }
+        )
+
+        await server.send_to_peer("peer-1", Message.ping("local-node"))
+        first_write_size = len(relay_writer.buffer)
+        self.assertGreater(first_write_size, 0)
+
+        relay_writer.buffer.clear()
+        server.sync_chain_contact_cards({})
+        await server.send_to_peer("peer-1", Message.ping("local-node"))
+
+        self.assertEqual(len(relay_writer.buffer), 0)
 
     async def test_send_to_peer_uses_virtual_connection_when_available(self):
         identity = NodeIdentity.generate()
