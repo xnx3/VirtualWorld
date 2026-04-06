@@ -5,10 +5,26 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import socket
 import time
 from typing import Any, Callable, Awaitable
 
 logger = logging.getLogger(__name__)
+
+
+def _get_local_ip() -> str:
+    """Get the local IP address that can reach external networks."""
+    try:
+        # Create a UDP socket to determine the local IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        # Connect to an external address (doesn't actually send data)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        return local_ip
+    except Exception:
+        return "127.0.0.1"
 
 # How often to broadcast presence on LAN (seconds).
 _BROADCAST_INTERVAL: float = 30.0
@@ -169,11 +185,12 @@ class PeerDiscovery:
         import urllib.parse
 
         try:
-            # Register this node
+            # Register this node with its local IP
             import json as _json
             register_data = _json.dumps({
                 "node_id": self._node_id,
                 "port": self._listen_port,
+                "address": _get_local_ip(),
             }).encode()
             req = urllib.request.Request(
                 f"{base_url.rstrip('/')}/register",

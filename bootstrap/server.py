@@ -157,10 +157,12 @@ async def handle_register(request: web.Request) -> web.Response:
     node_id = str(data.get("node_id", "")).strip()
     port = int(data.get("port", 0))
     public_key = str(data.get("public_key", "")).strip()
+    announced_ip = str(data.get("address", "") or data.get("public_ip", "")).strip()
 
-    # 从请求头或字段获取 IP
+    # 从请求头或字段获取 IP（优先使用节点自己声明的地址）
     ip = (
-        request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        announced_ip
+        or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
         or request.remote
         or "0.0.0.0"
     )
