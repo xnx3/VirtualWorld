@@ -1,0 +1,31 @@
+name: genesis-gs
+
+services:
+  gs:
+    image: ${GS_IMAGE_TAG:-genesis-gs:latest}
+    build:
+      context: ../..
+      dockerfile: docker/gs/Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${GS_PYTHON_BASE_IMAGE:-public.ecr.aws/docker/library/python:3.11-slim-bookworm}
+        APT_MIRROR_URL: ${GS_APT_MIRROR_URL:-}
+        PIP_INDEX_URL: ${GS_PIP_INDEX_URL:-}
+        PIP_EXTRA_INDEX_URL: ${GS_PIP_EXTRA_INDEX_URL:-}
+    container_name: ${GS_CONTAINER_NAME:-genesis-gs}
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    environment:
+      GS_ENABLE_API: ${GS_ENABLE_API:-false}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - gs-state:/var/lib/gs
+    ports:
+      - "${GS_DISCOVERY_PORT:-19840}:19840/udp"
+      - "${GS_P2P_PORT:-19841}:19841/tcp"
+      - "${GS_API_PORT:-19842}:19842/tcp"
+
+volumes:
+  gs-state:
+    name: ${GS_STATE_VOLUME:-genesis-gs-state}

@@ -22,11 +22,22 @@ import signal
 import socket
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 from genesis.utils.async_events import LazyAsyncEvent
 
 logger = logging.getLogger("genesis")
+
+_PUBLIC_IP_DISCOVERY_SOURCES: tuple[str, str, str] = (
+    "https://api.ipify.org",
+    "https://checkip.amazonaws.com",
+    "https://icanhazip.com",
+)
+_PUBLIC_IP_DISCOVERY_TIMEOUT_SECONDS = 2.0
+_PUBLIC_IP_CACHE_TTL_SECONDS = 900.0
+_PUBLIC_IP_SELF_PROBE_TIMEOUT_SECONDS = 2.0
+_PUBLIC_IP_SELF_PROBE_CACHE_TTL_SECONDS = 300.0
 
 
 def setup_logging(data_dir: str) -> None:
@@ -155,6 +166,11 @@ class GenesisNode:
         self._world_id_cache = ""
         self._session_public_key = ""
         self._last_mobile_pairing_uri = ""
+        self._detected_public_ip = ""
+        self._detected_public_ip_source = ""
+        self._detected_public_ip_checked_at = 0.0
+        self._detected_public_ip_probe_ok: bool | None = None
+        self._detected_public_ip_probe_checked_at = 0.0
 
     def _load_persisted_world_state(self):
         """Load the last locally-saved world snapshot if present."""
@@ -617,6 +633,136 @@ class GenesisNode:
             return False
         return bool(self.server.has_recent_public_inbound())
 
+    @staticmethod
+    def _normalize_public_ip_candidate(raw_value: object) -> str:
+        text = str(raw_value or "").strip()
+        if not text:
+            return ""
+        first_line = text.splitlines()[0].strip()
+        if not first_line:
+            return ""
+        first_token = first_line.split()[0].strip().strip("[]")
+        try:
+            parsed = ipaddress.ip_address(first_token)
+        except ValueError:
+            return ""
+        return first_token if parsed.is_global else ""
+
+    @classmethod
+    def _detect_public_ip_via_services(cls) -> tuple[str, str]:
+        headers = {"User-Agent": "genesis/0.1"}
+        for source_url in _PUBLIC_IP_DISCOVERY_SOURCES:
+            try:
+                request = urllib.request.Request(source_url, headers=headers)
+                with urllib.request.urlopen(request, timeout=_PUBLIC_IP_DISCOVERY_TIMEOUT_SECONDS) as response:
+                    payload = response.read(256).decode("utf-8", errors="replace")
+                candidate = cls._normalize_public_ip_candidate(payload)
+                if candidate:
+                    return candidate, source_url
+                logger.debug("Public IP service %s returned no usable IP", source_url)
+            except Exception as exc:
+                logger.debug("Public IP service %s failed: %s", source_url, exc)
+        return "", ""
+
+    async def _self_probe_public_endpoint(self, address: str, port: int) -> bool:
+        address = str(address or "").strip()
+        if not address or not self._is_publicly_routable_address(address):
+            return False
+        try:
+            port = int(port or 0)
+        except (TypeError, ValueError):
+            return False
+        if not (1 <= port <= 65535):
+            return False
+
+        writer: asyncio.StreamWriter | None = None
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(address, port),
+                timeout=_PUBLIC_IP_SELF_PROBE_TIMEOUT_SECONDS,
+            )
+            return True
+        except (OSError, asyncio.TimeoutError, ValueError):
+            return False
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except OSError:
+                    pass
+
+    async def _refresh_detected_public_ip(self, *, force: bool = False) -> bool:
+        if self.config is None:
+            return False
+
+        configured = str(getattr(self.config.network, "advertise_address", "") or "").strip()
+        if configured:
+            return False
+
+        now = time.time()
+        detected_changed = False
+        should_detect = (
+            force
+            or self._detected_public_ip_checked_at <= 0
+            or (now - self._detected_public_ip_checked_at) >= _PUBLIC_IP_CACHE_TTL_SECONDS
+        )
+        if should_detect:
+            detected_ip, source_url = await asyncio.to_thread(self._detect_public_ip_via_services)
+            self._detected_public_ip_checked_at = now
+            if detected_ip:
+                detected_changed = (
+                    detected_ip != self._detected_public_ip
+                    or source_url != self._detected_public_ip_source
+                )
+                self._detected_public_ip = detected_ip
+                self._detected_public_ip_source = source_url
+                if detected_changed:
+                    logger.info("Detected public IP %s via %s", detected_ip, source_url)
+
+        should_probe = (
+            bool(self._detected_public_ip)
+            and (
+                force
+                or detected_changed
+                or self._detected_public_ip_probe_checked_at <= 0
+                or (now - self._detected_public_ip_probe_checked_at) >= _PUBLIC_IP_SELF_PROBE_CACHE_TTL_SECONDS
+            )
+        )
+        if not should_probe:
+            return detected_changed
+
+        try:
+            port = int(getattr(self.config.network, "listen_port", 0) or 0)
+        except (TypeError, ValueError):
+            port = 0
+        previous_probe = self._detected_public_ip_probe_ok
+        probe_ok = await self._self_probe_public_endpoint(self._detected_public_ip, port)
+        self._detected_public_ip_probe_ok = probe_ok
+        self._detected_public_ip_probe_checked_at = time.time()
+        if previous_probe is None or previous_probe != probe_ok or detected_changed:
+            logger.info(
+                "Public endpoint self-probe for %s:%d %s",
+                self._detected_public_ip,
+                port,
+                "succeeded" if probe_ok else "failed",
+            )
+        return detected_changed or previous_probe != probe_ok
+
+    def _preferred_detected_public_ip(self) -> str:
+        detected_ip = str(self._detected_public_ip or "").strip()
+        if not detected_ip:
+            return ""
+        if self._detected_public_ip_probe_ok:
+            return detected_ip
+        if self.server is not None and getattr(self.server, "has_recent_public_inbound", None):
+            try:
+                if self.server.has_recent_public_inbound():
+                    return detected_ip
+            except Exception:
+                pass
+        return ""
+
     def _resolve_advertise_address(self) -> str:
         """Resolve the address this node should publish on-chain."""
         configured = ""
@@ -624,6 +770,10 @@ class GenesisNode:
             configured = str(getattr(self.config.network, "advertise_address", "") or "").strip()
         if configured:
             return configured
+
+        preferred_detected = self._preferred_detected_public_ip()
+        if preferred_detected:
+            return preferred_detected
 
         candidates: list[str] = []
 
@@ -651,6 +801,8 @@ class GenesisNode:
         for candidate in candidates:
             if self._is_publicly_routable_address(candidate):
                 return candidate
+        if self._detected_public_ip:
+            return self._detected_public_ip
         return candidates[0] if candidates else ""
 
     async def _ensure_chain_bootstrapped_after_sync(self, is_first_run: bool) -> None:
@@ -993,6 +1145,7 @@ class GenesisNode:
             return
         self._next_peer_observability_at = now + self._peer_observability_interval_seconds()
         try:
+            await self._refresh_detected_public_ip(force=force)
             await self._publish_self_contact_card_if_needed(force=force)
             await self._publish_peer_health_reports()
         except Exception as exc:
@@ -1307,6 +1460,7 @@ class GenesisNode:
                     await self.discovery.start()
                     self.config.network.listen_port = selected_listen_port
                     self.config.network.discovery_port = selected_discovery_port
+                    await self._refresh_detected_public_ip(force=True)
                     if (
                         selected_listen_port != configured_listen_port
                         or selected_discovery_port != configured_discovery_port

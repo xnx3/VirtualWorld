@@ -74,6 +74,127 @@ bash scripts/build_single_binary.sh
 - 打包机器与目标机器需要保持相同操作系统和 CPU 架构。
 - 首次运行时会优先尝试同步现有硅基文明；如果当前环境没有可达文明，会自动本地引导创建可运行世界，而不是直接因首次同步失败而退出。
 
+### 容器镜像部署（推荐用于远程服务器）
+
+如果你的目标是：
+
+- 不再受宿主机 `glibc` 版本影响
+- 在不同 Linux 发行版之间稳定运行
+- 在 Windows / Linux 上使用同一份运行镜像
+- 把 `gs` 作为可迁移的服务器产物发布
+
+优先使用容器镜像，而不是单文件 `gs`。
+
+容器模式不会引入第二套运行逻辑，镜像内仍然直接调用当前项目里的：
+
+- `python -m genesis.packaged_cli`
+- `genesis.main`
+
+所以命令语义与当前 Python / `gs` 运行方式保持一致。
+
+当节点用于公网部署时，`gs` 也会在 `advertise_address` 为空时自动探测公网 IP，并优先发布已验证可达的地址，不需要普通用户手工填写公网 IP。
+
+容器内所有可变数据统一放在 `/var/lib/gs`：
+
+- `/var/lib/gs/config.yaml`
+- `/var/lib/gs/data/chain.db`
+- `/var/lib/gs/data/chronicle/`
+- `/var/lib/gs/data/commands/`
+- `/var/lib/gs/data/mobile/`
+
+默认的 compose / 辅助脚本会把 `/var/lib/gs` 挂到一个 named volume 上，所以容器重启、重建、升级镜像都不会丢区块链数据。
+
+快速启动：
+
+```bash
+docker compose -f docker/gs/compose.yaml up --build -d
+```
+
+查看状态：
+
+```bash
+docker compose -f docker/gs/compose.yaml exec gs gs status
+```
+
+投递任务：
+
+```bash
+docker compose -f docker/gs/compose.yaml exec gs gs task "你的任务"
+```
+
+停止容器：
+
+```bash
+docker compose -f docker/gs/compose.yaml down
+```
+
+`down` 只删除容器，不删除状态 volume。
+
+也可以用 Linux 辅助脚本：
+
+```bash
+bash scripts/build_latest_gs_image.sh
+bash scripts/gs_container.sh build
+bash scripts/gs_container.sh load dist/genesis-gs_latest.tar
+bash scripts/gs_container.sh start
+bash scripts/gs_container.sh status
+```
+
+以后 Python 代码有更新后，推荐直接执行这一条一键生成最新镜像：
+
+```bash
+bash scripts/build_latest_gs_image.sh
+```
+
+如果你还想在同一次执行里顺手生成最新离线部署 bundle：
+
+```bash
+bash scripts/build_latest_gs_image.sh --bundle
+```
+
+如果你更希望把数据放到宿主机目录，也可以显式指定：
+
+```bash
+GS_HOST_STATE_DIR=/srv/gs bash scripts/gs_container.sh start
+```
+
+如果你要导出镜像发到远程服务器：
+
+```bash
+bash scripts/gs_container.sh save
+```
+
+如果你想做一个给远程服务器直接离线安装的一键包：
+
+```bash
+bash scripts/build_gs_container_bundle.sh
+```
+
+把生成的 bundle 传到目标服务器后执行：
+
+```bash
+tar -xzf genesis-gs-container-bundle.tar.gz
+cd genesis-gs-container-bundle
+bash install.sh
+```
+
+如果你在中国、官方源访问不稳定，也可以在构建时指定基础镜像源或 `pip` 镜像：
+
+```bash
+GS_APT_MIRROR_URL=https://mirrors.tuna.tsinghua.edu.cn \
+GS_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple bash scripts/gs_container.sh build
+
+GS_APT_MIRROR_URL=https://mirrors.tuna.tsinghua.edu.cn \
+GS_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple bash scripts/build_gs_container_bundle.sh
+
+GS_APT_MIRROR_URL=https://mirrors.tuna.tsinghua.edu.cn \
+GS_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple bash scripts/build_latest_gs_image.sh --bundle
+```
+
+完整说明见：
+
+- `docs/GS_CONTAINER_DEPLOY.md`
+
 ### 安卓零配置接入
 
 当前 `gs` 已内置一套去中心的安卓接入底座，目标是不让安卓用户填写中央域名，也不让安卓端依赖固定 seed peers。

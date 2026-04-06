@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from genesis.being.agent import SiliconBeing
 from genesis.main import GenesisNode, enqueue_user_task
@@ -368,6 +368,71 @@ class GenesisStartupGuardTests(unittest.TestCase):
             ):
                 with patch("genesis.main.socket.socket", side_effect=OSError("skip")):
                     self.assertEqual(node._resolve_advertise_address(), "8.8.8.8")
+
+    def test_detect_public_ip_via_services_tries_three_sources(self):
+        class _FakeResponse:
+            def __init__(self, body: str):
+                self._body = body.encode("utf-8")
+
+            def read(self, _size: int = -1) -> bytes:
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch(
+            "genesis.main.urllib.request.urlopen",
+            side_effect=[
+                OSError("provider down"),
+                _FakeResponse("not-an-ip\n"),
+                _FakeResponse("8.8.8.8\n"),
+            ],
+        ):
+            detected_ip, source_url = GenesisNode._detect_public_ip_via_services()
+
+        self.assertEqual(detected_ip, "8.8.8.8")
+        self.assertEqual(source_url, "https://icanhazip.com")
+
+    def test_resolve_advertise_address_prefers_detected_public_ip_when_verified(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.config = SimpleNamespace(network=SimpleNamespace(advertise_address=""))
+            node._detected_public_ip = "8.8.8.8"
+            node._detected_public_ip_probe_ok = True
+
+            with patch(
+                "genesis.main.socket.getaddrinfo",
+                return_value=[
+                    (socket.AF_INET, 0, 0, "", ("172.17.0.2", 0)),
+                    (socket.AF_INET, 0, 0, "", ("192.168.1.8", 0)),
+                ],
+            ):
+                with patch("genesis.main.socket.socket", side_effect=OSError("skip")):
+                    self.assertEqual(node._resolve_advertise_address(), "8.8.8.8")
+
+    def test_refresh_detected_public_ip_updates_cached_value_and_probe(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node = GenesisNode(tmpdir)
+            node.config = SimpleNamespace(network=SimpleNamespace(advertise_address="", listen_port=19841))
+
+            with patch(
+                "genesis.main.asyncio.to_thread",
+                new=AsyncMock(return_value=("8.8.8.8", "https://api.ipify.org")),
+            ):
+                with patch.object(
+                    node,
+                    "_self_probe_public_endpoint",
+                    new=AsyncMock(return_value=True),
+                ):
+                    changed = asyncio.run(node._refresh_detected_public_ip(force=True))
+
+            self.assertTrue(changed)
+            self.assertEqual(node._detected_public_ip, "8.8.8.8")
+            self.assertEqual(node._detected_public_ip_source, "https://api.ipify.org")
+            self.assertTrue(node._detected_public_ip_probe_ok)
 
     def test_refresh_local_peer_endpoint_submits_state_update_when_runtime_capability_changes(self):
         with tempfile.TemporaryDirectory() as tmpdir:

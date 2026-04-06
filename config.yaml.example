@@ -24,7 +24,7 @@ network:
   discovery_port: 19840       # UDP port for LAN discovery
   bootstrap_nodes:            # Bootstrap server addresses for global node discovery
     - "http://45.205.24.48:8760"
-  advertise_address: ""       # Optional public/LAN address announced on-chain; auto-detected when empty
+  advertise_address: ""       # Optional override for the announced address; when empty gs auto-detects via multiple public IP services and local interface probing
   allow_local_bootstrap: true  # First try syncing an existing civilization; if none is reachable, bootstrap locally so first launch can still run
   max_peers: 50               # Maximum peer connections
   discovery_interval: 30      # Seconds between LAN broadcasts
