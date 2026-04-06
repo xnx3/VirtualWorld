@@ -76,20 +76,21 @@ class Block:
         self.hash = self.compute_hash()
 
     def verify_signature(self) -> bool:
-        """Verify the block signature.
-
-        New blocks carry ``proposer_public_key`` and are verified
-        cryptographically against ``proposer``. Legacy blocks without that
-        field fall back to structural hash verification so older chains remain
-        readable.
-        """
+        """Verify the block signature cryptographically."""
         if not self.signature or not self.hash:
             return False
         if self.hash != self.compute_hash():
             return False
 
+        if self.index == 0:
+            return (
+                self.signature == "0" * 128
+                and self.previous_hash == "0" * 64
+                and self.proposer_public_key == ""
+            )
+
         if not self.proposer_public_key:
-            return True
+            return False
 
         try:
             public_key_bytes = bytes.fromhex(self.proposer_public_key)

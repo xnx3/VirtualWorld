@@ -32,6 +32,19 @@ class TransactionSignatureTests(unittest.TestCase):
 
         self.assertFalse(tx.verify_signature())
 
+    def test_transaction_rejects_missing_public_key(self):
+        identity = NodeIdentity.generate()
+        tx = Transaction.create(
+            tx_type=TxType.ACTION,
+            sender=identity.node_id,
+            data={"action": "observe"},
+            private_key=identity.private_key,
+            nonce=1,
+        )
+        tx.public_key = ""
+
+        self.assertFalse(tx.verify_signature())
+
 
 class BlockSignatureTests(unittest.TestCase):
     def test_signed_block_verifies_cryptographically(self):
@@ -65,6 +78,27 @@ class BlockSignatureTests(unittest.TestCase):
         block.sign_block(identity.private_key)
 
         self.assertFalse(block.verify_signature())
+
+    def test_block_rejects_missing_public_key(self):
+        identity = NodeIdentity.generate()
+        block = Block(
+            index=1,
+            timestamp=1.0,
+            previous_hash="genesis",
+            merkle_root="root",
+            proposer=identity.node_id,
+            transactions=[],
+            nonce=0,
+        )
+        block.sign_block(identity.private_key)
+        block.proposer_public_key = ""
+
+        self.assertFalse(block.verify_signature())
+
+    def test_genesis_block_keeps_placeholder_signature_contract(self):
+        block = Block.genesis_block("creator")
+
+        self.assertTrue(block.verify_signature())
 
 
 class SerializationPublicKeyRoundTripTests(unittest.TestCase):
