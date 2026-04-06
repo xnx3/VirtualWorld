@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ARTIFACT_NAME="${ARTIFACT_NAME:-genesis}"
+ARTIFACT_NAME="${ARTIFACT_NAME:-gs}"
 BUILD_DIR="${ROOT_DIR}/build"
 OUTPUT_DIR="${ROOT_DIR}"
 ROOT_SPEC_FILE="${ROOT_DIR}/${ARTIFACT_NAME}.spec"
@@ -62,17 +62,18 @@ rm -f "${ROOT_DIR}/genesis-run.spec"
 rm -f "${ROOT_DIR}/genesis-run"
 rm -f "${ROOT_DIR}/dist/genesis-run"
 rm -f "${ROOT_DIR}/dist/genesis"
+rm -f "${ROOT_DIR}/dist/gs"
 
 if [[ -d "${TARGET_PATH}" ]]; then
     if [[ "${ARTIFACT_NAME}" == "genesis" ]]; then
-        ARTIFACT_NAME="genesis.bin"
+        ARTIFACT_NAME="gs"
         TARGET_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
         ROOT_SPEC_FILE="${ROOT_DIR}/${ARTIFACT_NAME}.spec"
         echo "Notice: ${ROOT_DIR}/genesis is an existing source directory."
         echo "         Output file name switched to ${ARTIFACT_NAME} to avoid path collision."
     else
         echo "Error: target path is an existing directory: ${TARGET_PATH}"
-        echo "Set a different file name, e.g. ARTIFACT_NAME=genesis.bin"
+        echo "Set a different file name, e.g. ARTIFACT_NAME=gs"
         exit 1
     fi
 fi
