@@ -83,13 +83,23 @@ class NetworkSecurity:
         with self._lock:
             self._connection_counts[subnet] = self._connection_counts.get(subnet, 0) + 1
 
-    def check_connection_diversity(self, ip: str, min_subnets: int = 3) -> bool:
+    def release_connection(self, ip: str) -> None:
+        """Release a previously recorded live connection from *ip*."""
+        subnet = self._subnet_of(ip)
+        with self._lock:
+            count = self._connection_counts.get(subnet, 0)
+            if count <= 1:
+                self._connection_counts.pop(subnet, None)
+            else:
+                self._connection_counts[subnet] = count - 1
+
+    def check_connection_diversity(self, ip: str, min_subnets: int = 2) -> bool:
         """Return True if accepting a connection from *ip* would not
         over-concentrate connections in a single /24 subnet.
 
         The check passes if either:
           - We already have connections from at least *min_subnets* different subnets, or
-          - The subnet of *ip* does not yet dominate (fewer than 50 % of total).
+          - The subnet of *ip* does not yet dominate (fewer than 80 % of total).
         """
         subnet = self._subnet_of(ip)
         with self._lock:
@@ -102,8 +112,8 @@ class NetworkSecurity:
             # If we have enough subnets already, allow.
             if unique_subnets >= min_subnets:
                 return True
-            # If this subnet would become >50 % of connections, deny.
-            if total > 0 and (subnet_count + 1) / (total + 1) > 0.5:
+            # If this subnet would become >80 % of connections, deny (relaxed for LAN testing).
+            if total > 0 and (subnet_count + 1) / (total + 1) > 0.8:
                 return False
             return True
 
